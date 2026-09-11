@@ -1,0 +1,957 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Wearable Obstacle Detection Hardware & Edge AI Dashboard</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <!-- Embedded minimal custom styles for canvas responsiveness and layout tweaks -->
+    <style>
+        .chart-container {
+            position: relative;
+            width: 100%;
+            max-width: 650px;
+            margin-left: auto;
+            margin-right: auto;
+            height: 300px;
+            max-height: 400px;
+        }
+        @media (min-width: 768px) {
+            .chart-container {
+                height: 340px;
+            }
+        }
+        .tab-btn.active {
+            border-bottom-color: #d97706;
+            color: #d97706;
+            font-weight: 600;
+        }
+        /* Custom scrollbar for table containers */
+        .custom-scroll::-webkit-scrollbar {
+            height: 6px;
+            width: 6px;
+        }
+        .custom-scroll::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        .custom-scroll::-webkit-scrollbar-thumb {
+            background: #cbd5e1;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<!-- Chosen Palette: Warm Neutral Harmonious Palette (Stone 50 background, Slate 800 body text, Amber 600 primary accent, Indigo 600 secondary, Emerald 600 highlight) -->
+<!-- Application Structure Plan: The SPA is organized into 6 task-oriented thematic tabs: 
+     1. Architectural Paradigm & NPU Reality (explains JEPA vs Dataflow compilers, PCIe bottlenecks, ego-motion pipeline).
+     2. Compute Platform Matrix (interactive evaluation matrix with dynamic filters and TOPS vs Risk charts).
+     3. Visual Ingestion & Shutter Physics (interactive global vs rolling shutter animation canvas & sensor specs).
+     4. Spatial Haptic & Audio Feedback (interactive LRA vs ERM waveform comparison and spatial vector simulator).
+     5. Power & Runtime Configurator (dynamic tool calculating wattage, battery life, weight, and INR cost).
+     6. Deployment Roadmap (Stage 1-2 R&D Sandbox vs Stage 3-4 Target hardware inspector).
+     This non-linear architecture allows researchers and hardware engineers to immediately drill into trade-offs or simulate total system configurations. -->
+<!-- Visualization & Content Choices:
+     - Compute Performance vs Compiler Risk: Scatter/Bubble Chart (Chart.js) -> compares raw TOPS against real-world compilation risk to expose NPU marketing traps.
+     - Shutter Skew Simulator: Custom HTML Canvas Animation -> demonstrates rolling shutter "jello effect" vs global shutter stability during head rotation without SVG.
+     - Haptic Transient Waveform: Line Chart (Chart.js) -> visualizes LRA (<10ms) vs ERM (>50ms) start/stop latency curves.
+     - Spatial Vector Controller: Dynamic HTML/JS visualizer -> user selects direction (Left, Center, Right) to trigger simulated haptic waveforms and DRV2605L commands.
+     - System Power & Cost Calculator: Interactive JS calculator -> computes live battery runtime (hours), power budget (W), total cost (INR ₹), and thermal rating based on user selections. -->
+<!-- CONFIRMATION: NO SVG graphics used. NO Mermaid JS used. -->
+
+<body class="bg-stone-50 text-slate-800 font-sans antialiased min-h-screen flex flex-col">
+
+    <!-- Top Navigation Header -->
+    <header class="bg-slate-900 text-white shadow-md sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-col md:flex-row justify-between items-center">
+            <div class="flex items-center space-x-3">
+                <span class="text-2xl">👁️</span>
+                <div>
+                    <h1 class="font-bold text-lg leading-tight text-stone-100">Wearable Edge AI Obstacle Detection</h1>
+                    <p class="text-xs text-amber-400 font-medium">Hardware Architecture & Spatial Perception Matrix</p>
+                </div>
+            </div>
+            <!-- Dynamic Metric Badges -->
+            <div class="flex flex-wrap gap-2 mt-2 md:mt-0 text-xs">
+                <span class="bg-slate-800 border border-slate-700 text-stone-300 px-2.5 py-1 rounded-full flex items-center space-x-1">
+                    <span>⚡ Latency Goal:</span> <strong class="text-amber-400 ml-1">&lt;100ms</strong>
+                </span>
+                <span class="bg-slate-800 border border-slate-700 text-stone-300 px-2.5 py-1 rounded-full flex items-center space-x-1">
+                    <span>📷 Sensor:</span> <strong class="text-emerald-400 ml-1">120 FPS Global Shutter</strong>
+                </span>
+                <span class="bg-slate-800 border border-slate-700 text-stone-300 px-2.5 py-1 rounded-full flex items-center space-x-1">
+                    <span>🔋 Wearable Target:</span> <strong class="text-indigo-400 ml-1">Pi 5 + Hailo-8L (12W)</strong>
+                </span>
+            </div>
+        </div>
+
+        <!-- Tab Navigation Bar -->
+        <div class="bg-slate-800 border-t border-slate-700">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex overflow-x-auto space-x-6 text-sm text-slate-300 custom-scroll">
+                <button onclick="switchTab('paradigm')" id="tab-paradigm" class="tab-btn active py-2.5 border-b-2 border-transparent hover:text-amber-400 transition whitespace-nowrap flex items-center space-x-1">
+                    <span>🧠</span> <span>NPU Reality & Pipeline</span>
+                </button>
+                <button onclick="switchTab('compute')" id="tab-compute" class="tab-btn py-2.5 border-b-2 border-transparent hover:text-amber-400 transition whitespace-nowrap flex items-center space-x-1">
+                    <span>💻</span> <span>Compute Platforms</span>
+                </button>
+                <button onclick="switchTab('camera')" id="tab-camera" class="tab-btn py-2.5 border-b-2 border-transparent hover:text-amber-400 transition whitespace-nowrap flex items-center space-x-1">
+                    <span>📷</span> <span>Cameras & Shutter Physics</span>
+                </button>
+                <button onclick="switchTab('haptics')" id="tab-haptics" class="tab-btn py-2.5 border-b-2 border-transparent hover:text-amber-400 transition whitespace-nowrap flex items-center space-x-1">
+                    <span>🎯</span> <span>Spatial Haptics & Audio</span>
+                </button>
+                <button onclick="switchTab('power')" id="tab-power" class="tab-btn py-2.5 border-b-2 border-transparent hover:text-amber-400 transition whitespace-nowrap flex items-center space-x-1">
+                    <span>🔋</span> <span>Power & Runtime Configurator</span>
+                </button>
+                <button onclick="switchTab('roadmap')" id="tab-roadmap" class="tab-btn py-2.5 border-b-2 border-transparent hover:text-amber-400 transition whitespace-nowrap flex items-center space-x-1">
+                    <span>🚀</span> <span>Phased Deployment Strategy</span>
+                </button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Container -->
+    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 flex-grow w-full">
+
+        <!-- ========================================== -->
+        <!-- TAB 1: ARCHITECTURAL PARADIGM & NPU REALITY -->
+        <!-- ========================================== -->
+        <section id="section-paradigm" class="space-y-6">
+            <div class="bg-amber-50 border-l-4 border-amber-600 p-4 rounded-r-lg shadow-sm">
+                <h2 class="text-xl font-bold text-amber-900 flex items-center space-x-2">
+                    <span>🧠</span> <span>The Architectural Challenge: Custom JEPAs vs. Dataflow NPU Compilers</span>
+                </h2>
+                <p class="mt-2 text-sm text-amber-800 leading-relaxed">
+                    Deploying a wearable, camera-based obstacle detection system requires decoupling camera-induced ego-motion (from human gait) from actual target movement. While a Joint-Embedding Predictive Architecture (JEPA) or temporal Transformer is ideal mathematically, edge NPUs (like the Hailo-8L and RK3588) introduce severe compiler bottlenecks when processing dynamic tensor shapes, LSTMs, or self-attention.
+                </p>
+            </div>
+
+            <!-- Pipeline Overview Grid -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Theoretical Flow Card -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-4">
+                    <h3 class="font-bold text-slate-800 text-base flex items-center justify-between">
+                        <span>⚡ Efficient Perception Processing Pipeline</span>
+                        <span class="text-xs bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded font-semibold">Sub-100ms Target</span>
+                    </h3>
+                    <div class="space-y-3 text-xs">
+                        <div class="p-3 bg-stone-100 rounded-lg border border-stone-200 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold text-slate-700">1. Global Shutter Capture (120 FPS)</span>
+                                <p class="text-slate-500">Eliminates rolling shutter skew during head rotation.</p>
+                            </div>
+                            <span class="text-amber-600 font-mono font-bold">~8.3ms</span>
+                        </div>
+                        <div class="p-3 bg-stone-100 rounded-lg border border-stone-200 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold text-slate-700">2. CPU Classical Ego-Motion & Candidate ROIs</span>
+                                <p class="text-slate-500">Sparse Lucas-Kanade optical flow isolates 3–10 collision ROIs.</p>
+                            </div>
+                            <span class="text-amber-600 font-mono font-bold">~15ms</span>
+                        </div>
+                        <div class="p-3 bg-amber-50 rounded-lg border border-amber-200 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold text-amber-900">3. NPU Inference (Tiny Visual Encoder)</span>
+                                <p class="text-amber-800">INT8 quantized feature extraction on Hailo-8L / Jetson.</p>
+                            </div>
+                            <span class="text-amber-600 font-mono font-bold">~12ms</span>
+                        </div>
+                        <div class="p-3 bg-stone-100 rounded-lg border border-stone-200 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold text-slate-700">4. Temporal State & Collision Risk Output</span>
+                                <p class="text-slate-500">Constrained 1D TCN predicts collision vector (Left, Center, Right).</p>
+                            </div>
+                            <span class="text-amber-600 font-mono font-bold">~10ms</span>
+                        </div>
+                        <div class="p-3 bg-emerald-50 rounded-lg border border-emerald-200 flex justify-between items-center">
+                            <div>
+                                <span class="font-bold text-emerald-900">5. Spatial Haptic Actuation (DRV2605L + LRAs)</span>
+                                <p class="text-emerald-800">Immediate mechanical pulse output to user torso.</p>
+                            </div>
+                            <span class="text-emerald-700 font-mono font-bold">&lt;10ms</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Compiler Trap Breakdown Card -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-4">
+                    <h3 class="font-bold text-slate-800 text-base flex items-center justify-between">
+                        <span>⚠️ Edge NPU Compiler Pitfalls (Hailo-8L / RK3588)</span>
+                        <span class="text-xs bg-rose-100 text-rose-800 px-2 py-0.5 rounded font-semibold">High Deployment Risk</span>
+                    </h3>
+                    <div class="space-y-3 text-xs">
+                        <div class="p-3 bg-rose-50 rounded-lg border border-rose-200">
+                            <span class="font-bold text-rose-900 block mb-1">❌ Dynamic Control Flow & Recurrent States (LSTM/RNN)</span>
+                            <p class="text-rose-800 leading-relaxed">
+                                Edge NPUs rely on static dataflow mapping. ONNX-to-HAR conversion fails on dynamic recurrence, causing intermediate layers to fall back to the host CPU over PCIe.
+                            </p>
+                        </div>
+                        <div class="p-3 bg-rose-50 rounded-lg border border-rose-200">
+                            <span class="font-bold text-rose-900 block mb-1">❌ Attention Mechanisms & Transformers (ViT / JEPA)</span>
+                            <p class="text-rose-800 leading-relaxed">
+                                Self-attention, dynamic shapes, and LayerNorm lead to memory allocation crashes or severe context-switching latency spikes across the bus, negating raw TOPS.
+                            </p>
+                        </div>
+                        <div class="p-3 bg-emerald-50 rounded-lg border border-emerald-200">
+                            <span class="font-bold text-emerald-900 block mb-1">✅ Hardware-Aware Solution: 1D TCNs & Static Convolutions</span>
+                            <p class="text-emerald-800 leading-relaxed">
+                                Replace dynamic JEPA state models with 1D Temporal Convolutional Networks (TCNs) or fixed 2D spatial blocks natively supported by dataflow hardware.
+                            </p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- PCIe Latency Spike Visualization Chart -->
+            <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                <h3 class="font-bold text-slate-800 text-sm">PCIe Bus Latency Bottleneck: CPU Fallback vs. Native Execution</h3>
+                <p class="text-xs text-slate-600">
+                    When an unsupported NPU operator (e.g. dynamic attention block) drops to the host CPU, context switching and tensor serialization over PCIe Gen 3 destroys real-time execution.
+                </p>
+                <div class="chart-container">
+                    <canvas id="latencyChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- TAB 2: COMPUTE PLATFORM MATRIX             -->
+        <!-- ========================================== -->
+        <section id="section-compute" class="space-y-6 hidden">
+            <div class="bg-indigo-50 border-l-4 border-indigo-600 p-4 rounded-r-lg shadow-sm">
+                <h2 class="text-xl font-bold text-indigo-900 flex items-center space-x-2">
+                    <span>💻</span> <span>Compute Platform Deep Dive & Market Tradeoffs</span>
+                </h2>
+                <p class="mt-2 text-sm text-indigo-800 leading-relaxed">
+                    Evaluating compute options in India requires balancing INT8 neural capacity (TOPS), memory bandwidth, operational wattage, compiler stability, and thermal mass. Raw TOPS is a poor predictor of latency without compiler maturity.
+                </p>
+            </div>
+
+            <!-- Controls & Filters -->
+            <div class="flex flex-col sm:flex-row justify-between items-center bg-white p-4 rounded-xl border border-stone-200 shadow-sm gap-4">
+                <div class="flex items-center space-x-2 text-xs font-semibold text-slate-700 w-full sm:w-auto">
+                    <span>Filter Platform Role:</span>
+                    <select id="computeFilter" onchange="filterComputeTable()" class="bg-stone-100 border border-stone-300 text-slate-800 rounded px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                        <option value="all">All Platforms</option>
+                        <option value="research">Research Sandbox</option>
+                        <option value="target">Wearable Target</option>
+                        <option value="prototype">Prototype / Alternative</option>
+                    </select>
+                </div>
+                <div class="text-xs text-slate-500 italic">
+                    Prices reflected in Indian Rupee (₹ INR) from verified domestic distributors.
+                </div>
+            </div>
+
+            <!-- Interactive TOPS vs Compiler Risk Scatter/Bubble Chart -->
+            <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                <h3 class="font-bold text-slate-800 text-sm">Neural Compute (TOPS) vs. Compiler Risk & Software Maturity</h3>
+                <p class="text-xs text-slate-600">
+                    High TOPS accelerators (like Hailo or RK3588) carry higher software risk for custom architectures than unconstrained CUDA platforms (Jetson).
+                </p>
+                <div class="chart-container">
+                    <canvas id="topsRiskChart"></canvas>
+                </div>
+            </div>
+
+            <!-- Compute Platform Comparison Table -->
+            <div class="bg-white rounded-xl border border-stone-200 shadow-sm overflow-hidden">
+                <div class="overflow-x-auto custom-scroll">
+                    <table class="w-full text-left text-xs text-slate-700">
+                        <thead class="bg-slate-900 text-slate-100 uppercase tracking-wider font-semibold">
+                            <tr>
+                                <th class="p-3.5">Platform</th>
+                                <th class="p-3.5">Recommended Role</th>
+                                <th class="p-3.5">Neural Compute</th>
+                                <th class="p-3.5">Power Budget</th>
+                                <th class="p-3.5">Approx. Cost (INR)</th>
+                                <th class="p-3.5">Compiler Ecosystem</th>
+                            </tr>
+                        </thead>
+                        <tbody id="computeTableBody" class="divide-y divide-stone-200">
+                            <!-- Populated dynamically via JS -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Detailed Compute Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Jetson Orin Nano Super -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h4 class="font-bold text-slate-900 text-base">NVIDIA Jetson Orin Nano Super (8GB)</h4>
+                            <span class="text-xs text-indigo-600 font-semibold">Unconstrained Research Platform</span>
+                        </div>
+                        <span class="bg-indigo-100 text-indigo-800 font-bold text-xs px-2.5 py-1 rounded">67 TOPS</span>
+                    </div>
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        Features 1024 CUDA cores + 32 Tensor Cores with zero-copy 68 GB/s LPDDR5 memory. Absolute freedom to test PyTorch JEPAs, attention blocks, and LSTMs via TensorRT without compiler crashes.
+                    </p>
+                    <div class="flex justify-between items-center text-xs pt-2 border-t border-stone-100">
+                        <span class="text-slate-500">Power: <strong class="text-slate-800">7W - 25W</strong></span>
+                        <span class="text-slate-500">Est. Price: <strong class="text-slate-800">₹49,999 - ₹74,999</strong></span>
+                    </div>
+                </div>
+
+                <!-- Raspberry Pi 5 + Hailo-8L -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                    <div class="flex justify-between items-start">
+                        <div>
+                            <h4 class="font-bold text-slate-900 text-base">Raspberry Pi 5 (8GB) + Hailo-8L</h4>
+                            <span class="text-xs text-emerald-600 font-semibold">Optimal Wearable Target</span>
+                        </div>
+                        <span class="bg-emerald-100 text-emerald-800 font-bold text-xs px-2.5 py-1 rounded">13 TOPS</span>
+                    </div>
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        Strict separation of duties: Pi 5 handles CSI capture, optical flow, and ROI generation; Hailo-8L executes INT8 visual encoding at under 2.5W. Total system power stays around 10–12W.
+                    </p>
+                    <div class="flex justify-between items-center text-xs pt-2 border-t border-stone-100">
+                        <span class="text-slate-500">Power: <strong class="text-slate-800">10W - 12W Total</strong></span>
+                        <span class="text-slate-500">Est. Price: <strong class="text-slate-800">₹21,000 - ₹30,000</strong></span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- TAB 3: CAMERAS & SHUTTER PHYSICS          -->
+        <!-- ========================================== -->
+        <section id="section-camera" class="space-y-6 hidden">
+            <div class="bg-emerald-50 border-l-4 border-emerald-600 p-4 rounded-r-lg shadow-sm">
+                <h2 class="text-xl font-bold text-emerald-900 flex items-center space-x-2">
+                    <span>📷</span> <span>Visual Ingestion & Shutter Distortion Physics</span>
+                </h2>
+                <p class="mt-2 text-sm text-emerald-800 leading-relaxed">
+                    Because the camera is head-mounted and subject to six-degree-of-freedom gait motion, image distortion directly corrupts optical flow. A global shutter sensor is mathematically non-negotiable to isolate true object trajectory from head motion.
+                </p>
+            </div>
+
+            <!-- Shutter Physics Canvas Simulation -->
+            <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-4">
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-2">
+                    <div>
+                        <h3 class="font-bold text-slate-800 text-base">Interactive Physics Simulator: Rolling vs. Global Shutter</h3>
+                        <p class="text-xs text-slate-600">Simulates capture during violent head rotation across vertical structures (poles/doorways).</p>
+                    </div>
+                    <button onclick="toggleShutterSim()" id="simBtn" class="bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-4 py-2 rounded shadow transition">
+                        Pause Simulation
+                    </button>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
+                    <div class="bg-stone-900 p-3 rounded-lg border border-stone-800">
+                        <span class="text-xs font-bold text-rose-400 block mb-2">Rolling Shutter (Jello Distortion / Skew)</span>
+                        <canvas id="rollingCanvas" width="300" height="180" class="mx-auto bg-slate-950 rounded border border-slate-800"></canvas>
+                        <p class="text-[11px] text-slate-400 mt-2">Row-by-row exposure creates artificial vector noise for optical flow.</p>
+                    </div>
+                    <div class="bg-stone-900 p-3 rounded-lg border border-stone-800">
+                        <span class="text-xs font-bold text-emerald-400 block mb-2">Global Shutter (Synchronous Capture)</span>
+                        <canvas id="globalCanvas" width="300" height="180" class="mx-auto bg-slate-950 rounded border border-slate-800"></canvas>
+                        <p class="text-[11px] text-slate-400 mt-2">Simultaneous pixel capture preserves rigid geometry for accurate ego-motion.</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Sensor Evaluation Matrix Cards -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Arducam AR0234 MIPI -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                    <div class="flex justify-between items-center">
+                        <h4 class="font-bold text-slate-900 text-base">Arducam AR0234 2.3MP Color Global Shutter</h4>
+                        <span class="bg-emerald-100 text-emerald-800 text-xs font-bold px-2 py-0.5 rounded">Top Recommendation</span>
+                    </div>
+                    <ul class="text-xs text-slate-600 space-y-1.5 list-disc list-inside">
+                        <li><strong>Resolution & Frame Rate:</strong> 1080p @ 60 FPS | 720p @ 120 FPS</li>
+                        <li><strong>Field of View:</strong> 90° Horizontal / 120° Diagonal (M12 mount)</li>
+                        <li><strong>Interface:</strong> MIPI CSI-2 (Direct DMA to system RAM, minimal CPU latency)</li>
+                        <li><strong>120 FPS Advantage:</strong> Halves inter-frame pixel displacement, shrinking optical flow search windows by 50%.</li>
+                        <li><strong>Est. India Cost:</strong> ₹11,150 – ₹12,100</li>
+                    </ul>
+                </div>
+
+                <!-- Sony IMX296 Official Pi -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                    <div class="flex justify-between items-center">
+                        <h4 class="font-bold text-slate-900 text-base">Official Raspberry Pi GS Camera (Sony IMX296)</h4>
+                        <span class="bg-stone-200 text-slate-700 text-xs font-bold px-2 py-0.5 rounded">Bulky Eyewear Form Factor</span>
+                    </div>
+                    <ul class="text-xs text-slate-600 space-y-1.5 list-disc list-inside">
+                        <li><strong>Resolution & Frame Rate:</strong> 1.58 MP (1456 × 1088) @ 60 FPS</li>
+                        <li><strong>Lens Mount:</strong> Heavy C/CS Mount (Bulky glass/metal assembly)</li>
+                        <li><strong>Wearability Rating:</strong> Poor (Excessive forward mass on spectacle frame)</li>
+                        <li><strong>Est. India Cost:</strong> ₹4,530 – ₹5,360</li>
+                    </ul>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- TAB 4: SPATIAL HAPTICS & AUDIO FEEDBACK    -->
+        <!-- ========================================== -->
+        <section id="section-haptics" class="space-y-6 hidden">
+            <div class="bg-amber-50 border-l-4 border-amber-600 p-4 rounded-r-lg shadow-sm">
+                <h2 class="text-xl font-bold text-amber-900 flex items-center space-x-2">
+                    <span>🎯</span> <span>Spatially Encoded Haptic & Bone Conduction Architecture</span>
+                </h2>
+                <p class="mt-2 text-sm text-amber-800 leading-relaxed">
+                    Visually impaired pedestrians depend heavily on environmental ambient audio for navigation. Spatial feedback must rely primarily on tactile torso vibration vectors, backed by subtle bone conduction audio for complex alerts.
+                </p>
+            </div>
+
+            <!-- Spatial Vector Controller Visual Simulator -->
+            <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-4">
+                <h3 class="font-bold text-slate-800 text-sm">Interactive Spatial Haptic Feedback Simulator</h3>
+                <p class="text-xs text-slate-600">Select a collision vector predicted by the neural network to simulate tactile motor activation and DRV2605L waveform outputs.</p>
+
+                <div class="flex flex-wrap justify-center gap-3 py-2">
+                    <button onclick="triggerHaptic('left')" class="bg-slate-100 hover:bg-amber-100 text-slate-800 hover:text-amber-900 border border-slate-300 rounded-lg px-4 py-2 text-xs font-bold transition">
+                        👈 Obstacle Left
+                    </button>
+                    <button onclick="triggerHaptic('center')" class="bg-slate-100 hover:bg-amber-100 text-slate-800 hover:text-amber-900 border border-slate-300 rounded-lg px-4 py-2 text-xs font-bold transition">
+                        ⚠️ Obstacle Center
+                    </button>
+                    <button onclick="triggerHaptic('right')" class="bg-slate-100 hover:bg-amber-100 text-slate-800 hover:text-amber-900 border border-slate-300 rounded-lg px-4 py-2 text-xs font-bold transition">
+                        👉 Obstacle Right
+                    </button>
+                    <button onclick="triggerHaptic('urgent')" class="bg-rose-100 hover:bg-rose-200 text-rose-900 border border-rose-300 rounded-lg px-4 py-2 text-xs font-bold transition">
+                        🚨 Imminent Collision (All Actuators)
+                    </button>
+                </div>
+
+                <!-- Motor Torso Placement Display -->
+                <div class="bg-stone-100 p-4 rounded-xl border border-stone-200 flex justify-center items-center space-x-8">
+                    <div id="motor-left" class="w-16 h-16 rounded-full border-4 border-slate-300 bg-white flex flex-col items-center justify-center text-xs font-bold transition-all duration-300">
+                        <span>LEFT</span>
+                        <span class="text-[9px] text-slate-400">LRA 1</span>
+                    </div>
+                    <div id="motor-center" class="w-20 h-20 rounded-full border-4 border-slate-300 bg-white flex flex-col items-center justify-center text-xs font-bold transition-all duration-300">
+                        <span>CENTER</span>
+                        <span class="text-[9px] text-slate-400">LRA 2</span>
+                    </div>
+                    <div id="motor-right" class="w-16 h-16 rounded-full border-4 border-slate-300 bg-white flex flex-col items-center justify-center text-xs font-bold transition-all duration-300">
+                        <span>RIGHT</span>
+                        <span class="text-[9px] text-slate-400">LRA 3</span>
+                    </div>
+                </div>
+
+                <div class="p-3 bg-slate-900 text-stone-200 rounded-lg text-xs font-mono flex justify-between items-center">
+                    <span>DRV2605L Bus Command: <strong id="hapticCmd" class="text-amber-400">IDLE (0x00)</strong></span>
+                    <span id="hapticDesc" class="text-slate-400">Click a vector above to pulse.</span>
+                </div>
+            </div>
+
+            <!-- Actuator Transient Response Chart (LRA vs ERM) -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-3">
+                    <h3 class="font-bold text-slate-800 text-sm">Transient Response Physics: LRA vs. ERM Motors</h3>
+                    <p class="text-xs text-slate-600">
+                        Linear Resonant Actuators (LRAs) achieve peak vibration in &lt;10ms, allowing crisp haptic textures compared to laggy Eccentric Rotating Mass (ERM) motors (&gt;50ms).
+                    </p>
+                    <div class="chart-container">
+                        <canvas id="hapticChart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Secondary Feedback: Bone Conduction -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-4">
+                    <h3 class="font-bold text-slate-800 text-sm flex items-center justify-between">
+                        <span>🔊 Bone Conduction Acoustic Integration</span>
+                        <span class="bg-emerald-100 text-emerald-800 text-xs px-2 py-0.5 rounded font-bold">Zero Audio Isolation</span>
+                    </h3>
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        Standard earbuds block environmental cues (traffic, footsteps, cane echo). Bone conduction transducers vibrate the temporal bone directly to the cochlea, keeping the ear canal 100% open.
+                    </p>
+                    <div class="p-3 bg-stone-50 rounded-lg border border-stone-200 text-xs space-y-2">
+                        <div class="flex justify-between">
+                            <span class="font-bold text-slate-700">16mm 8Ω Transducer:</span>
+                            <span class="font-mono text-slate-800">~₹33</span>
+                        </div>
+                        <div class="flex justify-between">
+                            <span class="font-bold text-slate-700">PAM8403 Class-D Amplifier:</span>
+                            <span class="font-mono text-slate-800">~₹67</span>
+                        </div>
+                        <p class="text-[11px] text-slate-500 pt-1 border-t border-stone-200">
+                            Mounted directly inside spectacle temple arms for directional verbal or tone alerts.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- TAB 5: POWER & RUNTIME CONFIGURATOR       -->
+        <!-- ========================================== -->
+        <section id="section-power" class="space-y-6 hidden">
+            <div class="bg-indigo-50 border-l-4 border-indigo-600 p-4 rounded-r-lg shadow-sm">
+                <h2 class="text-xl font-bold text-indigo-900 flex items-center space-x-2">
+                    <span>🔋</span> <span>Interactive Power Budget & Battery Runtime Configurator</span>
+                </h2>
+                <p class="mt-2 text-sm text-indigo-800 leading-relaxed">
+                    Edge AI devices exhibit dynamic power draw under heavy inference. Pi 5 requires a strict 5V/5A (25W) USB-C PD source to avoid under-voltage throttling. Calculate system runtime, thermal dissipation, and weight based on your component stack.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <!-- Configurator Controls Panel -->
+                <div class="bg-white p-5 rounded-xl border border-stone-200 shadow-sm space-y-4 lg:col-span-1">
+                    <h3 class="font-bold text-slate-800 text-base">Select System Components</h3>
+
+                    <div class="space-y-3 text-xs">
+                        <div>
+                            <label class="font-semibold text-slate-700 block mb-1">Compute Core:</label>
+                            <select id="cfgCompute" onchange="calculatePower()" class="w-full bg-stone-100 border border-stone-300 rounded p-2 text-slate-800">
+                                <option value="pi5_hailo" selected>Raspberry Pi 5 + Hailo-8L (11W)</option>
+                                <option value="jetson_high">Jetson Orin Nano Super Max Load (20W)</option>
+                                <option value="jetson_low">Jetson Orin Nano Low Power (10W)</option>
+                                <option value="pi5_only">Raspberry Pi 5 CPU Only (7W)</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="font-semibold text-slate-700 block mb-1">Camera Unit:</label>
+                            <select id="cfgCamera" onchange="calculatePower()" class="w-full bg-stone-100 border border-stone-300 rounded p-2 text-slate-800">
+                                <option value="ar0234" selected>Arducam AR0234 MIPI Global Shutter (1.2W)</option>
+                                <option value="imx296">Sony IMX296 Official Pi GS (0.8W)</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="font-semibold text-slate-700 block mb-1">Feedback Subsystem:</label>
+                            <select id="cfgHaptics" onchange="calculatePower()" class="w-full bg-stone-100 border border-stone-300 rounded p-2 text-slate-800">
+                                <option value="lra_audio" selected>3x LRAs + DRV2605L + Bone Conduction (1.5W)</option>
+                                <option value="lra_only">3x LRAs + DRV2605L Only (0.8W)</option>
+                            </select>
+                        </div>
+
+                        <div>
+                            <label class="font-semibold text-slate-700 block mb-1">USB-C PD Battery Bank:</label>
+                            <select id="cfgBattery" onchange="calculatePower()" class="w-full bg-stone-100 border border-stone-300 rounded p-2 text-slate-800">
+                                <option value="20000_65w" selected>Ambrane PowerLit Ultra Lite (20,000mAh / 74Wh, 388g)</option>
+                                <option value="10000_30w">10,000mAh Compact PD Bank (37Wh, 210g)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dynamic Results Display -->
+                <div class="bg-slate-900 text-white p-6 rounded-xl border border-slate-800 shadow-sm lg:col-span-2 flex flex-col justify-between space-y-6">
+                    <div>
+                        <div class="flex justify-between items-center border-b border-slate-800 pb-3">
+                            <h3 class="font-bold text-stone-100 text-lg">System Power & Runtime Summary</h3>
+                            <span id="cfgStatusBadge" class="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-xs font-bold px-3 py-1 rounded-full">
+                                Operational Target Met
+                            </span>
+                        </div>
+
+                        <div class="grid grid-cols-2 sm:grid-cols-4 gap-4 mt-6 text-center">
+                            <div class="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                                <span class="text-slate-400 text-[11px] block">Total Power Draw</span>
+                                <strong id="resPower" class="text-xl text-amber-400 font-mono">13.7 W</strong>
+                            </div>
+                            <div class="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                                <span class="text-slate-400 text-[11px] block">Est. Runtime</span>
+                                <strong id="resRuntime" class="text-xl text-emerald-400 font-mono">4.6 hrs</strong>
+                            </div>
+                            <div class="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                                <span class="text-slate-400 text-[11px] block">Battery Weight</span>
+                                <strong id="resWeight" class="text-xl text-indigo-400 font-mono">388 g</strong>
+                            </div>
+                            <div class="bg-slate-800/80 p-3 rounded-lg border border-slate-700">
+                                <span class="text-slate-400 text-[11px] block">Total Hardware Cost</span>
+                                <strong id="resCost" class="text-xl text-stone-100 font-mono">₹38,200</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-slate-800 p-4 rounded-lg border border-slate-700 text-xs space-y-2">
+                        <div class="flex items-center space-x-2 text-amber-400 font-bold">
+                            <span>🔥 Thermal & Ergonomic Assessment:</span>
+                        </div>
+                        <p id="resThermalText" class="text-slate-300 leading-relaxed">
+                            Moderate thermal load. Passive heatsink on Pi 5 with small active fan is sufficient. Waist-pack enclosure prevents skin contact.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ========================================== -->
+        <!-- TAB 6: PHASED DEPLOYMENT ROADMAP           -->
+        <!-- ========================================== -->
+        <section id="section-roadmap" class="space-y-6 hidden">
+            <div class="bg-stone-100 border-l-4 border-slate-700 p-4 rounded-r-lg shadow-sm">
+                <h2 class="text-xl font-bold text-slate-900 flex items-center space-x-2">
+                    <span>🚀</span> <span>Strategic Phased Deployment Roadmap</span>
+                </h2>
+                <p class="mt-2 text-sm text-slate-700 leading-relaxed">
+                    To mitigate compiler risks while proving mathematical viability, the project must strictly separate algorithmic research on unconstrained CUDA platforms from hardware optimization on wearable target NPUs.
+                </p>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Phase 1 Card -->
+                <div class="bg-white p-6 rounded-xl border-2 border-indigo-200 shadow-sm space-y-4">
+                    <div class="flex justify-between items-center">
+                        <span class="bg-indigo-100 text-indigo-900 font-bold text-xs px-3 py-1 rounded-full">Stages 1 & 2</span>
+                        <span class="text-xs font-mono text-slate-500">Budget: ₹73k – ₹85k</span>
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg">Algorithmic R&D Sandbox</h3>
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        Execute proof-of-concept JEPA training and optical flow validation on unconstrained hardware. Do not fight NPU compiler limits during algorithm development.
+                    </p>
+                    <div class="p-3 bg-stone-50 rounded-lg text-xs space-y-1.5 border border-stone-200">
+                        <div><strong>Compute:</strong> NVIDIA Jetson Orin Nano Super (8GB CUDA)</div>
+                        <div><strong>Camera:</strong> Arducam AR0234 MIPI Global Shutter (120 FPS)</div>
+                        <div><strong>Haptics:</strong> 3x LRA Motors + DRV2605L I2C Drivers</div>
+                        <div><strong>Goal:</strong> Validate sub-100ms collision prediction accuracy in PyTorch.</div>
+                    </div>
+                </div>
+
+                <!-- Phase 2 Card -->
+                <div class="bg-white p-6 rounded-xl border-2 border-emerald-200 shadow-sm space-y-4">
+                    <div class="flex justify-between items-center">
+                        <span class="bg-emerald-100 text-emerald-900 font-bold text-xs px-3 py-1 rounded-full">Stages 3 & 4</span>
+                        <span class="text-xs font-mono text-slate-500">Budget: ₹33k – ₹38k</span>
+                    </div>
+                    <h3 class="font-bold text-slate-900 text-lg">Efficient Wearable Target</h3>
+                    <p class="text-xs text-slate-600 leading-relaxed">
+                        Refactor PyTorch model to hardware-friendly 1D TCNs and static convolutions. Compile via Hailo DFC and deploy to a lightweight waist-wearable system.
+                    </p>
+                    <div class="p-3 bg-stone-50 rounded-lg text-xs space-y-1.5 border border-stone-200">
+                        <div><strong>Compute:</strong> Raspberry Pi 5 (8GB) + Hailo-8L M.2 HAT+</div>
+                        <div><strong>Camera:</strong> Arducam AR0234 MIPI Global Shutter</div>
+                        <div><strong>Power:</strong> 65W USB-C PD (20,000mAh, &gt;5 hrs runtime)</div>
+                        <div><strong>Goal:</strong> All-day wearable deployment with sub-12W total power budget.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Global App Footer -->
+    <footer class="bg-slate-900 text-slate-400 text-xs py-6 border-t border-slate-800 mt-12">
+        <div class="max-w-7xl mx-auto px-4 text-center space-y-2">
+            <p>Wearable Obstacle Detection Systems for Visually Impaired Pedestrians — Architecture Matrix</p>
+            <p class="text-slate-500">Single-Page Interactive Dashboard | Tailored for Indian Supply Chain & Research Specs</p>
+        </div>
+    </footer>
+
+    <!-- JavaScript Application Logic -->
+    <script>
+        // Data Storage
+        const computeData = [
+            { id: 'jetson', name: 'Jetson Orin Nano Super (8GB)', role: 'research', roleName: 'Research Sandbox', tops: 67, power: '7W - 25W', costMin: 49999, costMax: 74999, costText: '₹49,999 - ₹74,999', eco: 'Excellent (CUDA, TensorRT)' },
+            { id: 'pi_hailo', name: 'Raspberry Pi 5 + Hailo-8L', role: 'target', roleName: 'Wearable Target', tops: 13, power: '10W - 12W', costMin: 21000, costMax: 30000, costText: '₹21,000 - ₹30,000', eco: 'Good (OpenVINO, Hailo DFC)' },
+            { id: 'orangepi', name: 'Orange Pi 5 Plus (RK3588)', role: 'prototype', roleName: 'Alternative Embedded', tops: 6, power: '8W - 15W', costMin: 14500, costMax: 46200, costText: '₹14,500 - ₹46,200', eco: 'Poor (RKNN-Toolkit2)' },
+            { id: 'phone', name: 'High-End Android Smartphone', role: 'prototype', roleName: 'Classical Prototype', tops: 30, power: '5W - 10W', costMin: 0, costMax: 0, costText: 'Pre-existing Asset', eco: 'Fragmented (NNAPI)' }
+        ];
+
+        // Chart.js Instances
+        let latencyChartObj, topsRiskChartObj, hapticChartObj;
+
+        // Init on DOM Load
+        document.addEventListener('DOMContentLoaded', () => {
+            initLatencyChart();
+            initTopsRiskChart();
+            initHapticChart();
+            renderComputeTable(computeData);
+            initShutterSim();
+            calculatePower();
+        });
+
+        // Navigation Switcher
+        function switchTab(tabId) {
+            const tabs = ['paradigm', 'compute', 'camera', 'haptics', 'power', 'roadmap'];
+            tabs.forEach(t => {
+                document.getElementById(`section-${t}`).classList.add('hidden');
+                document.getElementById(`tab-${t}`).classList.remove('active');
+            });
+
+            document.getElementById(`section-${tabId}`).classList.remove('hidden');
+            document.getElementById(`tab-${tabId}`).classList.add('active');
+
+            // Trigger canvas/chart resizes on tab switch
+            if (tabId === 'compute' && topsRiskChartObj) topsRiskChartObj.resize();
+            if (tabId === 'haptics' && hapticChartObj) hapticChartObj.resize();
+            if (tabId === 'paradigm' && latencyChartObj) latencyChartObj.resize();
+        }
+
+        // TAB 1: Latency Chart
+        function initLatencyChart() {
+            const ctx = document.getElementById('latencyChart').getContext('2d');
+            latencyChartObj = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: ['Native NPU Execution', '1 Operator Fallback (PCIe)', '3 Operator Fallbacks', 'Full CPU Processing'],
+                    datasets: [{
+                        label: 'Inference + Transfer Latency (ms)',
+                        data: [12, 48, 115, 185],
+                        backgroundColor: ['#10b981', '#f59e0b', '#f43f5e', '#881337'],
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: { display: false },
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => ` Latency: ${ctx.raw} ms ${ctx.raw > 100 ? '(Fails Real-time <100ms)' : '(Passes Real-time)'}`
+                            }
+                        }
+                    },
+                    scales: {
+                        y: {
+                            title: { display: true, text: 'Latency (Milliseconds)' },
+                            suggestedMax: 200
+                        }
+                    }
+                }
+            });
+        }
+
+        // TAB 2: Compute TOPS vs Risk Scatter Chart
+        function initTopsRiskChart() {
+            const ctx = document.getElementById('topsRiskChart').getContext('2d');
+            topsRiskChartObj = new Chart(ctx, {
+                type: 'bubble',
+                data: {
+                    datasets: [
+                        { label: 'Jetson Orin Nano', data: [{ x: 67, y: 15, r: 14 }], backgroundColor: 'rgba(99, 102, 241, 0.7)' },
+                        { label: 'Pi 5 + Hailo-8L', data: [{ x: 13, y: 55, r: 12 }], backgroundColor: 'rgba(16, 185, 129, 0.7)' },
+                        { label: 'RK3588 (Orange Pi)', data: [{ x: 6, y: 85, r: 10 }], backgroundColor: 'rgba(244, 63, 94, 0.7)' },
+                        { label: 'Android NPU', data: [{ x: 30, y: 70, r: 11 }], backgroundColor: 'rgba(245, 158, 11, 0.7)' }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: 'Raw INT8 TOPS' }, min: 0, max: 80 },
+                        y: { title: { display: true, text: 'Custom Architecture Compiler Risk (%)' }, min: 0, max: 100 }
+                    },
+                    plugins: {
+                        tooltip: {
+                            callbacks: {
+                                label: (ctx) => `${ctx.dataset.label}: ${ctx.raw.x} TOPS | Risk Score: ${ctx.raw.y}%`
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Render Compute Table
+        function renderComputeTable(data) {
+            const tbody = document.getElementById('computeTableBody');
+            tbody.innerHTML = '';
+            data.forEach(item => {
+                const tr = document.createElement('tr');
+                tr.className = 'hover:bg-stone-50 transition';
+                tr.innerHTML = `
+                    <td class="p-3.5 font-bold text-slate-900">${item.name}</td>
+                    <td class="p-3.5"><span class="bg-stone-100 text-slate-800 px-2 py-0.5 rounded border border-stone-200">${item.roleName}</span></td>
+                    <td class="p-3.5 font-semibold text-indigo-600">${item.tops} TOPS</td>
+                    <td class="p-3.5">${item.power}</td>
+                    <td class="p-3.5 font-mono">${item.costText}</td>
+                    <td class="p-3.5">${item.eco}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        }
+
+        function filterComputeTable() {
+            const val = document.getElementById('computeFilter').value;
+            if (val === 'all') {
+                renderComputeTable(computeData);
+            } else {
+                const filtered = computeData.filter(d => d.role === val);
+                renderComputeTable(filtered);
+            }
+        }
+
+        // TAB 3: Canvas Shutter Simulation
+        let simRunning = true;
+        let simFrame = 0;
+
+        function toggleShutterSim() {
+            simRunning = !simRunning;
+            document.getElementById('simBtn').innerText = simRunning ? 'Pause Simulation' : 'Resume Simulation';
+            if (simRunning) requestAnimationFrame(drawShutterFrame);
+        }
+
+        function initShutterSim() {
+            requestAnimationFrame(drawShutterFrame);
+        }
+
+        function drawShutterFrame() {
+            if (!simRunning) return;
+            simFrame += 0.05;
+
+            const rCanvas = document.getElementById('rollingCanvas');
+            const gCanvas = document.getElementById('globalCanvas');
+            if (!rCanvas || !gCanvas) return;
+
+            const rCtx = rCanvas.getContext('2d');
+            const gCtx = gCanvas.getContext('2d');
+
+            const w = rCanvas.width;
+            const h = rCanvas.height;
+            const angle = Math.sin(simFrame) * 0.3; // head swing angle
+
+            // Clear
+            rCtx.clearRect(0, 0, w, h);
+            gCtx.clearRect(0, 0, w, h);
+
+            // Draw Global Shutter (Straight rigid pole)
+            gCtx.save();
+            gCtx.strokeStyle = '#10b981';
+            gCtx.lineWidth = 6;
+            gCtx.beginPath();
+            gCtx.moveTo(w / 2 + angle * 40, 20);
+            gCtx.lineTo(w / 2 + angle * 40, h - 20);
+            gCtx.stroke();
+            gCtx.restore();
+
+            // Draw Rolling Shutter (Skewed diagonal pole due to top-to-bottom row readout)
+            rCtx.save();
+            rCtx.strokeStyle = '#f43f5e';
+            rCtx.lineWidth = 6;
+            rCtx.beginPath();
+            for (let y = 20; y < h - 20; y += 2) {
+                const rowTimeOffset = y * 0.002;
+                const dynamicAngle = Math.sin(simFrame - rowTimeOffset) * 0.3;
+                const x = w / 2 + dynamicAngle * 40;
+                if (y === 20) rCtx.moveTo(x, y);
+                else rCtx.lineTo(x, y);
+            }
+            rCtx.stroke();
+            rCtx.restore();
+
+            requestAnimationFrame(drawShutterFrame);
+        }
+
+        // TAB 4: Haptic Waveform Chart & Trigger
+        function initHapticChart() {
+            const ctx = document.getElementById('hapticChart').getContext('2d');
+            hapticChartObj = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60],
+                    datasets: [
+                        {
+                            label: 'LRA Motor Output (G-Force)',
+                            data: [0, 0.8, 1.4, 1.4, 1.4, 0.1, 0, 0, 0, 0, 0, 0, 0],
+                            borderColor: '#10b981',
+                            borderWidth: 2,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'ERM Motor Output (G-Force)',
+                            data: [0, 0.1, 0.2, 0.4, 0.6, 0.8, 1.0, 1.1, 1.1, 0.9, 0.6, 0.3, 0],
+                            borderColor: '#f43f5e',
+                            borderWidth: 2,
+                            borderDash: [4, 4],
+                            tension: 0.3
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    scales: {
+                        x: { title: { display: true, text: 'Time (Milliseconds)' } },
+                        y: { title: { display: true, text: 'Vibration Acceleration (G)' }, min: 0 }
+                    }
+                }
+            });
+        }
+
+        function triggerHaptic(vector) {
+            const ml = document.getElementById('motor-left');
+            const mc = document.getElementById('motor-center');
+            const mr = document.getElementById('motor-right');
+            const cmd = document.getElementById('hapticCmd');
+            const desc = document.getElementById('hapticDesc');
+
+            // Reset
+            [ml, mc, mr].forEach(m => {
+                m.className = 'w-16 h-16 rounded-full border-4 border-slate-300 bg-white flex flex-col items-center justify-center text-xs font-bold transition-all duration-300';
+            });
+            mc.className = 'w-20 h-20 rounded-full border-4 border-slate-300 bg-white flex flex-col items-center justify-center text-xs font-bold transition-all duration-300';
+
+            if (vector === 'left') {
+                ml.classList.add('border-amber-500', 'bg-amber-100', 'scale-110');
+                cmd.innerText = '0x1A (Waveform: Left Sharp Tap)';
+                desc.innerText = 'DRV2605L Library Waveform #14 sent to Left LRA.';
+            } else if (vector === 'center') {
+                mc.classList.add('border-amber-500', 'bg-amber-100', 'scale-110');
+                cmd.innerText = '0x21 (Waveform: Center Double Pulse)';
+                desc.innerText = 'DRV2605L Library Waveform #28 sent to Center LRA.';
+            } else if (vector === 'right') {
+                mr.classList.add('border-amber-500', 'bg-amber-100', 'scale-110');
+                cmd.innerText = '0x1A (Waveform: Right Sharp Tap)';
+                desc.innerText = 'DRV2605L Library Waveform #14 sent to Right LRA.';
+            } else if (vector === 'urgent') {
+                [ml, mc, mr].forEach(m => m.classList.add('border-rose-600', 'bg-rose-200', 'scale-110'));
+                cmd.innerText = '0xFF (Waveform: Emergency Strong Buzz)';
+                desc.innerText = 'Simultaneous auto-resonance override sent across all 3 LRAs!';
+            }
+        }
+
+        // TAB 5: Power Calculator
+        function calculatePower() {
+            const comp = document.getElementById('cfgCompute').value;
+            const cam = document.getElementById('cfgCamera').value;
+            const hap = document.getElementById('cfgHaptics').value;
+            const bat = document.getElementById('cfgBattery').value;
+
+            let watts = 0;
+            let cost = 0;
+
+            // Compute
+            if (comp === 'pi5_hailo') { watts += 11; cost += 24000; }
+            else if (comp === 'jetson_high') { watts += 20; cost += 62000; }
+            else if (comp === 'jetson_low') { watts += 10; cost += 62000; }
+            else if (comp === 'pi5_only') { watts += 7; cost += 17000; }
+
+            // Camera
+            if (cam === 'ar0234') { watts += 1.2; cost += 11500; }
+            else if (cam === 'imx296') { watts += 0.8; cost += 4900; }
+
+            // Haptics
+            if (hap === 'lra_audio') { watts += 1.5; cost += 2700; }
+            else if (hap === 'lra_only') { watts += 0.8; cost += 2200; }
+
+            // Battery
+            let capacityWh = 74;
+            let weightG = 388;
+            if (bat === '20000_65w') { capacityWh = 74; weightG = 388; cost += 4499; }
+            else if (bat === '10000_30w') { capacityWh = 37; weightG = 210; cost += 2200; }
+
+            // Conversion efficiency 85%
+            const runtimeHours = (capacityWh * 0.85) / watts;
+
+            // Update DOM
+            document.getElementById('resPower').innerText = `${watts.toFixed(1)} W`;
+            document.getElementById('resRuntime').innerText = `${runtimeHours.toFixed(1)} hrs`;
+            document.getElementById('resWeight').innerText = `${weightG} g`;
+            document.getElementById('resCost').innerText = `₹${cost.toLocaleString('en-IN')}`;
+
+            const txt = document.getElementById('resThermalText');
+            if (watts > 18) {
+                txt.innerText = 'High thermal load! Heavy active cooling fan required. System runtime under 3.5 hours.';
+            } else if (watts > 10) {
+                txt.innerText = 'Optimal wearable load. Passive heatsink on Pi 5 with small active fan is sufficient. Waist-pack enclosure prevents skin thermal discomfort.';
+            } else {
+                txt.innerText = 'Ultra-low thermal footprint. Passive cooling adequate.';
+            }
+        }
+    </script>
+</body>
+</html>

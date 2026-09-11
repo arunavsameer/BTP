@@ -1,0 +1,7 @@
+output/
+datasets/*
+!datasets/.gitkeep
+__pycache__/
+*.pyc
+*.blend
+*.blend1

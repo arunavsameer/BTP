@@ -1,0 +1,46 @@
+# Cursor
+.cursor/
+
+# Entire local datasets (large video)
+sanpo/
+
+# blender_sim generated packs / renders
+blender_sim/output/
+blender_sim/datasets/*
+!blender_sim/datasets/.gitkeep
+
+# impl video IO
+impl/cropped/
+impl/input/
+impl/output/
+impl/venv/
+impl/weights/
+
+# synth_sim generated packs
+synth_sim/dataset_output/
+synth_sim/.venv/
+
+# Catch-all for generated renders
+**/output/
+
+# Python
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# Blender
+*.blend
+*.blend1
+*.blend2
+
+# Large local model weights
+mobileclip2_b.ts
+
+# Editor / OS
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

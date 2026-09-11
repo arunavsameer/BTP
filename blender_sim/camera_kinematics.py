@@ -1,0 +1,624 @@
+"""Egocentric head-mounted camera rig: gait bounce + Perlin micro-saccades.
+
+The walker shares the *road* spline with every actor: arc-length `s` along
+the centreline plus a constant sidewalk `lateral`. Each frame the local
+camera transform is *not* the Frenet frame of that path — it is the Frenet
+frame composed with:
+
+  1. Vertical gait   Y_spec(t) = 1.6 + A sin(2 π f t)
+                     (applied on Blender +Z, above the curb)
+  2. Head jitter     yaw / pitch / roll from independent 1-D fractal Perlin
+                     streams, matching the amplitudes in the spec.
+
+Blender cameras look down local −Z, with +Y as the camera up axis. The
+base orientation is therefore the matrix whose columns are
+
+    [ right | world_up_corrected | −tangent ]
+
+so that local −Z equals the path tangent.
+
+Ego modes
+---------
+A dataset of nothing but constant-velocity straight-line walks teaches the
+network that optical flow is always a pure forward translation. Four modes
+break that assumption:
+
+``walk``            the original constant-speed sidewalk traverse.
+``diagonal_cross``  the walker cuts from one kerb to the other, so the
+                    lateral coordinate ramps across the episode and the
+                    flow field acquires a sustained sideways component.
+``erratic``         fBm sidesteps plus speed modulation, with a chance of a
+                    complete stop partway through.
+``seated``          on a bench: ``walk_speed = 0`` and a lower eye height.
+
+Arc length under a varying speed
+--------------------------------
+``walk`` has the closed form :math:`s(t) = s_0 + v t`. ``erratic`` does not:
+its speed is an fBm signal with hard hesitation windows, so ``s(t)`` is
+:math:`s_0 + \\int_0^t v(\\tau)\\,d\\tau` with no analytic antiderivative.
+The rig therefore integrates once at construction onto a fixed-step table
+and interpolates it. That matters for correctness, not just speed: scenario
+injectors query ``s`` at arbitrary future times *before* the simulation loop
+runs, and they must agree with the positions the loop later produces to the
+last metre, or a "critical" intercept lands behind the walker.
+
+Zero ego speed
+--------------
+``seated`` (and every hesitation window) makes ``walk_speed`` exactly 0.
+Nothing here divides by it: :meth:`max_time` reads the arc table instead of
+dividing remaining distance by speed, and the gait bounce is scaled by
+speed so a stationary head does not bob.
+"""
+
+from __future__ import annotations
+
+import math
+import random
+from dataclasses import dataclass, field
+from typing import Any, Optional, Sequence
+
+from mathutils import Euler, Matrix, Vector
+
+
+# ---------------------------------------------------------------------------
+# Seeded 1-D improved Perlin (Ken Perlin 2002 fade), with fractal Brownian
+# motion. Independent of Blender's `mathutils.noise` so a given seed is
+# bit-identical across Blender versions.
+# ---------------------------------------------------------------------------
+
+def _fade(t: float) -> float:
+    """Perlin quintic: 6t^5 - 15t^4 + 10t^3. C2-continuous at lattice nodes."""
+    return t * t * t * (t * (t * 6.0 - 15.0) + 10.0)
+
+
+class Perlin1D:
+    """Classic improved Perlin evaluated along a single axis."""
+
+    def __init__(self, seed: int, table_size: int = 256) -> None:
+        rng = random.Random(int(seed) & 0xFFFFFFFF)
+        perm = list(range(table_size))
+        rng.shuffle(perm)
+        # Duplicate so we can index with (i + 1) & mask without wrap logic.
+        self._perm = perm + perm
+        self._grads = [rng.uniform(-1.0, 1.0) for _ in range(table_size)]
+        self._grads.extend(self._grads)
+        self._mask = table_size - 1
+        if table_size & self._mask:
+            raise ValueError("Perlin1D table_size must be a power of two")
+
+    def noise(self, x: float) -> float:
+        """Return a smooth value in approximately [-1, 1] at real `x`."""
+        xi = math.floor(x)
+        xf = x - xi
+        i0 = xi & self._mask
+        i1 = (xi + 1) & self._mask
+        g0 = self._grads[i0]
+        g1 = self._grads[i1]
+        # Dot the lattice gradient with the offset from that lattice point.
+        n0 = g0 * xf
+        n1 = g1 * (xf - 1.0)
+        return _fade(xf) * (n1 - n0) + n0
+
+    def fbm(
+        self,
+        x: float,
+        octaves: int = 4,
+        persistence: float = 0.5,
+        lacunarity: float = 2.0,
+    ) -> float:
+        """Fractal Brownian motion: sum of octaves of `noise`.
+
+        Amplitude is re-normalized by the geometric series so the result
+        stays in roughly [-1, 1] regardless of octave count.
+        """
+        total = 0.0
+        amp = 1.0
+        freq = 1.0
+        amp_sum = 0.0
+        for _ in range(max(1, int(octaves))):
+            total += self.noise(x * freq) * amp
+            amp_sum += amp
+            amp *= persistence
+            freq *= lacunarity
+        if amp_sum <= 0.0:
+            return 0.0
+        return total / amp_sum
+
+
+# ---------------------------------------------------------------------------
+# Camera state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class CameraState:
+    """Snapshot consumed by the annotator and written into camera_data."""
+
+    t: float
+    position: Vector  # Blender world (Z-up)
+    velocity: Vector  # Blender world m/s
+    tangent: Vector
+    right: Vector
+    up: Vector
+    pitch: float  # local jitter, radians
+    yaw: float
+    roll: float
+    matrix_world: Matrix
+    walk_speed: float  # instantaneous ground speed, 0 when seated / halted
+    arc_length: float
+    lateral: float
+    mode: str = "walk"
+
+    def pitch_yaw_roll(self) -> tuple[float, float, float]:
+        return (self.pitch, self.yaw, self.roll)
+
+
+EGO_MODES: tuple[str, ...] = ("walk", "diagonal_cross", "erratic", "seated")
+
+
+@dataclass
+class EgoProfile:
+    """Per-episode ego trajectory parameters, drawn once before the sim.
+
+    Separated from :class:`CameraRig` so it can be built, logged, and
+    unit-tested without a Blender camera object.
+    """
+
+    mode: str = "walk"
+    eye_height: float = 1.6
+    # diagonal_cross: fraction of the way to the *opposite* kerb, traversed
+    # over [t0, t1]. Stored as a fraction rather than metres because the
+    # profile is drawn before the rig knows how wide this biome's corridor
+    # is — a 1.3 m shift crosses a park path but only steps off a kerb on a
+    # four-lane avenue.
+    diag_frac: float = 0.0
+    diag_t0: float = 0.0
+    diag_t1: float = 1.0
+    # erratic: fBm sidestep and speed modulation.
+    sidestep_amp: float = 0.0
+    sidestep_rate: float = 0.20
+    speed_wobble: float = 0.0
+    halt_t0: Optional[float] = None
+    halt_t1: Optional[float] = None
+
+    @property
+    def stationary(self) -> bool:
+        return self.mode == "seated"
+
+
+def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5.0) -> EgoProfile:
+    """Draw an ego mode and its parameters from `cfg['ego']`.
+
+    `episode_seconds` scales the timing windows so a hesitation actually
+    lands inside a short episode instead of after the last frame.
+    """
+    ecfg = dict(cfg.get("ego") or {})
+    weights = dict(ecfg.get("mode_weights") or {"walk": 1.0})
+    keys = [k for k in weights if k in EGO_MODES]
+    if not keys:
+        keys = ["walk"]
+    total = sum(max(0.0, float(weights.get(k, 0.0))) for k in keys)
+    if total <= 0.0:
+        mode = "walk"
+    else:
+        x = rng.uniform(0.0, total)
+        acc = 0.0
+        mode = keys[-1]
+        for k in keys:
+            acc += max(0.0, float(weights.get(k, 0.0)))
+            if x <= acc:
+                mode = k
+                break
+
+    eye = float(cfg["camera"]["eye_height_m"])
+    prof = EgoProfile(mode=mode, eye_height=eye)
+    span = max(0.5, float(episode_seconds))
+
+    if mode == "seated":
+        lo, hi = ecfg.get("seated_eye_height_m", (0.95, 1.28))
+        prof.eye_height = float(rng.uniform(float(lo), float(hi)))
+        return prof
+
+    if mode == "diagonal_cross":
+        lo, hi = ecfg.get("diagonal_target_frac", (0.45, 1.00))
+        prof.diag_frac = float(rng.uniform(float(lo), float(hi)))
+        f0, f1 = ecfg.get("diagonal_span", (0.12, 0.85))
+        prof.diag_t0 = span * float(f0)
+        prof.diag_t1 = span * float(f1)
+        if prof.diag_t1 <= prof.diag_t0 + 0.2:
+            prof.diag_t1 = prof.diag_t0 + 0.2
+        return prof
+
+    if mode == "erratic":
+        a_lo, a_hi = ecfg.get("sidestep_amp_m", (0.22, 0.80))
+        r_lo, r_hi = ecfg.get("sidestep_rate_hz", (0.10, 0.38))
+        w_lo, w_hi = ecfg.get("speed_wobble", (0.15, 0.55))
+        prof.sidestep_amp = float(rng.uniform(float(a_lo), float(a_hi)))
+        prof.sidestep_rate = float(rng.uniform(float(r_lo), float(r_hi)))
+        prof.speed_wobble = float(rng.uniform(float(w_lo), float(w_hi)))
+        if rng.random() < float(ecfg.get("hesitate_prob", 0.55)):
+            h_lo, h_hi = ecfg.get("hesitate_window_s", (0.9, 2.6))
+            d_lo, d_hi = ecfg.get("hesitate_duration_s", (0.5, 1.6))
+            t0 = float(rng.uniform(float(h_lo), float(h_hi)))
+            prof.halt_t0 = min(t0, max(0.2, span - 0.6))
+            prof.halt_t1 = prof.halt_t0 + float(rng.uniform(float(d_lo), float(d_hi)))
+        return prof
+
+    return prof
+
+
+@dataclass
+class CameraRig:
+    """Owns the Blender camera object and writes its 4×4 transform each frame."""
+
+    cam_obj: Any
+    spline: Any  # PathSpline (duck-typed: evaluate / tangent / length)
+    cfg: dict
+    rng: random.Random
+    walk_speed: float
+    sidewalk_s0: float = 3.0
+    lateral: float = 0.0
+    curb_height: float = 0.12
+    profile: EgoProfile = field(default_factory=EgoProfile)
+    lateral_limit: float = 1e9
+    _prev_position: Optional[Vector] = field(default=None, init=False, repr=False)
+    _yaw_noise: Perlin1D = field(init=False, repr=False)
+    _pitch_noise: Perlin1D = field(init=False, repr=False)
+    _roll_noise: Perlin1D = field(init=False, repr=False)
+    _step_noise: Perlin1D = field(init=False, repr=False)
+    _speed_noise: Perlin1D = field(init=False, repr=False)
+    _yaw_phase: float = field(init=False, repr=False)
+    _pitch_phase: float = field(init=False, repr=False)
+    _roll_phase: float = field(init=False, repr=False)
+    _arc_dt: float = field(default=1.0 / 120.0, init=False, repr=False)
+    _arc: list = field(default_factory=list, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        # Six independent seeds so no two channels are correlated.
+        base = self.rng.randrange(1, 2**31)
+        self._yaw_noise = Perlin1D(base + 17)
+        self._pitch_noise = Perlin1D(base + 101)
+        self._roll_noise = Perlin1D(base + 233)
+        self._step_noise = Perlin1D(base + 331)
+        self._speed_noise = Perlin1D(base + 457)
+        # Phase offsets so two episodes with the same walk speed still differ.
+        self._yaw_phase = self.rng.uniform(0.0, 64.0)
+        self._pitch_phase = self.rng.uniform(0.0, 64.0)
+        self._roll_phase = self.rng.uniform(0.0, 64.0)
+
+        cam = self.cam_obj.data
+        ccfg = self.cfg["camera"]
+        cam.lens = float(ccfg["lens_mm"])
+        cam.sensor_width = float(ccfg["sensor_width_mm"])
+        cam.sensor_fit = str(ccfg["sensor_fit"])
+        cam.clip_start = float(ccfg["clip_start"])
+        cam.clip_end = float(ccfg["clip_end"])
+        wcfg = self.cfg.get("world") or {}
+        self.curb_height = float(wcfg.get("curb_height", self.curb_height))
+        if self.profile.mode == "seated":
+            # A bench sits back from the kerb, toward the building line.
+            self.lateral = self._clamp_lateral(
+                self.lateral + math.copysign(0.35, self.lateral or 1.0)
+            )
+        self._build_arc_table()
+
+    # -- trajectory --------------------------------------------------------
+
+    def _clamp_lateral(self, lat: float) -> float:
+        lim = abs(float(self.lateral_limit))
+        return max(-lim, min(lim, float(lat)))
+
+    def speed_at(self, t: float) -> float:
+        """Instantaneous ground speed (m/s). Never negative.
+
+        This is the single source of truth for "is the ego moving"; the arc
+        table, the gait amplitude, and the exported ``walk_speed`` all read
+        it, so a hesitation cannot desynchronise them.
+        """
+        prof = self.profile
+        if prof.stationary:
+            return 0.0
+        if prof.halt_t0 is not None and prof.halt_t1 is not None:
+            if prof.halt_t0 <= t < prof.halt_t1:
+                return 0.0
+        v = float(self.walk_speed)
+        if prof.speed_wobble > 1e-6:
+            n = self._speed_noise.fbm(t * 0.45, octaves=3, persistence=0.5, lacunarity=2.0)
+            v *= 1.0 + prof.speed_wobble * n
+        return max(0.0, v)
+
+    def _build_arc_table(self, horizon_s: float = 90.0) -> None:
+        """Cumulative-trapezoid table of s(t) over [0, horizon].
+
+        Built once. ``walk`` and ``seated`` have exact closed forms and skip
+        the table entirely; only the modulated modes pay for it, and even
+        then it is ~10k floats.
+        """
+        self._arc = []
+        prof = self.profile
+        if prof.stationary or (prof.speed_wobble <= 1e-6 and prof.halt_t0 is None):
+            return  # constant speed: s(t) is analytic
+        dt = self._arc_dt
+        n = int(horizon_s / dt) + 2
+        s = 0.0
+        prev_v = self.speed_at(0.0)
+        table = [0.0] * n
+        for i in range(1, n):
+            t = i * dt
+            v = self.speed_at(t)
+            s += 0.5 * (prev_v + v) * dt
+            table[i] = s
+            prev_v = v
+        self._arc = table
+
+    def travelled(self, t: float) -> float:
+        """Distance walked since t = 0 (metres), for any mode."""
+        tt = max(0.0, float(t))
+        if not self._arc:
+            if self.profile.stationary:
+                return 0.0
+            return float(self.walk_speed) * tt
+        dt = self._arc_dt
+        x = tt / dt
+        i = int(x)
+        if i >= len(self._arc) - 1:
+            return self._arc[-1]
+        u = x - i
+        a = self._arc[i]
+        return a + (self._arc[i + 1] - a) * u
+
+    def arc_length_at(self, t: float) -> float:
+        """Road arc-length of the ego at time `t`, clamped to the spline."""
+        s = self.sidewalk_s0 + self.travelled(t)
+        return min(max(0.05, s), max(0.10, self.spline.length - 0.05))
+
+    def lateral_at(self, t: float) -> float:
+        """Signed offset from the road centreline at time `t`.
+
+        ``walk`` and ``seated`` are constant. ``diagonal_cross`` ramps with a
+        smoothstep so the heading turns continuously rather than snapping.
+        ``erratic`` adds a zero-mean fBm sidestep about the base lateral.
+        """
+        prof = self.profile
+        lat = float(self.lateral)
+        if prof.mode == "diagonal_cross" and abs(prof.diag_frac) > 1e-6:
+            t0, t1 = prof.diag_t0, prof.diag_t1
+            u = 0.0 if t <= t0 else (1.0 if t >= t1 else (t - t0) / max(t1 - t0, 1e-3))
+            u = u * u * (3.0 - 2.0 * u)
+            # Cross toward the far kerb: opposite sign to the start lateral.
+            # Full span is base → −base, i.e. 2|base|, with a floor so a
+            # centreline path (base ≈ 0) still produces a real crossing.
+            span = max(2.0 * abs(lat), 2.5)
+            lat = lat - math.copysign(prof.diag_frac * span, lat if lat else 1.0) * u
+        elif prof.mode == "erratic" and prof.sidestep_amp > 1e-6:
+            n = self._step_noise.fbm(
+                t * prof.sidestep_rate, octaves=3, persistence=0.5, lacunarity=2.05
+            )
+            lat = lat + prof.sidestep_amp * n
+        return self._clamp_lateral(lat)
+
+    # -- public API --------------------------------------------------------
+
+    def max_time(self) -> float:
+        """Largest t that still keeps the walker on the road spline.
+
+        Read off the arc table rather than dividing remaining distance by
+        speed, so a hesitating or seated walker (speed 0) does not divide by
+        zero and does not get an episode truncated to nothing.
+        """
+        remaining = max(0.5, self.spline.length - self.sidewalk_s0 - 2.0)
+        if self.profile.stationary:
+            return 1e6  # never leaves the spline; frame count rules instead
+        if not self._arc:
+            return remaining / max(self.walk_speed, 1e-3)
+        dt = self._arc_dt
+        for i, s in enumerate(self._arc):
+            if s >= remaining:
+                return i * dt
+        return len(self._arc) * dt
+
+    def sample_angles(self, t: float) -> tuple[float, float, float]:
+        """Return (pitch, yaw, roll) in radians from the Perlin streams."""
+        j = self.cfg["jitter"]
+
+        def axis(name: str, noise: Perlin1D, phase: float) -> float:
+            spec = j[name]
+            # Time is scaled by the axis frequency so "slow yaw" really is slow.
+            x = t * float(spec["frequency_hz"]) + phase
+            n = noise.fbm(
+                x,
+                octaves=int(spec["octaves"]),
+                persistence=float(spec["persistence"]),
+                lacunarity=float(spec["lacunarity"]),
+            )
+            return math.radians(float(spec["amplitude_deg"])) * n
+
+        pitch = axis("pitch", self._pitch_noise, self._pitch_phase)
+        yaw = axis("yaw", self._yaw_noise, self._yaw_phase)
+        roll = axis("roll", self._roll_noise, self._roll_phase)
+        return pitch, yaw, roll
+
+    def _gait_gain(self, t: float) -> float:
+        """Bounce amplitude as a fraction of the nominal walking bounce.
+
+        A head does not bob while its owner is sitting on a bench or has
+        stopped dead, and a bobbing camera with zero ground velocity is a
+        strong, wrong cue: it looks like motion that the labels deny.
+        """
+        if self.profile.stationary:
+            return 0.0
+        nominal = max(float(self.walk_speed), 1e-6)
+        return max(0.0, min(1.0, self.speed_at(t) / nominal))
+
+    def gait_height(self, t: float) -> float:
+        """Spec equation: eye + A sin(2 π f t), with A scaled by ground speed."""
+        g = self.cfg["gait"]
+        a = float(g["amplitude_m"]) * self._gait_gain(t)
+        f = float(g["frequency_hz"])
+        return self.profile.eye_height + a * math.sin(2.0 * math.pi * f * t)
+
+    def gait_pitch_bob(self, t: float) -> float:
+        """Tiny nod locked to the bounce (optional, not in the spec minimum)."""
+        g = self.cfg["gait"]
+        amp = float(g.get("pitch_bob_amp_rad", 0.0)) * self._gait_gain(t)
+        f = float(g["frequency_hz"])
+        # Phase-quadrature with the vertical sine so the head dips at mid-stance.
+        return amp * math.cos(2.0 * math.pi * f * t)
+
+    def predict_position(self, t: float) -> Vector:
+        """World position of the *eyes* at time t (no jitter, gait included).
+
+        Used by scenario injectors to place intercepts on the future gait
+        line, so it must follow the same arc table and lateral schedule the
+        simulation loop will follow.
+        """
+        p, _, _ = self._frenet(self.arc_length_at(t), self.lateral_at(t))
+        p = p.copy()
+        p.z = p.z + self.gait_height(t)
+        return p
+
+    def predict_velocity(self, t: float, dt: float = 1.0 / 30.0) -> Vector:
+        """Central-difference velocity of the eye point (includes gait dZ/dt)."""
+        h = max(float(dt), 1e-4)
+        return (self.predict_position(t + h) - self.predict_position(max(0.0, t - h))) / (2.0 * h)
+
+    def update(self, t: float, dt: float) -> CameraState:
+        """Write `cam_obj.matrix_world` and return the kinematics snapshot."""
+        s = self.arc_length_at(t)
+        lat = self.lateral_at(t)
+
+        origin, tangent, right = self._frenet(s, lat)
+        world_up = Vector((0.0, 0.0, 1.0))
+        # Re-orthogonalize up against the (possibly banked) right/tangent pair.
+        up = right.cross(tangent)
+        if up.length < 1e-6:
+            up = world_up.copy()
+        else:
+            up.normalize()
+
+        height = self.gait_height(t)
+        position = Vector((origin.x, origin.y, origin.z + height))
+
+        pitch, yaw, roll = self.sample_angles(t)
+        pitch = pitch + self.gait_pitch_bob(t)
+
+        matrix = self._compose_matrix(position, tangent, up, right, pitch, yaw, roll)
+        self._apply_camera_matrix(self.cam_obj, matrix)
+
+        if self._prev_position is None or dt <= 1e-8:
+            # Frame 0 has no previous sample. Central-difference the analytic
+            # trajectory instead of assuming tangent × walk_speed, which is
+            # wrong for a diagonal crossing and for a halted walker.
+            h = max(dt, 1.0 / 240.0)
+            velocity = (
+                self.predict_position(t + h) - self.predict_position(max(0.0, t - h))
+            ) / (2.0 * h)
+        else:
+            velocity = (position - self._prev_position) / dt
+        self._prev_position = position.copy()
+
+        return CameraState(
+            t=t,
+            position=position,
+            velocity=velocity,
+            tangent=tangent,
+            right=right,
+            up=up,
+            pitch=pitch,
+            yaw=yaw,
+            roll=roll,
+            matrix_world=matrix.copy(),
+            walk_speed=self.speed_at(t),
+            arc_length=s,
+            lateral=lat,
+            mode=self.profile.mode,
+        )
+
+    # -- internals ---------------------------------------------------------
+
+    def _frenet(self, s: float, lateral: Optional[float] = None) -> tuple[Vector, Vector, Vector]:
+        """(origin_on_ground, unit_tangent, unit_right) in Blender world.
+
+        `origin` is the gait point: centreline plus `lateral` along road-right,
+        so the camera shares the same Frenet `(s, lateral)` as every actor.
+        Gaze stays the *road* tangent (forward along the street).
+        """
+        lat = float(self.lateral if lateral is None else lateral)
+        p = Vector(self.spline.evaluate(s))
+        tangent = Vector(self.spline.tangent(s))
+        if tangent.length < 1e-8:
+            tangent = Vector((0.0, 1.0, 0.0))
+        else:
+            tangent.normalize()
+        world_up = Vector((0.0, 0.0, 1.0))
+        # right = tangent × up  (see module docstring)
+        right = tangent.cross(world_up)
+        if right.length < 1e-6:
+            right = Vector((1.0, 0.0, 0.0))
+        else:
+            right.normalize()
+        origin = p + right * lat
+        origin.z = float(self.curb_height)
+        return origin, tangent, right
+
+    @staticmethod
+    def _compose_matrix(
+        position: Vector,
+        tangent: Vector,
+        up: Vector,
+        right: Vector,
+        pitch: float,
+        yaw: float,
+        roll: float,
+    ) -> Matrix:
+        """Build the 4×4 camera world matrix.
+
+        Base columns (Blender camera convention):
+            col0 = right      → local +X
+            col1 = up         → local +Y
+            col2 = −tangent   → local +Z  (looks down −Z = +tangent)
+
+        Jitter is applied in *camera* space so yaw scans left/right about the
+        head's up axis, pitch nods about the ear-to-ear axis, and roll tilts
+        about the gaze axis — i.e. Euler XYZ in the camera frame.
+        """
+        rot_base = Matrix((
+            (right.x, up.x, -tangent.x),
+            (right.y, up.y, -tangent.y),
+            (right.z, up.z, -tangent.z),
+        ))
+        # mathutils Matrix constructed from rows; the tuple-of-tuples above
+        # *is* row-major, and the columns are exactly (right, up, −tangent).
+        rot_jitter = Euler((pitch, yaw, roll), "XYZ").to_matrix()
+        rot = rot_base @ rot_jitter
+
+        mat = Matrix.Identity(4)
+        for i in range(3):
+            for j in range(3):
+                mat[i][j] = rot[i][j]
+        mat.translation = position
+        return mat
+
+    @staticmethod
+    def _apply_camera_matrix(cam_obj: Any, matrix: Matrix) -> None:
+        """Write the 4×4 through loc/rot so Blender 5.x actually uses it.
+
+        Assigning ``matrix_world`` alone can be ignored when the object's
+        rotation mode is Euler (the default for a newly created camera).
+        """
+        loc, rot, _scale = matrix.decompose()
+        cam_obj.rotation_mode = "QUATERNION"
+        cam_obj.location = loc
+        cam_obj.rotation_quaternion = rot
+        cam_obj.scale = (1.0, 1.0, 1.0)
+        cam_obj.matrix_world = matrix
+        cam_obj.hide_render = False
+
+
+def finite_difference_velocity(
+    prev: Sequence[float],
+    curr: Sequence[float],
+    dt: float,
+) -> Vector:
+    if dt <= 1e-8:
+        return Vector((0.0, 0.0, 0.0))
+    return (Vector(curr) - Vector(prev)) / dt
