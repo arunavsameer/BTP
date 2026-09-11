@@ -70,6 +70,7 @@ from scenario_compose import (
 )
 from world_generator import (
     SUNKEN_CLASSES,
+    WIND_LABELS,
     WorldGenerator,
     prepare_still_render,
     release_episode,
@@ -194,6 +195,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         dest="no_trees",
         help="Disable procedural trees and grass (faster, less cluttered).",
+    )
+    p.add_argument(
+        "--wind",
+        type=str,
+        default="auto",
+        help="Leaf wind: calm | breeze | windy | auto. Default: auto.",
     )
     p.add_argument(
         "--hfov",
@@ -436,6 +443,8 @@ def build_frame_record(
             "biome": env.get("biome", "street"),
             "dappled": bool(env.get("dappled", False)),
             "chaos": round(float(env.get("chaos", getattr(world, "chaos", 0.0))), 4),
+            "wind": env.get("wind", "breeze"),
+            "wind_strength": round(float(env.get("wind_strength", 0.4)), 3),
         },
         "objects": objects,
     }
@@ -964,6 +973,7 @@ def run_episode(
     ego_mode: str = "auto",
     chaos: float | None = None,
     no_trees: bool = False,
+    wind: str = "auto",
 ) -> dict:
     cfg = copy.deepcopy(cfg)
     names = pick_scenarios(rng, cfg, scenario_request)
@@ -989,11 +999,14 @@ def run_episode(
         c = max(0.0, min(1.0, float(chaos)))
         cfg["domain_randomization"]["material_chaos"] = (c, c)
     if no_trees:
-        cfg["world"]["n_trees"] = (0, 0)
-        cfg["world"]["n_grass_clumps"] = (0, 0)
+        for key in ("n_trees", "n_grass_clumps", "n_street_trees", "n_median_trees", "n_path_trees"):
+            cfg["world"][key] = (0, 0)
         for prof in (cfg["world"].get("biomes") or {}).values():
-            prof.pop("n_trees", None)
-            prof.pop("n_grass_clumps", None)
+            for key in ("n_trees", "n_grass_clumps", "n_street_trees", "n_median_trees", "n_path_trees"):
+                prof.pop(key, None)
+    requested_wind = str(wind or "auto").strip().lower()
+    if requested_wind in WIND_LABELS:
+        cfg["domain_randomization"]["wind_weights"] = {requested_wind: 1.0}
 
     gen = WorldGenerator(cfg, ep_rng)
     # Biome first: a sparse scenario must be able to override the biome's
@@ -1041,7 +1054,9 @@ def run_episode(
     print(
         f"  dir={ep_dir.name}\n"
         f"  biome={chosen_biome}  ego={profile.mode}  "
-        f"chaos={gen.chaos:.2f}  light={state.environment.get('lighting')}"
+        f"chaos={gen.chaos:.2f}  wind={state.environment.get('wind', 'breeze')}"
+        f"({float(state.environment.get('wind_strength', 0)):.2f})  "
+        f"light={state.environment.get('lighting')}"
         f"{'+dappled' if state.environment.get('dappled') else ''}"
     )
 
@@ -1338,6 +1353,7 @@ def main() -> int:
                 ego_mode=str(args.ego_mode),
                 chaos=args.chaos,
                 no_trees=bool(args.no_trees),
+                wind=str(args.wind),
             )
             n_ok += 1
         except Exception:

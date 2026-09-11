@@ -1,1324 +1,1731 @@
-# blender_sim — full implementation notes
+# blender_sim — internals
 
-This file is the future-context dump for `/storage/BTP/blender_sim`. It records **why the pipeline exists**, **how every module fits together**, **the maths**, **every CLI / config knob**, **Blender 5.x pitfalls we already paid for**, and **how to run it**. Prefer this over archaeology in chat logs.
+This file is the complete technical specification of the repository. It exists so a person or another model can reconstruct **what every module does, why it exists, and how data moves**, without opening the Python. How to **run** the pipeline and what folders it writes is in [`README.md`](README.md). If this file and the code disagree, the code wins — then this file is stale.
 
-Machine this was built on: Arch Linux, Blender **5.2.1 LTS** at `/usr/bin/blender`. Workspace root: `/storage/BTP/blender_sim`.
-
----
-
-## 1. The task and why this exists
-
-### 1.1 Problem
-
-Train / evaluate a **low-latency tactile warning model** for a pedestrian wearing a head-mounted RGB camera (eye height 1.6 m). The model must decide, from egocentric video, whether something in front of the walker is:
-
-| Label | Meaning for the vest / belt |
-| --- | --- |
-| `SAFE_STATIC` | Clutter that will not hit you |
-| `SAFE_DYNAMIC` | Moving, but will miss |
-| `NEAR_MISS` | Closing; you should feel a graded warning |
-| `CRITICAL_THREAT` | Closing *and* on a collision course — fire the strong cue |
-
-This is **not** an autonomous-vehicle dataset. The ego agent is a walking human on a sidewalk, with gait bounce and head jitter. Threats include other pedestrians, cars and cyclists, potholes on the gait line, hanging signs / AC units at head height, and generic `threat_cube` primitives (so the model cannot overfit to “car-shaped” threats).
-
-### 1.2 Why synthetic (Blender), not real video
-
-- Real labels for TTC / CPA need ground-truth 3-D kinematics. A wearable does not have that.
-- Domain randomization (lighting, weather, albedo, path shape) is cheaper than filming 30 cities.
-- Forced intercepts (`jaywalker`, `swerve_vehicle`, …) can be solved in closed form so the 40 / 30 / 30 class mix actually happens.
-- The detector must not overfit to a cube-person silhouette, so later passes replaced boxes with anthropometric meshes and procedural PBR.
-
-### 1.3 What “done” looks like per episode
-
-For each episode the pipeline writes:
-
-1. Per-frame **JSON** (always) — camera pose, environment, every visible actor with threat label + 2-D box.
-2. Optional **PNG** sequence (`--media frames` or `both`).
-3. Optional **H.264** `preview.mp4` (`--media video` or `both`).
-4. `episode.json` manifest + a dataset-level `dataset_summary.json`.
-
-Internal sim is Blender **Z-up**. JSON vectors are the spec’s **Y-up** frame \((X,\,Y_{\mathrm{up}},\,Z_{\mathrm{forward}})\).
+Developed on Arch Linux, Blender **5.2.1** at `/usr/bin/blender`. Workspace: `/storage/BTP/blender_sim`.
 
 ---
 
-## 2. Stack and requirements
+## 0. How to use this document
 
-| Piece | Role |
-| --- | --- |
-| **Blender 4.2+ or 5.x** | Host. This box: 5.2.1 LTS. Engine id is `BLENDER_EEVEE` on 5.x and `BLENDER_EEVEE_NEXT` on 4.2–4.5. The picker in `configure_eevee()` tries the requested id, then those two, then Cycles / Workbench. |
-| **EEVEE** | Real-time raster + optional screen-space raytracing / Fast GI. Not Cycles (too slow for 150 frames × N episodes). |
-| **Python bundled with Blender** | Only interpreter that can `import bpy`. System Python can run `threat_math.py` self-tests. |
-| **mathutils** | Vectors / matrices / Euler / quaternion (ships with Blender). |
-| **ffmpeg** (optional) | Mux `%06d.png` → H.264. If missing, Blender’s VSE + bundled encoder is the fallback. |
-| **No pip packages** | Deliberate. No numpy, no OpenCV, no addon assets. Every mesh is generated in Python. |
-| **OpenGL / EGL** | EEVEE needs a GPU context. On a desktop session this is automatic. On a true headless box use `xvfb-run -a …` or `--no-render` (JSON only). |
-| **GPU** | EEVEE is **not** CPU path-traced. It rasterizes on whichever GL/Vulkan device Blender opened at process start. This laptop is hybrid: AMD Radeon 780M (default display / default EEVEE) + RTX 4060 Max-Q (idle unless PRIME-offloaded). `./run.sh` defaults to `BTP_GPU=auto` → NVIDIA when `nvidia-smi` works. Raw `blender` invocations stay on the iGPU unless you export the PRIME vars (section 10). Cycles CUDA/OptiX see the 4060 but the pipeline does not use Cycles. |
+Read §1–§4 first. Those four sections are the whole architecture. Everything after them is a zoom-in: one file, one data type, one injector, one JSON field.
 
-Install on Arch: `sudo pacman -S blender` (and `ffmpeg` if you want system mux).
+If you are implementing a change:
 
-Blender’s embedded interpreter **does not put the script directory on `sys.path`**. `main.py` inserts `_ROOT` before any local import. Always launch as:
+1. Find the concern in §19 (“Where is X?”).
+2. Read the matching file section here. That section names the functions, the invariants, and the reason they exist.
+3. Only then open the `.py`. The comments in the code are short reminders of decisions already explained here.
+
+If you are an AI that has been given only this file:
+
+- Treat the formulas, field tables, injector tables, and output schema as the contract.
+- Do not invent a second Frenet parameter, a second threat point, or a second TTC formula.
+- Do not assume `numpy`, pip packages, `.blend` assets, or a world-space N-body solver. None of those exist.
+- When two numbers conflict (for example “distance” in JSON vs Euclidean distance of two `world_position` vectors), the **threat-point** kinematics win. That is deliberate.
+
+---
+
+## 1. What this program is
+
+A headless Blender process that, for each **episode** (one 5-second clip by default), builds a procedural street / avenue / park / plaza, walks a head-mounted camera along it, and writes:
+
+1. **Kinematic truth** — time-to-collision (TTC), closest-point-of-approach (CPA), and a four-class `threat_label` — computed from 3-D motion, not from pixels.
+2. Optional **RGB** (`rgb/*.png`, `preview.mp4`).
+3. A **K×K spatial threat matrix** for every frame (default 3×3).
+
+It is **not** an autonomous-vehicle dataset. The ego is a pedestrian. Labels exist so a tactile vest can learn “buzz / graded buzz / silent”.
+
+Why synthetic:
+
+- A wearable has no ground-truth 3-D. You cannot film a city and later recover exact TTC.
+- Forced intercepts (`jaywalker`, `swerve_vehicle`, `cube_head_on`, …) can be aimed in closed form. Real footage cannot guarantee a 0.12 m miss at 2.4 s.
+- Domain randomization (lighting, weather, FOV, body type, chaos, path shape) is cheaper than filming 30 cities, and it is the only thing that stops a detector from overfitting to the low-poly primitives.
+
+What is deliberately **absent**:
+
+- No pip packages. No `numpy`. No `.blend` assets. No downloaded textures.
+- Meshes and PBR materials are generated in Python.
+- System Python can import the modules that do not need `bpy`: `threat_math`, `spatial_threat`, `spatial_overlay`, `scenario_compose`, `config`, `gen_dataset`.
+- There is no per-frame collision solver. Occupancy is reserved **once** at inject time. During the 150-frame loop, actors only integrate Frenet `(s, lateral)` and get clamped to the street corridor.
+
+The detector this dataset trains must learn:
+
+- A moving canopy is **not** a threat (trunk is static; foliage Euler is visual only).
+- A hole in the pavement **is** a threat (footprint threat point at eye height).
+- A sphere, pyramid, cube, car, cyclist, and child are all obstacles if they occupy the gait tube.
+- A seated walker facing a parked bollard is SAFE (nothing is closing). A seated walker with a car driving at them is not.
+
+---
+
+## 2. Design constraints that shape every file
+
+These are the reasons the code looks the way it does. Almost every “why” in later sections traces back here.
+
+**C1. One Frenet parameter.** Every actor and the camera share the **road centreline** arc-length `s` plus a signed `lateral` (positive = road-right, \(\hat{r}=\hat{t}\times\hat{z}\)). The sidewalk is an offset of that spline, not a second path. Mixing a resampled sidewalk spline’s arc length with road `s` would desynchronise injectors from the annotator.
+
+**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix *is* body-aware. Those two products answer different questions and must not be collapsed.
+
+**C3. Stationary ego is a first-class state.** Seated / hesitate have `walk_speed = 0`. Every solver must accept \(V_{\mathrm{cam}}=0\) without dividing by it. Intercepts spawn at \(\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},\,v_{\mathrm{obj}})\tau\), never on top of the HMD.
+
+**C4. Two-phase sim / render.** `bpy.ops.render.render(write_still=True)` once per frame tears down EEVEE every still. Phase A integrates on the CPU and snapshots poses. Phase B restores those poses and renders an animation. Walk-cycle bob and wheel roll are incremental, so they cannot be re-integrated during Phase B.
+
+**C5. Asset-free, instanced geometry.** A thousand unique grass meshes exhausts GPU memory. `MeshLibrary` uploads one vertex buffer per shape key and instances it. Pedestrians stay unique because they are articulated.
+
+**C6. No N-body during the episode.** A per-frame collision resolver would fight the gait, the two-phase render, and the closed-form intercepts. `ComposeSession` reserves Frenet capsules once. `StreetCorridor.confine` is the only runtime spatial constraint.
+
+**C7. Blender 5.x is hostile in specific ways.** Assigning `matrix_world` alone is ignored when rotation mode is Euler. Empty VSE + `use_sequencer=True` renders pitch black. `BLENDER_EEVEE_NEXT` is not always in the enum. World Volume Scatter is full-frame black in EEVEE. All of these have dedicated guards.
+
+**C8. Leak across episodes is fatal.** A 2000-episode pack that does not purge orphans accumulates every mesh and node group it ever built. `release_episode` + recursive `orphans_purge` is not optional cleanup; it is the memory budget.
+
+**C9. Labels from kinematics, boxes from pixels.** A tree’s 2-D box covers the canopy. Its threat point and Frenet extents come from the trunk. A pothole’s render mesh drops below the pavement; its box is a thin mouth slab; its threat point is at camera Z. Consumers who recompute TTC from `world_position` will get the wrong answer, and that is documented in the JSON contract.
+
+**C10. Determinism is per-episode, not per-process.** `--seed` plus `--start-episode N` advances a master RNG N times, then each episode draws its own `ep_rng`. Two episodes never share a Perlin / Poisson / colour stream. Re-running shard N with the same seed reproduces that shard.
+
+---
+
+## 3. How a process starts
 
 ```text
-blender --background --python /storage/BTP/blender_sim/main.py -- <argparse flags>
+./run.sh [flags]
+  └─ export PRIME vars if BTP_GPU=auto|nvidia and nvidia-smi works
+  └─ exec $BLENDER --background --python $ROOT/main.py -- "$@"
+       └─ main.py inserts _ROOT on sys.path  (Blender does not)
+       └─ parse_args() reads only argv after the bare "--"
+       └─ main() → run_episode() × N
 ```
 
-Everything after the bare `--` is ours. Without `--`, Blender eats the flags.
+### 3.1 `run.sh`
 
----
+The shell script is not decorative. EEVEE rasterizes on whichever OpenGL device Blender opened **at process start**. On a hybrid AMD+NVIDIA laptop, a raw `blender …` usually hits the iGPU and is 5–10× slower, or fails to create a GPU context.
 
-## 3. Repository layout
+What the script does, in order:
 
-```text
-/storage/BTP/blender_sim/
-  main.py                 orchestrator (CLI, episode loop, JSON, video)
-  config.py               single source of hyperparameters (deep-copied per run)
-  camera_kinematics.py    sidewalk Frenet + gait + Perlin head jitter
-  world_generator.py      street, actors, lighting, EEVEE, scenario injectors
-  scenario_compose.py     compound CLI parse, aliases, Frenet occupancy
-  humanoid.py             articulated pedestrian meshes + Winter walk cycle
-  materials.py            procedural PBR (Object-space metres, EEVEE-safe)
-  threat_math.py          TTC / CPA / taxonomy (no bpy; self-testable)
-  spatial_threat.py       k×k screen threat matrix (no bpy; CLI --threat-grid)
-  spatial_overlay.py      blue→red overlay video (CLI --spatial-overlay)
-  projection.py           world AABB → pixel box + raycast occlusion
-  run.sh                  thin wrapper: $BLENDER --background --python main.py -- "$@"
-  gen_dataset.py          mixed pack builder → datasets/pack_* (seeded, balanced)
-  README.md               short user-facing card
-  IMPLEMENTATION.md       this file
-  .gitignore              output/, __pycache__, *.blend
-  output/                 default write root (gitignored)
-```
+1. `ROOT="$(cd "$(dirname "$0")" && pwd)"` — absolute path, so it works from any cwd.
+2. `BLENDER="${BLENDER:-blender}"` — override with `BLENDER=/path/to/blender ./run.sh …`.
+3. `BTP_GPU` is `auto` (default), `nvidia`, or `amd`. Anything else exits 2.
+4. If `auto` or `nvidia`, and `nvidia-smi` succeeds, it exports:
+   - `__NV_PRIME_RENDER_OFFLOAD=1`
+   - `__GLX_VENDOR_LIBRARY_NAME=nvidia`
+   - `__VK_LAYER_NV_optimus=NVIDIA_only`
+5. `exec "$BLENDER" --background --python "$ROOT/main.py" -- "$@"`
 
-There is no `requirements.txt`. There are no `.blend` assets. Collections created at runtime: `WORLD`, `HAZARDS`, `ACTORS`, `LIGHTS`.
+`--background` is headless. The bare `--` is required: without it Blender eats `--episodes` and friends as its own flags. Missing `blender` → the shell’s 127. `BTP_GPU=amd` skips the PRIME exports and stays on the iGPU (useful when the NVIDIA context is broken).
 
----
+There is no `source venv`. There is no `pip install`. Blender’s bundled Python is the runtime.
 
-## 4. Architecture and per-episode flow
+### 3.2 `main.py` argument split
 
-```text
-main.main()
-  └─ for each episode:
-       pick_scenarios(rng, cfg, --scenario)   # one name, or a compound list
-       apply_camera_fov(...)           # lens_mm / hfov_deg for this episode
-       WorldGenerator.prepare_scenario(names)  # union of gaps / sparse street
-       WorldGenerator.build()
-         reset scene, configure EEVEE
-         choose_environment()          # dawn/noon/dusk/night/harsh_glare/overcast + weather + chaos
-         PathSpline.generate()         # centreline (biome folds widths into cfg['world'])
-         ribbons: road / sidewalk / curb / grass verge
-         buildings + roofs + streetlamps
-         apply_domain_randomization()  # sun, fill, bounce, sky, AgX
-         Poisson scatter + background peds/cars
-         reveal_view_layer(); re-hide daytime lamps
-       create_camera() + choose_ego_profile() + CameraRig(...)
-       inject_scenarios(names, rig); place_ego_props(rig)  # bench if seated
-       # Phase A — CPU: kinematics + JSON (no EEVEE)
-       for frame i = 0 .. N-1:
-         CameraRig.update + WorldGenerator.update
-         view_layer.update()  # required: actors write location, not matrix_world
-         snapshot actor/camera poses
-         build_frame_record(); collect object frames + k×k grid
-       write annotations/annotations.json   # unless --no-annotations
-       write spatial_annotations/spatial_annotations.json
-       # Phase B — GPU: one animation render, poses replayed in frame_change_pre
-       bpy.ops.render.render(animation=True)   # GPU context stays warm
-       encode preview.mp4 (h264_nvenc or libx264 veryfast)
-       write episode.json
-  write dataset_summary.json
-```
+`_argv_after_double_dash(argv)` returns everything after `--`. If you run `python main.py` (no Blender; useful only for `--help` / `--list-scenarios` on a machine that can import `bpy`, which system Python usually cannot), it drops the script name and treats the rest as argparse.
 
-### 4.1 RNG
+Every flag `parse_args` accepts:
 
-- `--seed` seeds a **master** `random.Random`.
-- `--start-episode N` advances the master N times (`randrange`) so shard `N` is stable. If omitted, the next free `episode_*` index under `--output` is used so a new launch does not overwrite `episode_0000`.
-- Each episode draws `ep_rng = Random(master.randrange(1, 2**31))` and uses **only** that stream for Poisson, colours, Perlin seeds, body types, path shape. Two episodes never share a Perlin / Poisson stream.
-
-### 4.2 Frame budget
-
-`N = min(--frames or config.frames_per_episode, floor(rig.max_time() * fps))`.
-
-`max_time()` is the remaining sidewalk arc after `sidewalk_s0 = 3.0 m`, minus 2 m of tail. A 48–78 m path at 1.0–1.4 m/s easily covers the default 150 frames (5.0 s).
-
-### 4.3 Media policy
-
-| `--media` | PNG kept | `preview.mp4` | JSON |
-| --- | --- | --- | --- |
-| `frames` | yes | no | always |
-| `video` | deleted after mux | yes | always |
-| `both` | yes | yes | always |
-| `both` + `--no-rgb` | deleted after mux | yes | always |
-| `--no-render` | no | no | always |
-
-`--spatial-overlay` is independent of `--media`: it muxes `spatial_overlay.mp4` from the PNG sequence whenever RGB was rendered. It is skipped under `--no-render`. `--no-annotations` skips only `annotations/annotations.json`; spatial matrices still write.
-
-If video mux fails, PNGs are **kept** even when `--media video` or `--no-rgb`.
-
----
-
-## 5. Coordinate frames (read this before touching kinematics)
-
-| Frame | Axes | Where used |
+| Flag | Default | Role |
 | --- | --- | --- |
-| **Blender world** | X right, **Y forward along a +Y path**, **Z up** | All `bpy` locations, splines, lighting, TTC/CPA **computation** |
-| **Spec / JSON** | X right, **Y up**, **Z forward** | Written `world_position`, `velocity`, `relative_velocity` |
-| **Camera local** | +X right, +Y up, **looks down −Z** | `CameraRig._compose_matrix` |
-| **Humanoid local** | +Y face, +Z up, limbs hang **−Z** | Hip/knee/shoulder rotate about local +X (sagittal) |
-| **Car / box local** | +Y is “forward”; `look_along` yaws so local +Y = horizontal heading. \(\theta=\mathrm{atan2}(-d_x,d_y)\) because \(R_z(\theta)(0,1,0)=(-\sin\theta,\cos\theta)\). **Not** `atan2(d_x,d_y)`. | Vehicles, buildings, people |
+| `--episodes N` | 4 | How many episodes this process writes. Ignored if `--plan` is set (plan length wins). |
+| `--start-episode N` | one past highest `episode_*` on disk | First numeric id. `0` starts a fresh pack. Omitted + `--plan` starts at 0. |
+| `--scenario NAME` | `auto` | Repeatable. Alias, canonical name, or `a,b,c` / `a+b+c`. |
+| `--scenarios LIST` | none | Joined with `--scenario` if both are set. |
+| `--list-scenarios` | | Print pools, aliases, compound examples, exit 0. |
+| `--output DIR` | `<repo>/output` | Root for `episode_*` folders. |
+| `--seed INT` | 42 | Master RNG. |
+| `--frames N` | 0 = config 150 | Override length. Still clamped by remaining road. |
+| `--media frames\|video\|both` | config `both` | What visual product to keep. |
+| `--no-rgb` | | Delete `rgb/` after mux. Ignored if no video is being written. PNGs kept if mux fails. |
+| `--no-render` | | Skip EEVEE. JSON only. Overlay skipped. |
+| `--no-annotations` | | Skip `annotations/annotations.json`. Spatial JSON still written. |
+| `--no-occlusion` | | Skip the centre-ray occlusion flag (faster; boxes still computed). |
+| `--biome street\|avenue\|park\|plaza\|auto` | auto | Weighted draw if auto. |
+| `--ego-mode walk\|diagonal_cross\|erratic\|seated\|auto` | auto | Locks `choose_ego_profile` weights to one mode. |
+| `--chaos FLOAT` | unset | Locks `material_chaos` to `[c, c]`. `0` is the pre-chaos pipeline. |
+| `--no-trees` | | Zeroes `n_trees`, `n_grass_clumps`, `n_street_trees`, `n_median_trees`, `n_path_trees` on world **and** every biome override. |
+| `--wind calm\|breeze\|windy\|auto` | auto | Locks `wind_weights` to one label. `auto` draws from config (calm 0.32 / breeze 0.48 / windy 0.20). Also overridable by `BTP_WIND`. |
+| `--hfov DEG` / `--lens-mm MM` / `--no-random-fov` | | See `apply_camera_fov`. The lock flag is `--no-random-fov` (not `--lock-fov`). |
+| `--threat-grid K` | 3 | Spatial matrix size. Must be ≥ 1. |
+| `--spatial-overlay` | | Write `spatial_overlay.mp4`. Requires render. |
+| `--plan PATH` | | JSON from `gen_dataset.py`. Per-episode `scenario` overrides the CLI request. |
 
+### 3.3 `main()` control flow
 
-Conversion (in `threat_math.py`):
+1. `get_config()` — deep copy of `CONFIG`. An episode mutates `cfg['world']` (biome fold-in, sparse overrides); the next episode must not inherit that.
+2. `--list-scenarios` prints the three pools, aliases, and compound examples, then returns 0.
+3. `scenario_request_from_tokens` joins `--scenario` / `--scenarios` into one request string.
+4. Optional `--plan` JSON: must exist, must parse, must have non-empty `episodes[]`. Episode count becomes `len(episodes)`.
+5. Resolve `--output`, create it.
+6. Resolve start id. Without `--start-episode` and without a plan, `next_free_episode_id` scans existing `episode_NNNN_*` folders so a second run never overwrites.
+7. `master = random.Random(seed)`. Advance `master.randrange(1, 2**31)` exactly `start_id` times. That is what makes `--start-episode 100 --seed 42` a stable shard: episodes 0–99 of a full run used those 100 draws.
+8. For each episode `k`: `episode_id = start_id + k`. If a plan is loaded, the request is `plan.episodes[k].scenario`. Call `run_episode`. A failure is logged to stderr; the process **continues**. Exit 2 if any episode failed.
+9. `rebuild_dataset_summary` scans **every** `episode_*/episode.json` already on disk (including older folders in the same root) and writes `dataset_summary.json`.
+
+RNG contract: each episode does `ep_rng = random.Random(master.randrange(1, 2**31))`. That object is the **only** RNG passed into `WorldGenerator`, `choose_ego_profile`, `apply_camera_fov`, and `CameraRig`. Two episodes never share a noise stream. Re-seeding Blender’s own `mathutils.noise` is not used anywhere, because it is not bit-stable across Blender versions.
+
+---
+
+## 4. Per-episode flow (`run_episode`)
+
+This is the heart of the program. One call = one folder on disk.
+
+```text
+cfg = deepcopy(cfg)                     # isolate biome / chaos mutations
+pick_scenarios(ep_rng, cfg, request)    # scenario_compose
+apply_camera_fov(...)                   # lens from HFOV
+if --chaos: lock material_chaos
+if --no-trees: zero all tree/grass counts on world + biomes
+WorldGenerator(cfg, ep_rng)
+  prepare_biome(biome)                  # fold widths into cfg['world']
+  prepare_scenario(names)               # building gap / empty_street
+clear_bound_caches()
+WorldGenerator.build()                  # meshes, lights, background actors
+create_camera() + choose_ego_profile() + CameraRig(...)
+inject_scenarios(names, rig)            # forced events, Frenet occupancy
+place_ego_props(rig)                    # bench if seated
+freeze()                                # partition movers vs static
+
+# Phase A — CPU. No EEVEE.
+for i in 0 .. N-1:
+    CameraRig.update(t, dt)
+    WorldGenerator.update(t, dt)
+    view_layer.update()                 # required: actors write location/Euler
+    snapshot poses (cam + every actor descendant)
+    build_frame_record(...)             # boxes, TTC, K×K splat
+write annotations/annotations.json      # unless --no-annotations
+write spatial_annotations/...json
+
+# Phase B — GPU. One animation render.
+frame_change_pre restores snapshot i
+bpy.ops.render.render(animation=True)   # rgb/######.png
+mux preview.mp4; optional overlay; maybe delete rgb/
+release_episode()                       # unlink + orphans_purge
+write episode.json
+```
+
+### 4.1 Order that must not flip
+
+**Biome before scenario.** `prepare_biome` writes road width, tree counts, `buildings=False` for park, etc. into `cfg['world']`. `prepare_scenario` then zeroes background traffic if `empty_street` is in the mix. If you reversed them, a sparse scenario’s `(0,0)` counts would be overwritten by the biome’s `(3,6)`.
+
+**`build()` before the rig.** The camera needs the road spline, sidewalk lateral, walk speed, and corridor. Those do not exist until `build()` returns a `WorldState`.
+
+**Rig before inject.** Injectors call `rig.arc_length_at(t)`, `rig.lateral_at(t)`, and `rig.predict_position(t)` to place intercepts on the **future gait line**. That line includes diagonal-cross smoothstep and erratic halt. Placing against a constant `s0 + v t` would miss a hesitating walker.
+
+**`freeze()` after inject.** `freeze` partitions `_movers` and `_annotatable`. Injecting after freeze would leave new actors out of the 150-frame loop (or force a linear scan of every bench every frame).
+
+**`view_layer.update()` every sim frame.** Actors write `location` and Euler, not `matrix_world`. The depsgraph keeps the previous pose until this call. Skipping it makes every AABB project empty (`objects=0` in the log). This is the most common “I deleted a line and labels died” failure.
+
+### 4.2 Frame count
+
+\(N = \min(\texttt{--frames or config},\; \lfloor \mathrm{rig.max\_time()}\cdot\mathrm{fps}\rfloor)\), then at least 2.
+
+Default: 150 frames at 30 Hz = 5.0 s.
+
+`max_time()` is remaining road arc after `s0 = 3.0 m`, minus a 2 m tail, converted to time via the **arc table** (not `remaining / walk_speed`). Seated / halt therefore do not divide by zero and do not get an episode truncated to nothing. A seated walker returns a huge sentinel (`1e6`); the frame count from config wins.
+
+`choose_ego_profile` is given `episode_seconds = n_frames / fps` **before** the clamp, so a hesitation window is drawn inside the intended episode. After the clamp, a very short road can still cut the last frames; the halt may then sit near the end. That is accepted.
+
+### 4.3 Why two phases
+
+`bpy.ops.render.render(write_still=True)` once per frame:
+
+- tears down and rebuilds the EEVEE pipeline every still,
+- pays shader compile / TAA warmup 150 times,
+- is the historical “one episode takes minutes” path.
+
+Phase A integrates kinematics and writes JSON with **no** GPU raster. Phase B registers a `frame_change_pre` handler that restores snapshot `i` when `scene.frame_current == i`, then calls `bpy.ops.render.render(animation=True)` once. The GPU stays warm. TAA temporal history is meaningful.
+
+Poses are **snapshotted**, not re-integrated, because:
+
+- `WalkRig` writes incremental pelvic bob on top of `look_along`.
+- Wheel roll is \(\Delta\theta = -\Delta s / r\) per frame.
+- Foliage Euler is a function of `t` but is applied as an offset from a stored rest pose; re-running Phase A’s integrator from `t=0` during render would be possible for foliage, but gait and wheels are not closed-form in the same way once `look_along` has zeroed Euler X/Y.
+
+`_collect_pose_objects` walks the camera plus every actor root **and every descendant**. Missing a child (a shin, a wheel, a leaf) means Phase B renders that part at the bind pose.
+
+If the animation batch misses files (`_ensure_six_digit_pngs` fails), `_render_stills_fallback` uses the **same** pose list and writes stills. Labels stay consistent with pixels either way.
+
+### 4.4 Media decisions
+
+| Condition | PNG sequence | `preview.mp4` | overlay | `rgb/` kept |
+| --- | --- | --- | --- | --- |
+| `--no-render` | no | no | no | n/a |
+| `--media frames` | yes | no | if requested | yes |
+| `--media video` | yes (for mux) | yes | if requested | no, unless mux fails or `--no-rgb` off |
+| `--media both` | yes | yes | if requested | yes, unless `--no-rgb` |
+| `--no-rgb` + no video | ignored, warning printed | | | |
+
+Video mux: probe `h264_nvenc`; if the encoder actually encodes a tiny test, use it (`preset p4`). Else `libx264 -preset veryfast -crf 18`. If `ffmpeg` is missing, Blender’s VSE fallback muxes the PNG sequence (`sequences` on 4.x, `strips` on 5.x). After VSE mux, `prepare_still_render()` is called **again** so `use_sequencer` does not stay True for the next episode.
+
+### 4.5 Cleanup
+
+`release_episode(state)`:
+
+1. Nulls every Python cycle: `Actor.obj`, `gait`, `wheels`, `follow_spline`, `threat_obj`, `foliage`, `wind`, `_bounds`, wander/speed noise.
+2. Clears `state.actors`, `collections`, `materials`.
+3. Unlinks every remaining object.
+4. Unlinks child collections; `scene.world = None`.
+5. `purge_orphans()` up to 8 recursive passes (`bpy.data.orphans_purge(do_recursive=True)`).
+
+Then `clear_bound_caches()` because object pointers are reused after the next `reset_blender_scene`.
+
+The episode log prints `cleanup: purged N datablock(s) [M unique mesh datablocks, K linked instances]`. A healthy 2000-episode pack shows a large N every time and a flat RSS. A shrinking N plus climbing RSS means a new datablock type is leaking (usually a node group hanging off a material).
+
+---
+
+## 5. Coordinate frames
+
+All computation inside Blender is **Z-up**. JSON is **Y-up**. Mixing them is the fastest way to invent a 90° error in every velocity.
+
+| Frame | Axes | Used for |
+| --- | --- | --- |
+| Blender world | X right, **Y forward** on a +Y path, **Z up** | All `bpy` locations, splines, lighting, TTC **computation** |
+| JSON / spec | X right, **Y up**, **Z forward** | Written `world_position`, `velocity`, `relative_velocity` |
+| Camera local | +X right, +Y up, looks down **−Z** | `CameraRig._compose_matrix` |
+| Humanoid local | +Y face, +Z up, limbs hang **−Z** | Hip / knee / shoulder about local +X |
+| Car / box local | +Y forward | `look_along` yaws so local +Y = horizontal heading |
+| Frenet | \(s\) along road centreline, `lateral` along \(\hat{r}=\hat{t}\times\hat{z}\) | Camera, actors, occupancy, spatial score |
+| Image | origin **top-left**, +u right, +v down, pixels | `bounding_box_2d`, spatial matrix row 0 = top |
+
+Conversion (the permutation is an involution):
 
 ```text
 blender_zup_to_yup (x, y, z) = (x, z, y)
-yup_to_blender_zup (x, y, z) = (x, z, y)   # same permutation
+yup_to_blender_zup (x, y, z) = (x, z, y)
 ```
 
-A pedestrian’s **feet** sit on the walking surface (Z = 0 on asphalt, Z = 0.12 m on the sidewalk); the camera sits near Z = 1.72 m on the curb (1.6 m eye height + curb). If you feed raw pelvis vs camera origins into CPA you get a ~0.6 m vertical miss and a true hit is labelled SAFE. That is why `threat_point()` exists (section 9).
+A camera at Blender `(0, 5, 1.6)` looking +Y writes JSON position `(0, 1.6, 5)`. A velocity of `1.2 m/s` along +Y writes `(0, 0, 1.2)`.
+
+### 5.1 `look_along`
+
+Yaw is \(\theta=\mathrm{atan2}(-d_x,\,d_y)\) because \(R_z(\theta)\,(0,1,0)=(-\sin\theta,\,\cos\theta)\). **Not** `atan2(d_x, d_y)` — that moonwalks people and parks cars across the lane.
+
+`look_along` writes Euler Z and **zeroes Euler X and Y**. That is why `WalkRig.apply` must run **after** `look_along` in the same frame: pelvic pitch/list live on Euler X/Y. Foliage sway is on child empties, so it is safe; the trunk’s lean is set once at spawn and `look_along` is not called on a static tree.
+
+### 5.2 Ground heights
+
+| Surface | Blender Z |
+| --- | --- |
+| Asphalt / park path | 0.00 |
+| Sidewalk slab | `curb_height` (0.12 m street, 0.00 park, 0.02 plaza) |
+| Camera eye | curb + eye height + gait sine (standing 1.6 m; seated \(U(0.95,1.28)\)) |
+| Vehicle hull origin | ~0.4–0.6 m (axle / body centre) |
+| Person root | **pelvis**, not feet (~0.9 m for an adult) |
+| Pothole mesh | mouth at ground, well drops ~0.4 m |
+| Tree trunk origin | ground at the planting Z |
+
+Feeding pelvis vs camera into CPA invents a ~0.6–1.6 m vertical miss. That is why `threat_point()` exists. In park / plaza, even that is not enough (no kerb step; a seated walker vs a bollard differs by ~1 m in Z), so `relative_kinematics(..., planar=True)` zeroes Blender Z before the solve.
+
+### 5.3 One Frenet `s`
+
+```text
+world_point(s, lateral, z) = evaluate(s) + right(s) * lateral, with .z = z
+```
+
+`StreetCorridor.ground_z(lateral)` is curb if `|lateral| ≥ road_half - 0.08`, else 0. Actors add `origin_z` on top of that (a person’s pelvis sits above the slab; a cube’s centre sits at `size/2`).
+
+Never:
+
+- take `s` from `PathSpline.offset_spline(sidewalk_lateral)` and add it to a road `s`,
+- treat world-Y as arc length on a curve,
+- convert a world-space intercept velocity into Frenet by ignoring curvature.
+
+`PathSpline.project(p)` is the inverse: nearest polyline foot, then signed lateral along `right(s)`.
 
 ---
 
-## 6. File-by-file
+## 6. File map
 
-### 6.1 `config.py`
-
-`CONFIG` is a nested dict. `get_config()` returns `copy.deepcopy(CONFIG)` so an episode cannot leak mutations.
-
-Every numeric default that is not a “magic number inside a formula” lives here. See **section 14** for the full table.
-
-### 6.2 `threat_math.py` (no `bpy`)
-
-Pure Python 3. Vector helpers (`vadd`, `vsub`, `vdot`, `vnorm`, …) avoid numpy.
-
-**Constant-velocity point model.** Let \(\vec{P}_{\mathrm{rel}}=\vec{P}_{\mathrm{obj}}-\vec{P}_{\mathrm{cam}}\), \(\vec{V}_{\mathrm{rel}}=\vec{V}_{\mathrm{obj}}-\vec{V}_{\mathrm{cam}}\).
-
-Range-rate proxy: \(\vec{P}_{\mathrm{rel}}\cdot\vec{V}_{\mathrm{rel}}\). Negative ⇒ converging.
-
-Minimise \(f(t)=\|\vec{P}_{\mathrm{rel}}+t\vec{V}_{\mathrm{rel}}\|^2\):
-
-\[
-t^{\star}=-\frac{\vec{P}_{\mathrm{rel}}\cdot\vec{V}_{\mathrm{rel}}}{\|\vec{V}_{\mathrm{rel}}\|^2}
-\quad\text{iff}\quad
-\vec{P}_{\mathrm{rel}}\cdot\vec{V}_{\mathrm{rel}}<0
-\;\text{and}\;
-\|\vec{V}_{\mathrm{rel}}\|\ge\varepsilon
-\]
-
-\[
-D_{\mathrm{cpa}}=\|\vec{P}_{\mathrm{rel}}+t^{\star}\vec{V}_{\mathrm{rel}}\|
-\]
-
-If not converging or \(\|\vec{V}_{\mathrm{rel}}\|<\varepsilon\), TTC is \(+\infty\) and CPA falls back to current range. JSON writes undefined TTC as **`9999.0`** (must stay a number).
-
-**Taxonomy** (`classify_threat`), priority so a real hit can never be SAFE:
-
-1. `CRITICAL_THREAT` if converging and \(TTC<2.5\) s and \(D_{\mathrm{cpa}}<0.5\) m
-2. `NEAR_MISS` if converging and \(TTC<4.0\) s and \(0.5\le D_{\mathrm{cpa}}\le 1.5\) m
-3. `SAFE_STATIC` if \(\|V_{\mathrm{obj}}\|\le 0.05\) m/s and (range \(>5\) m **or** CPA \(>1.5\) m **or** not converging). A static object the walker is about to strike (\(V_{\mathrm{obj}}=0\Rightarrow V_{\mathrm{rel}}=-V_{\mathrm{cam}}\)) still converges and can be CRITICAL.
-4. else `SAFE_DYNAMIC`
-
-**Intercept solver** (used by injectors):
-
-\[
-\vec{V}_{\mathrm{obj}}=\vec{V}_{\mathrm{cam}}+\frac{\vec{P}_{\mathrm{cam}}-\vec{P}_{\mathrm{obj}}+\vec{o}}{\tau}
-\]
-
-\(\vec{o}=\vec{0}\) ⇒ \(D_{\mathrm{cpa}}=0\), \(TTC=\tau\). \(\|\vec{o}\|=c\) ⇒ controlled near-miss of \(c\) metres under the constant-velocity assumption.
-
-**Stationary ego.** Nothing above divides by \(\|V_{\mathrm{cam}}\|\). \(V_{\mathrm{cam}}=0\) (bench / hesitation) makes \(V_{\mathrm{rel}}=V_{\mathrm{obj}}\). A parked object then has \(V_{\mathrm{rel}}=0\) ⇒ TTC \(=+\infty\) ⇒ `SAFE_STATIC`; a ball thrown at a seated walker still solves. Every solver guards \(\|V_{\mathrm{rel}}\|^2 < \varepsilon^2\) so there is no `ZeroDivisionError` and no `NaN`.
-
-**Planar mode.** `relative_kinematics(..., planar=True)` zeroes Blender Z on \(P_{\mathrm{rel}}\) and \(V_{\mathrm{rel}}\) before solving. Used in `main.py` for `park` and `plaza` biomes, where a 1.6 m eye-height offset is not clearance from a trunk or bollard. `threat_point` already clamps Z; planar is belt-and-braces. Non-finite inputs are zeroed (`_finite3`) so a NaN cannot silently classify as SAFE (`NaN < 2.5` is `False`).
-
-Self-test (system Python, no Blender):
-
-```bash
-python /storage/BTP/blender_sim/threat_math.py
-```
-
-### 6.3 `camera_kinematics.py`
-
-`CameraRig` owns the Blender camera and writes its 4×4 every frame.
-
-**Path.** For `walk`, arc-length \(s(t)=s_0+v t\) with \(s_0=3.0\) m along the **road** centreline (same \(s\) as every actor). Origin is \(\vec{p}(s)+\hat{r}\,L(t)\) with \(L\) the sidewalk lateral (constant in `walk`/`seated`, ramped in `diagonal_cross`, fBm in `erratic`). Gaze is the *road* tangent. \(\hat{r}=\hat{t}\times\hat{z}\), \(\hat{u}=\hat{r}\times\hat{t}\). Eye height is curb + \(h+A\sin(2\pi f t)\) with \(h=1.6\) m standing or \(\sim 0.95\)–\(1.28\) m seated. Do **not** retarget the camera onto `offset_spline(L)` — that spline is resampled by its own arc length, so \(s_{\mathrm{sidewalk}}\) drifts from actor \(s_{\mathrm{road}}\) on a curve.
-
-**Ego modes** (`cfg['ego']`, CLI `--ego-mode` / `--ego`):
-
-| Mode | Weight | What changes |
+| File | Needs `bpy` | Role |
 | --- | --- | --- |
-| `walk` | 0.52 | Original constant-speed sidewalk traverse. |
-| `diagonal_cross` | 0.14 | \(L(t)\) smoothsteps toward the opposite kerb. Injectors read `lateral_at(t)` so intercepts land on the crossing, not the start kerb. |
-| `erratic` | 0.22 | fBm sidestep + speed wobble; optional full stop. \(s(t)\) is a trapezoid table, not \(s_0+vt\). |
-| `seated` | 0.12 | \(v=0\), lower eye height, bench spawned behind the HMD. `max_time()` does not divide by speed. Gait bounce is scaled to 0. |
+| `run.sh` | no | PRIME offload + exec Blender |
+| `config.py` | no | Nested dict of every tunable. `get_config()` deep-copies. |
+| `threat_math.py` | no | Vectors, TTC, CPA, four-class taxonomy, intercept velocity |
+| `camera_kinematics.py` | mathutils | Perlin, ego profile, `CameraRig` |
+| `projection.py` | yes | AABB → 2-D box, threat point, occlusion ray |
+| `world_generator.py` | yes | Scene, actors, lighting, EEVEE, injectors |
+| `scenario_compose.py` | no | CLI tokens, aliases, Frenet occupancy |
+| `humanoid.py` | yes | Articulated pedestrian + Winter walk cycle |
+| `materials.py` | yes | Procedural PBR, chaos, Blender 4/5 Mix-node guards |
+| `spatial_threat.py` | no | Body-aware score + K×K splat |
+| `spatial_overlay.py` | no | PPM heat + ffmpeg overlay graph |
+| `gen_dataset.py` | no | Balanced pack planner; execs `run.sh --plan` |
+| `main.py` | yes | CLI, episode loop, annotation JSON, render, mux |
 
-**Gait (spec Part 2), applied on Blender +Z, scaled by ground speed so a seated / halted head does not bob:**
+`python threat_math.py`, `python spatial_threat.py`, `python spatial_overlay.py`, `python scenario_compose.py`, and `python gen_dataset.py --self-test` are the unit tests. They run on system Python.
 
-\[
-Z(t)=1.6+A\sin(2\pi f t),\qquad A=0.04\,\mathrm{m},\; f=1.8\,\mathrm{Hz}
-\]
+---
 
-Optional pitch bob in quadrature: \(\theta_{\mathrm{bob}}=0.015\cos(2\pi f t)\) rad (head dips at mid-stance).
+## 7. `config.py`
 
-**Perlin micro-saccades.** Independent 1-D improved Perlin (Ken Perlin 2002 fade \(6t^5-15t^4+10t^3\)) + fBm, **not** `mathutils.noise`, so a seed is bit-identical across Blender versions.
+`CONFIG` is one nested dict. There is no YAML, no CLI-to-config merge except the flags listed in §3.2. `get_config()` returns `copy.deepcopy(CONFIG)` so `prepare_biome` / `prepare_scenario` / `--chaos` / `--no-trees` cannot leak into the next episode.
 
-\[
-n_{\mathrm{fBm}}(x)=\frac{1}{\sum_k p^k}\sum_{k=0}^{O-1}p^k\;\mathrm{noise}(x\,L^k)
-\]
+### 7.1 `apply_camera_fov`
 
-Each axis: \(\theta = A_{\mathrm{deg}}\cdot n_{\mathrm{fBm}}(t\cdot f_{\mathrm{Hz}}+\phi)\). Defaults: yaw \(15^\circ\) @ 0.22 Hz (4 oct), pitch \(5^\circ\) @ 0.55 Hz (3 oct), roll \(2^\circ\) @ 1.9 Hz (2 oct, heel-strike).
+Writes `camera.lens_mm` and `camera.hfov_deg` for this episode.
 
-**Camera matrix.** Columns of the base rotation are \((\hat{r},\,\hat{u},\,-\hat{t})\) so local \(-\mathrm{Z}=+\hat{t}\). Jitter is Euler XYZ **in camera space**, then `rot_base @ rot_jitter`.
-
-**Blender 5.x apply.** Assigning `matrix_world` alone is ignored when `rotation_mode` is Euler. The rig decomposes the matrix and writes `rotation_mode='QUATERNION'`, `location`, `rotation_quaternion`, then `matrix_world`.
-
-**Velocity.** Frame 0: central difference of `predict_position` (correct for diagonal / halt; not `v * tangent`). Later frames: finite difference of eye position. Seated ⇒ \(\vec{v}\approx 0\) (residual is gait, which is also 0).
-
-`predict_position(t)` / `predict_velocity(t)` are the **no-jitter** eye point; injectors use them so intercepts land on the gait line, not on a Perlin-wobble.
-
-### 6.4 `projection.py`
-
-Pipeline (spec Part 5.1), every frame, after `view_layer.update()`:
-
-1. Union of world AABB corners of the object **and every MESH child**. `LocalBoundCache` stores object-space `bound_box` once and transforms by `matrix_world` (no `evaluated_get`; we have no mesh modifiers). A pelvis-only box would under-cover an articulated person / wheeled car.
-2. View \(= M_{\mathrm{cam}}^{-1}\). Camera-space \(Z\ge 0\) is behind the lens (Blender looks down local \(-\mathrm{Z}\)) — those corners are dropped.
-3. Projection: **one** `Object.calc_matrix_camera(...)` per frame, reused for every actor; fall back to the analytic OpenGL frustum from lens / sensor / aspect.
-4. NDC \(\to\) pixels, origin **top-left**:
+Pinhole (full-frame, horizontal fit):
 
 \[
-u=(n_x+1)\,W/2,\qquad v=(1-n_y)\,H/2
+\mathrm{lens} = \frac{w/2}{\tan(\mathrm{HFOV}/2)}, \qquad
+\mathrm{HFOV} = 2\arctan\frac{w/2}{\mathrm{lens}}
 \]
 
-5. Box = min/max of surviving pixels, clamped to the image. `truncated` if any corner was off-screen or fewer than 8 corners were in front.
-6. All-behind or all-off-screen ⇒ `None` (object omitted from that frame’s JSON).
+with \(w=36\) mm. Default 24 mm ⇒ ≈ 73.74°.
 
-**Threat point** (not the mesh origin):
+Priority:
 
-- `footprint` (potholes): XY of AABB centre, Z = camera height (occupies the walker’s column).
-- `volume` (people, cars, branches): XY of AABB centre, Z clamped into the object’s slab, preferring camera height. A 1.5 m car roof vs a 1.6 m camera leaves a 0.1 m vertical residual.
+1. Explicit `--hfov DEG`.
+2. Else explicit `--lens MM`.
+3. Else, if not `--no-random-fov` and `randomize_hfov` and an RNG is provided: uniform draw from `hfov_deg_range` `(50, 90)`.
+4. Else the config default lens.
 
-**Occlusion.** `scene.ray_cast` from camera origin toward the AABB centroid. Self / children do not count. Ground ribbons (`road_surface`, `sidewalk_*`, `curb_*`, `centerline`, `lamp_pole`) are stepped through so a pothole is not “occluded by the sidewalk it sits on”. Up to 10 steps. Hit within `occlusion_epsilon` (0.08 m) of the target is treated as self.
+`--no-random-fov` without `--hfov` / `--lens-mm` freezes the config default. That is how a pack can disable FOV randomization without pinning a number. Internally this is the `lock=` argument of `apply_camera_fov`.
 
-### 6.5 `world_generator.py`
+### 7.2 Sections (what lives where)
 
-The largest module. Responsibilities:
+**`render`.** Engine name (advisory — `configure_eevee` picks what the binary exposes), 1920×1080, 30 fps, 150 frames, PNG 8-bit, TAA 16, raytracing on, Fast GI 4/6/0.30, volumetric knobs (present but world volume is unused), `png_compression=1`.
 
-**PathSpline.** Control polygon → dense sample → uniform-\(ds\) resample (\(ds=0.40\) m). `evaluate(s)`, `tangent(s)`, `right(s)=\hat{t}\times\hat{z}`, `offset_point(s, lateral, z)`, `offset_spline(lateral)`. Factories:
+**`camera`.** Name, lens, sensor 36 mm, `HORIZONTAL` fit, clip 0.05–120 m, eye 1.6 m, HFOV range.
 
-- `straight` — +Y
-- `gentle_curve` — cubic Bézier, bend \(\sim U(8,20)\) m
-- `s_curve` — cubic Bézier, opposite lobes
-- `corner_90` — two straights + circular fillet, radius \(\sim U(5.5,8)\) m
+**`gait`.** Walk speed \(U(1.0,1.4)\) m/s, bounce 0.04 m @ 1.8 Hz, optional pitch bob 0.015 rad.
 
-**Poisson-disk on a strip** (Bridson 2007) in \((s,\mathrm{lateral})\) with Euclidean parameter distance ≈ world distance on a gentle curve. Used for ground clutter and head-height hazards.
+**`ego`.** Mode weights (walk 0.52, diagonal 0.14, erratic 0.22, seated 0.12), seated eye \(U(0.95,1.28)\), sidestep / wobble / hesitate windows, diagonal target fraction and span.
 
-**Ribbons.** Quad strips along the centreline. UVs \((s/4,\,0\text{ or }1)\) (materials actually sample **Object** metres; UVs are a fallback). Layers: asphalt road, both sidewalks at curb height 0.12 m, curbs, grass verge 4.5 m outside the sidewalk. Centreline paint is **3 m dash / 3 m gap**, 0.12 m wide, built as a Frenet quad strip (`_centerline_dash`) so a corner does not chord a 3 m box across the lane.
+**`jitter`.** Per-axis amplitude, frequency, octaves, persistence, lacunarity for camera-local Perlin.
 
-**Buildings.** Extruded boxes starting at \(s=14\) m (so a 24 mm lens at \(s_0=3\) m is not filled by one wall). Facade setback = `road_half + sidewalk_w + 1.6`. Each building gets `make_facade(..., night=)` and a slightly larger roof slab (`make_roof`). `look_along` yaws local +Y to the path tangent.
+**`world`.** Path length \(U(48,78)\) m, path types, road 7.0 m, sidewalk 2.4 m, curb 0.12 m, `sample_ds=0.40`, building depth/height/gap, **`building_setback=3.6`** (planting strip; trees sit here; canopies must not reach the wall), lamps, Poisson clutter, background counts, speed ranges (`vehicle`, `pedestrian`, `bicycle`, `cube`, `shape`, `cross_car`), `corridor_margin=0.22`, biome table, tree / grass knobs.
 
-**Camera lateral.** Sidewalk sign is random \(\pm 1\). Walker sits at `sign * (road_half + sidewalk_w * 0.38)` — closer to the curb than the facade. A 24 mm lens 1.3 m from a wall reads as “empty street / all wall”.
+Biome overrides **replace** matching keys on `cfg['world']` for that episode. They do not deep-merge nested dicts except by overwriting the key. Park sets `ground="grass"`, `buildings=False`, `curb_height=0`, `lane_paint=False`, `n_background_vehicles=(0,0)`, wide verge, path types without `corner_90`. Avenue widens the road to 13 m and raises the setback to 4.2 m. Plaza paints a wide paved room with buildings on **one** side only (`building_sides=(1.0,)`).
 
-**Actors (`Actor` dataclass).** Python twin of a Blender object. Dynamic actors live in Frenet \((s, \mathrm{lateral})\) on the **road** spline: \(s \leftarrow s + \mathrm{speed}\,\Delta t\), and lateral drift (`lat_target` / `lat_speed`) is how jaywalkers, L→R cars, and cut-ins move. After every step, `StreetCorridor.confine` clamps \(|\mathrm{lateral}|\) to the pavement (`road_half + sidewalk_w - margin - pad`), so a curve cannot chord an actor through a facade. World-space `hold_velocity` is a last-resort fallback and is reprojected onto the ribbon if it is ever used. Also: `swerve_t` (start drifting after this time), `stop_t` (sudden stop), `gait` (`WalkRig.apply`), `wheels` (roll \(\Delta\theta=-\Delta s/r\) about local +X so the contact patch moves \(-\mathrm{Y}\) for \(+\mathrm{Y}\) travel). `look_along` runs **before** `_tick_visuals`, so the walk rig can add pelvic list/pitch/bob on top of heading. Heading is the XY velocity \(\hat{t}\,\mathrm{d}s+\hat{r}\,\mathrm{d}l\), not the path tangent, so a jaywalker faces across the street.
+**`threat`.** Taxonomy thresholds (see §8). `user_hitbox_radius=0.30` is the injector / spatial ego half-width, not a visual mesh.
 
-**Background traffic.** Cars in the **opposite** lane (`−sign(sidewalk_lateral) * lane_offset`) so background CPA stays \(>1.5\) m. Half travel against the path parameter. Peds on the opposite sidewalk or offset on the same one.
+**`scenarios`.** 40/30/30 auto mix, three named pools, timing constants (`swerve_trigger_s=1.8`, `cut_in_trigger_s=1.2`, pothole leads, `jaywalker_ttc=3.2`, `projectile_ttc=1.8`, CPA targets 1.0 / 0.12, compose strides).
 
-**Streetlamps.** 6 poles, 5.6 m, arm toward the carriageway, emissive bulb, **SPOT** aimed down (local \(-\mathrm{Z}\), identity rotation), 80° cone, energy 900 W at night / 0 by day. Only every other lamp casts shadows (EEVEE shadow pool caps at 2048 pages; 8 point lights + 2 suns overflowed). `reveal_view_layer()` un-hides everything, so `apply_streetlamp_state()` is called **again** after reveal.
+**`domain_randomization`.** Six lighting states with energy / elevation, azimuth range, lighting weights, weather weights, dappled probability, `material_chaos=(0.20,1.00)`, colour boxes, palettes.
 
-**Lighting (`apply_domain_randomization`).** Six states, not four. Weights in `domain_randomization.lighting_weights`.
+**`output`.** Folder names, media, video CRF / encoder / presets.
 
-- **harsh_glare:** sun 1.5–7.5° above the horizon, energy 18–42, aimed *down the gait* (`glare_azimuth_deg`). AgX exposure pulled to −0.45 so highlights roll off into sunset-blindness rather than clipping to white.
-- **overcast:** turbidity ≥ 9, sun shadows **off**, flat grey horizon, near-shadowless.
-- **night:** moon-energy sun, near-zero world strength, sparse tinted streetlamps (per-lamp dead/gain). Pitch black except the cones.
-- **dawn / noon / dusk:** the original four-state set.
-- **Dappled:** with probability `dappled_prob` (0.26) an overhead alpha-hashed canopy gobo (`make_canopy_gobo`) punches leaf-shaped shadows onto the whole street.
-- Key **SUN**, **SkyFill**, **GroundBounce** as before. World shader still never takes Volume Scatter.
-- AgX. Exposure: night 0.30, dawn 0.10, dusk 0.08, noon 0.00, harsh_glare −0.45, overcast ~0.05.
+**`annotation`.** `max_distance=40` m, `occlusion_epsilon=0.08` m.
 
-`BTP_LIGHTING=dawn|noon|dusk|night|harsh_glare|overcast` overrides the weighted draw.
+Change numbers **here**, not by scattering literals into injectors. Injectors that still have literals (`tau=2.4`, cube size ranges) are documented in §15; prefer promoting a new one to config if you touch it twice.
 
-**Biomes** (`prepare_biome`, CLI `--biome`). Same Frenet corridor, different widths / ground / props:
+---
 
-| Biome | Weight | Visual |
+## 8. `threat_math.py` (no `bpy`)
+
+Pure Python 3-tuples. No numpy. Convention-agnostic as long as camera and object share a frame. The pipeline evaluates in Blender Z-up, then converts vectors at write time.
+
+### 8.1 Vector helpers
+
+`vadd`, `vsub`, `vscale`, `vdot`, `vnorm`, `vdist`, `vnormalize`, `as_vec3`. `_finite3` replaces any non-finite component with 0. That exists because `NaN < 2.5` is `False`, so a poisoned TTC would silently classify as SAFE.
+
+`vflat(a)` zeroes Z (Blender ground plane).
+
+`blender_zup_to_yup` / `yup_to_blender_zup` — same permutation, see §5.
+
+`vec_to_list` rounds to 4 decimals for JSON.
+
+### 8.2 Constant-velocity model
+
+\[
+P_{\mathrm{rel}}=P_{\mathrm{obj}}-P_{\mathrm{cam}},\qquad
+V_{\mathrm{rel}}=V_{\mathrm{obj}}-V_{\mathrm{cam}}
+\]
+
+Converging iff \(P_{\mathrm{rel}}\cdot V_{\mathrm{rel}}<0\) (range rate negative).
+
+Critical point of \(f(t)=\|P_{\mathrm{rel}}+t V_{\mathrm{rel}}\|^2\):
+
+\[
+\mathrm{TTC}=-\frac{P_{\mathrm{rel}}\cdot V_{\mathrm{rel}}}{\|V_{\mathrm{rel}}\|^2}
+\quad\text{if }\|V_{\mathrm{rel}}\|\ge\varepsilon\text{ and converging}
+\]
+
+\[
+D_{\mathrm{cpa}}=\|P_{\mathrm{rel}}+\mathrm{TTC}\,V_{\mathrm{rel}}\|
+\]
+
+Otherwise TTC is \(+\infty\) (JSON `9999.0`) and CPA falls back to current range.
+
+`rel_speed_eps` default `1e-4`. Compared in **squared** form so there is no `sqrt` and no divide-by-zero. `converging_eps` default `0`. A pair with range rate in \([-\varepsilon,0)\) is treated as not converging if you raise it; the shipped config does not.
+
+### 8.3 `relative_kinematics`
+
+Returns a frozen `RelativeKinematics`: `p_rel`, `v_rel`, `distance`, `converging`, `ttc`, `cpa`. All in the frame that was passed in.
+
+`planar=True` applies `vflat` to both \(P_{\mathrm{rel}}\) and \(V_{\mathrm{rel}}\) **before** the solve. `main.py` sets this for `park` and `plaza`. A 1.6 m eye-height offset is then not “clearance” from a trunk.
+
+`v_cam = (0,0,0)` is supported. Then \(V_{\mathrm{rel}}=V_{\mathrm{obj}}\). A parked object has TTC \(=\infty\). Something thrown at a seated walker still solves.
+
+`as_json_dict(to_yup=True)` is available but `build_frame_record` writes fields itself so it can also attach `world_position` of the **root**, which is a different point.
+
+### 8.4 `classify_threat`
+
+Priority order — a real hit can never fall through to SAFE:
+
+1. **`CRITICAL_THREAT`** — converging, finite TTC/CPA, TTC < 2.5 s, CPA < 0.5 m.
+2. **`NEAR_MISS`** — converging, TTC < 4.0 s, CPA in [0.5, 1.5] m.
+3. **`SAFE_STATIC`** — \(\|V_{\mathrm{obj}}\|\le 0.05\) m/s **and** (range > 5 m **or** CPA > 1.5 m **or** not converging). A static object you are walking into still converges (\(V_{\mathrm{rel}}=-V_{\mathrm{cam}}\)) and can be CRITICAL. A static object with an in-between CPA (e.g. 0.3 m at TTC = 3.2 s) is promoted to CRITICAL rather than left in a hole between the buckets.
+4. else **`SAFE_DYNAMIC`**.
+
+A **stationary ego** inverts the static-on-gait case: \(V_{\mathrm{rel}}=0\), never converges, SAFE_STATIC at any range. Correct: neither body is moving. Objects that move toward a seated walker keep normal TTC / CPA.
+
+Non-finite TTC/CPA cannot satisfy a `<` threshold. Speed NaN is treated as 0.
+
+### 8.5 `intercept_velocity`
+
+Unique constant \(V_{\mathrm{obj}}\) that meets the camera at time \(\tau\) with world-space miss `offset`:
+
+\[
+V_{\mathrm{obj}}=V_{\mathrm{cam}}+\frac{P_{\mathrm{cam}}-P_{\mathrm{obj}}}{\tau}+\frac{\mathrm{offset}}{\tau}
+\]
+
+CPA equals \(\|\mathrm{offset}\|\) under the constant-velocity assumption. Injectors **do not** usually call this in world space. They place the actor in Frenet so that at time \(\tau\) it occupies \(s_{\mathrm{cam}}(\tau)\) and \(L_{\mathrm{cam}}+\mathrm{cpa}\), which is the same idea expressed in the ribbon. The helper exists for tests and for any future world-space projectile.
+
+### 8.6 Worked example
+
+Walker at \((0,0,1.6)\), \(V_{\mathrm{cam}}=(0,1.2,0)\). Cube at \((0,6,0.3)\), \(V_{\mathrm{obj}}=(0,-1.2,0)\). Threat points brought to a common Z (or planar):
+
+\(P_{\mathrm{rel}}\approx(0,6,0)\), \(V_{\mathrm{rel}}\approx(0,-2.4,0)\). Range rate \(= -14.4 < 0\). TTC \(= 14.4 / 5.76 = 2.5\) s. CPA \(= 0\). Label: **CRITICAL_THREAT**.
+
+Same cube offset to \(x=1.0\): CPA = 1.0 m, TTC still 2.5 s → **NEAR_MISS** if TTC < 4.
+
+Parked cube, walker as above: \(V_{\mathrm{rel}}=(0,-1.2,0)\), TTC = 5 s if 6 m ahead — not critical (TTC ≥ 2.5). At 2.4 m ahead, TTC = 2.0 s, CPA = 0 → CRITICAL. That is why a pothole on the gait works with \(V_{\mathrm{obj}}=0\).
+
+### 8.7 Self-test
+
+`python threat_math.py` exercises parallel, diverging, head-on, seated, planar, and taxonomy edge cases. Run it after changing any threshold or the planar branch.
+
+---
+
+## 9. `camera_kinematics.py`
+
+Owns Perlin, the ego-mode draw, and the Blender camera’s 4×4 every frame.
+
+### 9.1 `Perlin1D`
+
+Ken Perlin 2002 fade \(6t^5-15t^4+10t^3\). Table size must be a power of two (default 256). Gradients are 1-D, uniform \([-1,1]\), duplicated so `(i+1) & mask` needs no wrap logic.
+
+**Not** `mathutils.noise`. Blender’s hash is not guaranteed bit-identical across versions; injectors and the sim loop must see the same \(s(t)\) that was baked into the arc table.
+
+`fbm` sums octaves with persistence and lacunarity, then divides by the geometric amplitude sum so the result stays in roughly \([-1,1]\) regardless of octave count.
+
+Independent instances (different seeds) are used for yaw, pitch, roll, gait sidestep, speed wobble, actor wander, actor speed, and the grove wind. A shared seed would correlate head-scan with sidestep, which looks like a broken gimbal.
+
+### 9.2 `CameraState`
+
+Snapshot consumed by the annotator and written into `camera_data`:
+
+| Field | Meaning |
+| --- | --- |
+| `t` | Episode time (s) |
+| `position` | Eye, Blender world (Frenet + curb + gait). **No** Perlin translation |
+| `velocity` | Finite difference of that eye (includes gait \(dZ/dt\)) |
+| `tangent`, `right`, `up` | Road Frenet at current `s` |
+| `pitch`, `yaw`, `roll` | Camera-**local** jitter + gait pitch bob (radians) |
+| `matrix_world` | The 4×4 actually written to the object |
+| `walk_speed` | Instantaneous **ground** speed; 0 seated / halt |
+| `arc_length`, `lateral` | Frenet of the ego this frame |
+| `mode` | `walk` / `diagonal_cross` / `erratic` / `seated` |
+
+`pitch_yaw_roll` in JSON is these local angles, **not** a world IMU.
+
+### 9.3 `EgoProfile` and `choose_ego_profile`
+
+Drawn once per episode from `cfg['ego']`. Separated from `CameraRig` so it can be unit-tested without a camera object.
+
+**`walk`.** Constant lateral, constant speed, gait bob on.
+
+**`seated`.** `stationary=True` ⇒ `speed_at=0`, `travelled=0`, `max_time=1e6`, gait gain 0. Eye height drawn from `seated_eye_height_m`. Lateral is later nudged 0.35 m toward the building line (a bench sits back from the kerb).
+
+**`diagonal_cross`.** `diag_frac` \(U(0.45,1.00)\) of the way to the opposite kerb. Window is `diagonal_span` as a fraction of episode length. Lateral ramps with smoothstep \(u^2(3-2u)\). Span is \(\max(2|L|, 2.5)\) so a centreline start still produces a real crossing. Stored as a **fraction**, not metres, because the profile is drawn before the rig knows this biome’s corridor width.
+
+**`erratic`.** Sidestep amplitude \(U(0.22,0.80)\) m at \(U(0.10,0.38)\) Hz (fBm). Speed wobble \(U(0.15,0.55)\). 55% chance of a halt inside `hesitate_window_s` for `hesitate_duration_s`, clamped so it lands before the last 0.6 s.
+
+`--ego-mode walk` rebuilds the profile with `mode_weights={walk: 1}`. Unknown names raise.
+
+### 9.4 `CameraRig`
+
+Constructor arguments: Blender camera object, road `PathSpline` (duck-typed: `evaluate` / `tangent` / `length`), `cfg`, `ep_rng`, nominal `walk_speed` (0 if seated), starting `lateral`, `EgoProfile`, `lateral_limit` from `corridor.lateral_limit(0.30, True)`.
+
+`__post_init__`:
+
+- Six Perlin seeds (`base+17, +101, +233, +331, +457`) and three phase offsets \(U(0,64)\) so two episodes with the same walk speed still differ.
+- Writes lens / sensor / clip onto `cam_obj.data`.
+- Reads `curb_height` from world cfg.
+- Seated: lateral += `copysign(0.35, lateral)`.
+- Builds the arc table if needed.
+
+**`speed_at(t)`** is the single source of truth for “is the ego moving”. Arc table, gait amplitude, and exported `walk_speed` all read it. Seated → 0. Halt window → 0. Else `walk_speed * (1 + wobble * fBm(t*0.45))`, never negative.
+
+**`_build_arc_table`** — cumulative trapezoid of `speed_at` at `_arc_dt=1/120` s over 90 s (~10k floats). Skipped entirely for `walk` and `seated` (closed form \(s=vt\)). Only modulated modes pay for it.
+
+**`travelled(t)`** — distance walked since t=0. Linear interpolate the table, or `v*t`, or 0.
+
+**`arc_length_at(t)`** — `sidewalk_s0 + travelled(t)`, clamped to `(0.05, length-0.05)`. `sidewalk_s0` is **3.0 m**. That keeps the first frame from sitting inside a building that starts at s=0, and it is the origin injectors use as “now”.
+
+**`lateral_at(t)`** — walk/seated: constant (then clamp). Diagonal: smoothstep toward the far kerb. Erratic: base + `sidestep_amp * fBm(t * rate)`. Then `_clamp_lateral`.
+
+**`max_time()`** — remaining = `length - s0 - 2`. Seated → `1e6`. No table → `remaining / max(v, 1e-3)`. With table → first sample whose travelled ≥ remaining. Never divides by a halted speed.
+
+**`sample_angles(t)`** — three independent fBm streams scaled by `jitter[axis]`. Time is `t * frequency_hz + phase` so “slow yaw” really is slow.
+
+**`_gait_gain(t)`** — 0 if seated; else `speed_at(t) / walk_speed` clamped to [0,1]. A bobbing camera with zero ground velocity is a strong, wrong cue: it looks like motion the labels deny.
+
+**`gait_height`** — `eye + A * gain * sin(2π f t)`.
+
+**`gait_pitch_bob`** — `amp * gain * cos(2π f t)` (quadrature: head dips at mid-stance).
+
+**`predict_position(t)`** — eye **without** look-jitter. Injectors aim at this, not at a Perlin wobble. Includes gait Z.
+
+**`predict_velocity(t)`** — central difference of `predict_position`.
+
+**`update(t, dt)`** — the sim-loop call:
+
+1. Frenet origin at `(arc_length_at, lateral_at)`. Origin Z is **curb**, not asphalt, even when a diagonal crossing is on the road — a known simplification (the walker does not step down 12 cm in the integrator). Park curb is 0, so it is exact there.
+2. Re-orthogonalize `up = right × tangent`.
+3. Add gait height.
+4. Sample jitter + pitch bob.
+5. `_compose_matrix`: columns `(right, up, −tangent)` so local −Z = +tangent. Jitter is Euler XYZ **in camera space**, then `rot_base @ rot_jitter`.
+6. `_apply_camera_matrix`: decompose to loc/quat, set `rotation_mode='QUATERNION'`, write location, quaternion, scale 1, **then** `matrix_world`. Blender 5 ignores `matrix_world` alone when the object is still in Euler mode.
+7. Velocity: frame 0 (or `dt~0`) is a central difference of `predict_position` (correct under diagonal / halt). Later frames: `(position - prev) / dt` of the **jittered** eye. That includes a tiny look-jitter translation of zero (jitter is rotation about the eye) and the gait \(dZ/dt\).
+
+### 9.5 What is not in the camera
+
+- No translation jitter. A translating HMD would desynchronise intercepts (injectors use the no-jitter eye).
+- No roll from the road (the spline is planar).
+- No collision with actors. The camera is a ghost. Occupancy keeps *other* bodies off its spawn cell; during the episode they can still enter the gait tube — that is the point of a jaywalker.
+
+---
+
+## 10. `projection.py`
+
+Every frame, after `view_layer.update()`, this module turns world AABBs into pixel boxes and a threat point.
+
+### 10.1 Bound cache
+
+`LocalBoundCache` stores object-space `bound_box` once per `as_pointer()`. Each frame only does `matrix_world @ corner`. No `evaluated_get` — there are no mesh modifiers, and evaluated meshes allocate.
+
+`bound_cache_for(obj)` is a dict lookup. `Actor._bounds` holds the handle for dynamic actors so the annotation loop does not re-hash every frame.
+
+`clear_bound_caches()` at episode start **and** after `release_episode`. Pointers are reused; a stale cache would project a previous episode’s cube as this episode’s car.
+
+Union of world AABB corners of the object **and every MESH child**. Pelvis-only would under-cover a person (arms, head) and a wheeled car.
+
+### 10.2 Projection
+
+Per frame, once:
+
+- `view = cam.matrix_world.inverted()`
+- `proj = Object.calc_matrix_camera(...)` if available, else the analytic OpenGL frustum from lens / sensor / aspect (`construct_projection_matrix`)
+
+For each corner:
+
+1. Camera space. **Z ≥ 0 is behind the lens** (Blender camera looks down −Z). Those corners drop.
+2. Clip = `proj @ cam`. Discard `w ≤ 1e-8`.
+3. NDC → pixels, origin **top-left**: \(u=(n_x+1)W/2\), \(v=(1-n_y)H/2\).
+
+Box = integer min/max of surviving pixels, clamped to the image. `truncated` if any corner was off-screen or fewer than 8 were in front. All-behind or all-off-screen ⇒ `None` ⇒ object omitted from that frame (not listed with a dummy box).
+
+This is a **3-D AABB**, slightly loose (a diagonal limb sticks out of the AABB). It is not a tight silhouette and not a segmentation mask.
+
+### 10.3 Threat point
+
+`threat_point_from_corners(corners, cam_z, mode)`:
+
+- **`volume`** (people, cars, trees, shapes): XY of AABB centre, Z clamped into `[zmin, zmax]`, preferring `cam_z`. A car roof at 1.5 m vs a 1.6 m camera has a 0.1 m residual, not 1.6 m.
+- **`footprint`** (pothole / crater / puddle / broken_slab): XY of centre, **Z = camera height** so the hole occupies the walker’s vertical column.
+
+Trees: the 2-D box uses the full hierarchy (canopy included). The threat point and Frenet extents use `actor.threat_obj` (the trunk). Taking the canopy AABB as the threat point would put the hazard 1.5 m off the path and a swaying crown would jitter TTC.
+
+Sunken classes (`pothole`, `crater`, `broken_slab`): `footprint_mouth_corners` builds a thin world slab (±3 cm) at the pavement mouth from the local XY radius. The render mesh’s buried well is ignored for the box. Without this, the box inflates downward and can miss the screen when only the mouth is in frame.
+
+Static actors cache `_world_corners` once. Dynamics recompute from `matrix_world` every frame.
+
+### 10.4 Occlusion
+
+`raycast_occluded`: `scene.ray_cast` from camera toward the AABB centroid.
+
+- Self and children do not count.
+- Ground ribbons (`road_surface`, `sidewalk_*`, `curb_*`, `centerline` / `dash_*`, `lamp_pole`) are stepped through (up to 10 hits, 0.08 m epsilon) so a pothole is not “occluded by the sidewalk it sits on”.
+- This is a **centre-ray**, not pixel coverage. A person 90% hidden by a trunk but with centroid visible is `occluded=false`. A person with centroid behind a pole but limbs visible is `occluded=true`. That is acceptable for a tactile-warning dataset; it is not a matting label.
+
+`--no-occlusion` skips the ray. Boxes still compute.
+
+### 10.5 `BoundingBox2D`
+
+`xmin, ymin, xmax, ymax` integers; `truncated`, `occluded` bools; `as_dict()` for JSON.
+
+---
+
+## 11. `world_generator.py`
+
+Largest module (~5k lines). Scene, actors, lighting, EEVEE, injectors. Coordinate frame: Blender Z-up. The sidewalk is a lateral offset, not a second arc-length.
+
+### 11.1 Wind and foliage (visual only)
+
+**`WindField`.** One Perlin per episode, constructed in `build()` **after** `choose_environment` so strength and direction match the drawn label. `state(t)` returns `(envelope, gust, dir_x, dir_y)`. Envelope = `strength * max(0, 0.52 + 0.48 * gust)`. Cached on `t` so every tree in a frame sees the same gust.
+
+Label is drawn from `domain_randomization.wind_weights` (calm 0.32 / breeze 0.48 / windy 0.20) unless `--wind` or `BTP_WIND` locks it. Strength is then \(U\) of `wind_strength[label]`: calm `(0.02, 0.08)`, breeze `(0.28, 0.55)`, windy `(0.70, 1.00)`. Direction is a uniform world-XY yaw (`wind_dir_deg`). The grove shares this one field; per-tree phase / flutter add modal rustle.
+
+**`FoliagePart`.** A branch empty or a single triangle leaf: object, rest Euler, phase, flutter, kind, flex.
+
+**`foliage_wind_euler`.** GPU Gems 3 sum of sines. Branch joints: slow cantilever into the wind (`amp = 0.14 * env * flex`). Leaves: that plus 2–5 Hz rustle (`amp = 0.48 * env * flex`). Parenting is hierarchical, so a mid-limb bend moves the distal crown. Returns a local Euler **offset**. `_tick_visuals` does `rest + offset`.
+
+**Invariant:** trunk pose and `Actor.velocity` stay 0. Moving leaves never enter TTC. Phase B already walks children, so sway is in the video.
+
+### 11.2 `PathSpline`
+
+Control polygon → cumulative length → uniform-\(s\) resample at `ds` (world default 0.40 m). `evaluate(s)` / `tangent(s)` are binary searches plus lerp. `right(s) = tangent × world_up`, renormalized. `frame(s)` returns `(p, tan, right)`.
+
+`offset_point(s, lateral, z)` — Frenet point with explicit Z (does not use `ground_z`; callers pass curb or 0).
+
+`offset_spline(lateral)` — a **new** spline through offset samples. Used only as a visual / legacy sidewalk handle. **Do not** take arc length from it.
+
+`project(p)` — closest point is the foot of the perpendicular on each polyline **segment**, not the nearest sample vertex. Lateral is the planar offset along `right(s)`.
+
+Factories (`PathSpline.generate`):
+
+| Type | Construction |
+| --- | --- |
+| `straight` | `(0,0,0)` → `(0,L,0)` |
+| `gentle_curve` | Cubic Bézier, bend \(U(8,20)\) m left or right |
+| `s_curve` | Two opposing bends |
+| `corner_90` | Fillet radius \(U(5.5,8)\) m, then a +X or −X finish |
+
+Park biomes drop `corner_90` from `path_types` so a gravel path does not make a city block.
+
+`_cubic_bezier` samples 80 points before resample. Density is enough for a 78 m path at ds=0.40.
+
+### 11.3 `offset_folds`
+
+On the inside of a tight corner, a large lateral offset lands back on the pavement (the offset curve cusps). Sampled at three stations × three laterals via `spline.project`. If the projected lateral collapses toward the road, the station is a fold. Buildings and planting trees **skip** that station. Without this, a facade or a trunk phases through the sidewalk on `corner_90`.
+
+### 11.4 `StreetCorridor`
+
+`confine(s, lat, pad, allow_sidewalk)` clamps `s` to `(0.05, length-0.05)` and `|lat|` to `lateral_limit`. Limit is `max_abs_lateral - pad` if sidewalk is allowed, else `road_half - 0.05 - pad`, floored at 0.20 m.
+
+`max_abs_lateral` is set at build time to `road_half + sidewalk_w - corridor_margin` (margin 0.22 m). Facades sit further out at `road_half + sidewalk_w + building_setback`.
+
+`ground_z(lat)` — curb on the sidewalk band, 0 on asphalt.
+
+`world_to_sl` / `world` — project / offset convenience.
+
+This is the **only** runtime spatial constraint on movers. It keeps a jaywalker on the ribbon. It does not keep two jaywalkers apart (that is `ComposeSession`).
+
+### 11.5 `poisson_disk_strip`
+
+Bridson 2007 in the `(s, lateral)` plane. Distance is Euclidean in parameter space, which is a close approximation to world metres on a gentle curve and an approximation on a tight corner (accepted). Cell size `radius/√2`, `k_candidates=20`. Used for sidewalk furniture and (historically) head hazards. Trees use a simpler reject loop (`_tree_free`) because they have role-specific along-track spacing.
+
+### 11.6 Mesh helpers
+
+`_link` — `collection.objects.link`. `ensure_collection` — get-or-create a child of the scene master.
+
+`make_principled` / `assign_mat` — simple one-colour materials for poles and leftover primitives. Most surfaces go through `materials.py`.
+
+`create_mesh` — unique datablock (people, buildings, one-off hazards). `create_box` — 8 vertices, box-projected UVs. `create_z_cylinder` — lamp-adjacent / unused much now.
+
+`_box_project_uv` — object-space box UVs so a UV-less cube still gets storeys / tiles when a shader uses UV. Facade shaders actually use **Object** coordinates (see §13); the UVs are belt-and-braces.
+
+`shade_smooth` — per-polygon `use_smooth`.
+
+`yaw_from_xy` / `heading_from_tangent` / `look_along` — see §5.1.
+
+### 11.7 `MeshLibrary`
+
+Get-or-build mesh/material datablocks. `instance()` is `bpy.data.objects.new(name, shared_mesh)` plus per-object scale / yaw.
+
+Why: 1000 grass clumps × unique meshes = 1000 vertex buffers. The library uploads one clump mesh (or a handful of sprig variants) and instances it.
+
+Materials cached the same way. A shared mesh carries its material on the **mesh** slot. Per-instance colour (threat shapes) uses `_bind_object_material` so linked meshes do not all turn red.
+
+`lib.stats()` prints `"{built} unique mesh datablocks, {reused} linked instances"` on cleanup.
+
+A **fresh** library per `build()`. The previous episode’s datablocks were purged; holding them is a use-after-free.
+
+Pedestrians are **not** instanced. They are unique articulated graphs.
+
+### 11.8 `purge_orphans` / `reset_blender_scene` / `release_episode`
+
+`purge_orphans(max_passes=8)` — recursive `orphans_purge` until a pass frees nothing or 8 passes. Node groups hang off materials and need the second pass.
+
+`reset_blender_scene` — object-mode if possible, remove every object, sweep unused meshes/lights/cameras/materials/curves/worlds, unlink child collections, remove unused collections, purge. Returns the scene. Called at the start of every `build()`.
+
+`release_episode` — see §4.5. Called at the **end** of `run_episode`, after pixels and JSON, so peak RSS of episode n+1 does not include episode n.
+
+### 11.9 Environment draw
+
+`choose_environment` — weighted lighting, weather, and wind; sun elev/azim/energy from the matching ranges; dappled coin-flip; chaos \(U(c_{lo},c_{hi})\); wind strength / direction. `BTP_LIGHTING` / `BTP_WIND`, if they name a known state, override the corresponding draw (debug). `--wind` locks `wind_weights` to one key before this function runs.
+
+Six lighting states and **why they exist**:
+
+| State | What it breaks in a detector |
+| --- | --- |
+| `dawn` / `dusk` | Warm, low, long shadows |
+| `noon` | High key, short shadows, the “easy” domain |
+| `night` | Moon-energy sun, sparse tinted spots, some lamps dead |
+| `harsh_glare` | Horizon sun, 18–42 energy, AgX exposure −0.45. Sun azimuth is forced down the gait (`glare_azimuth_deg`) so the disc is in the walker’s eyes, not behind them |
+| `overcast` | Turbidity ≥ 9, sun angle 60°, sun shadows **off**. Contrast dies |
+
+`glare_azimuth_deg(tangent)`: a Blender sun with `rotation_euler = (90°−e, 0, a)` emits along \(d=(-\sin a\cos e,\;\cos a\cos e,\;-\sin e)\). The disc sits at \(-d\). To put it on the walker’s line: \(a=\mathrm{atan2}(T_x,-T_y)\).
+
+Weather (`clear` / `light_fog` / `heavy_smog`) only changes sky turbidity / aerosol. **No world Volume Scatter** — that is full-frame black in EEVEE. `volume_density` in older comments is unused on purpose.
+
+### 11.10 Lighting graph (`apply_domain_randomization`)
+
+Three SUNs + sky + view transform:
+
+1. **Key sun** — energy / colour / angular diameter per state. Night: cool, faint, `energy = max(3e, 0.25)`. Glare: warm, huge energy, 0.4° disc. Overcast: white, 60° disc, `use_shadow=False`. Day: energy ∝ `sin(elev)`, colour lerps warm→white.
+2. **SkyFill** — opposite azimuth, 58° elevation, `use_shadow=False`. Shadow page cap: fill must not consume cascade pages.
+3. **GroundBounce** — 165° elevation (from below), brown/grey, no shadows. Stops the shady facade from being a black slab.
+
+`apply_streetlamp_state` — night only, honouring `btp_lamp_dead` / `btp_lamp_gain` stored on the object at spawn. Every other live lamp casts (`i % 2 == 0`) so the shadow pool (2048) survives. This function runs **twice**: once inside lighting, once after `reveal_view_layer` un-hides everything. The two calls must agree; that is why dead/gain are on the object, not re-rolled.
+
+`_setup_world_shader` — Background + Sky Texture. Blender 5 sky type is `MULTIPLE_SCATTERING`, not `NISHITA` (Nishita was 2.9–4.x). Sun elevation/rotation driven from the same elev/azim. Turbidity / dust from weather. No volume node.
+
+`_apply_view_transform` — AgX. Exposure: glare −0.45, overcast +0.12, dawn +0.10, dusk +0.08, noon 0, night left at 0 (lamps carry the image). Gamma 1 if the attribute exists.
+
+### 11.11 EEVEE (`configure_eevee`)
+
+`available_render_engines` reads the scene’s enum. `pick_render_engine` prefers the requested name if present, else `BLENDER_EEVEE`, else `BLENDER_EEVEE_NEXT`, else whatever is first. Hard-coding Next on 5.2.1 raises `TypeError`.
+
+TAA 16 + reprojection. Raytracing method **`SCREEN`** (not `'SCREEN_TRACE'`, a silent no-op on 5.2). Fast GI 4 rays / 6 steps / quality 0.30. Shadow pool 2048, cascade 48 m. All `setattr` `hasattr`-guarded so 4.2 and 5.2 both run.
+
+`reveal_view_layer` — new collections start excluded in 4/5. Walks the layer collection tree and sets `exclude=False`, `holdout=False`, `indirect_only=False`. Then daytime lamps are put back to sleep.
+
+`prepare_still_render` — `use_sequencer=False`, `use_compositing=False`, PNG compression, filepath. Blender 5 defaults both sequencer and compositing **True**. An empty VSE renders **pitch black** with valid JSON. This is the #1 “black PNGs” cause.
+
+`_gpu_backend_report` — prints device string once so a hybrid-laptop log shows whether PRIME worked.
+
+### 11.12 Ribbons and buildings
+
+`_ribbon_mesh(name, spline, lat_a, lat_b, z, col, mat, z_amp=, rng=)` — a strip of quads along the spline between two laterals. Plaza sidewalks get a tiny `z_amp` (0.012) so the pavers are not a perfect plane (catches light). Names `road_surface`, `sidewalk_L/R`, `curb_L/R`, `verge_L/R` are in the occlusion ignore list (except verge).
+
+`_centerline_dash` — 3 m mark, 3 m gap, 0.12 m wide, Frenet quads. World-axis boxes would chord across a corner.
+
+`_extrude_buildings` — from `s=14` m (a 24 mm lens at `s0=3` m must not be filled by one wall) to near the end. Facade lateral = `sign * (road_half + sw + building_setback)`. Depth \(U(4,10)\), height \(U(6,18)\) street / taller avenue. Gap \(U(0.4,2.2)\) plus explicit `gaps` from `prepare_scenario` (crossers open `[4,20]` or `[4,28]`). Roof is a child slab. `offset_folds` skip. Night: `make_facade(..., night=True)` so windows emit.
+
+### 11.13 Trees (`spawn_tree` + `_scatter_trees`)
+
+Weber–Penn / Honda recursive tree (1995 / 1971). `actor.obj` is an **unscaled root empty** (lean + heading). The trunk mesh is a child with **no children of its own** and is `threat_obj`, so TTC uses the bole. Limbs are unscaled empties + instanced tapered tubes. Children spawn along the parent (monopodial, golden-angle 137.5°) and the tip splits in two or three (dichotomous). Leaves are instanced twig sprays (`_leaf_spray_geom`): many small kite triangles hung along the twig, not a ball at the origin. The 2-D box is the wood + sprays. Do not add a dummy crown hull — an unshaded blob still draws in EEVEE even with `hide_render`.
+
+Shapes: `round` (spherical ShapeRatio), `conical` (fir: central leader + whorls), `columnar`, `spreading` (hemispherical), `bare` (wood only). Small crowns (`max_canopy < 1.15`) use fewer stems / shallower depth.
+
+Lean: planting / curb trees lean **toward the road** on the **root** (`rotation_euler Y = -copysign(lean, lat_sign)`). Heading is the root yaw. The trunk mesh stays identity in local space.
+
+`Actor` for a tree: `category='static'`, `class_name='tree'`, `obj=root`, `threat_obj=trunk`, `threat_mode='volume'`, `foliage=[...]`, `wind=WindField`, `annotatable=True`. Velocity stays 0.
+
+Roles in `_scatter_trees`:
+
+| Role | Config key | Where | Crown cap | Along-track spacing |
+| --- | --- | --- | --- | --- |
+| `plant` | `n_trees` | Planting strip (facade − crown − 0.40), or park field | 2.8 / computed | 7.5 m |
+| `curb` | `n_street_trees` | Just inside the carriageway (`road_half − U(0.18,0.42)`) | 1.15 m | 8.0 m |
+| `median` | `n_median_trees` | `|lat| < 0.16` | 0.95 m (narrow road) / 1.55 m (avenue) | 10.0 m |
+| `path` | `n_path_trees` | Park gait, `|lat|<0.22` | 1.35 m | 6.0 m |
+
+`_tree_free(s, lat, along, xy=3.8)` — along-track spacing in the **same strip** (`|Δlat|` small) uses `along`; Euclidean XY uses 3.8 m. A planting tree at lat 7.5 must **not** ban a median trunk at lat 0. Early versions used one Euclidean radius and rejected every median tree.
+
+`offset_folds` applied to plant role so a corner does not put a trunk on the pavement.
+
+`--no-trees` zeroes all four count keys on world and strips them from biome overrides so a biome cannot put them back.
+
+### 11.14 Grass, gobo, lamps
+
+`scatter_grass` — instanced tufts. `exclude_abs_lat` keeps them off asphalt and walking slabs. Park: field of 60–160 clumps. Street: 8–28 on the verge.
+
+`_spawn_canopy_gobo` — one alpha-hashed ribbon at 6.5–10.5 m. Hidden from camera / diffuse / glossy if those flags exist; `visible_shadow=True`. Models “avenue of plane trees” as a moving shadow, not 10k leaves.
+
+`_spawn_streetlamps` — pole + arm toward the carriageway + emissive bulb + downward SPOT. Alternating sides. `_site_free` vs trunks. Dead/gain custom props. Daytime: energy 0, hidden.
+
+### 11.15 Furniture and head hazards
+
+`FURNITURE_CLASSES` = trash can, scooter, barricade, puddle (visual). `_scatter_ground` Poisson-samples the **shop-front half** of the sidewalk (outer band), not the curb walking line. `_site_free` vs trees/lamps. Puddles are `annotatable=False` (a sheen is not a trip in this taxonomy). Head-height boxes (`tree_branch`, `ac_unit`, `sign`, `truck_door`) only if `n_head_hazards > 0` (default `(0,0)`). They read as junk on the gait. `head_level_projectile` is a **scenario**, not this scatter.
+
+### 11.16 Background traffic
+
+**Vehicles** — opposite lane so CPA stays > 1.5 m. If median trees exist, lane is pushed outward (`_carriage_free` rejects a spawn whose XY hits a trunk). Speed \(U(5,9)\) street. Light Perlin wander. `allow_sidewalk=False`.
+
+**Pedestrians** — other sidewalk, or offset on the same one. Speed \(U(0.90,1.45)\). `_add_wander` attaches `Perlin1D` + amplitude. `allow_sidewalk=True`.
+
+`_add_wander` is also used on some injected extras so a compound street does not look like a train set.
+
+### 11.17 Spawn factories
+
+| Function | What it builds | Root | Threat |
+| --- | --- | --- | --- |
+| `spawn_humanoid` (via `spawn_pedestrian`) | Articulated person | pelvis | volume, whole body |
+| `spawn_vehicle` | Superquadric hull + glass + 4 +X wheels | body | volume |
+| `spawn_bicycle` | Frame + wheels + rider-less | frame | volume |
+| `spawn_tree` | Recursive forks + triangle leaves | root empty | `threat_obj=trunk` (no foliage children) |
+| `spawn_ground_hazard` | Pothole well / crater bowl / tilted slab / debris | mouth | `footprint` (debris volume) |
+| `spawn_threat_shape` | Unit cube/sphere/cylinder/pyramid/cone/capsule/lump | centre | volume; class `threat_<kind>` |
+| `spawn_threat_cube` | Thin wrapper → `kind='cube'` | | |
+| `spawn_head_hazard` | Floating box | centre | volume |
+| `spawn_bench` | Seated-ego prop | | `annotatable=False` |
+| `spawn_projectile` | Eye-height cube | centre | volume, class `projectile` |
+
+`SHAPE_KINDS` = `cube, sphere, cylinder, pyramid, cone, capsule, lump`. `kind in {shape, random, any, ''}` draws uniformly. Aspect jittered by chaos. Colour from a fixed saturated palette so the detector cannot key on “orange cube = threat”. `_bind_object_material` so instanced unit meshes do not share albedo.
+
+`_Counters.next_id(class_name)` → `person_000`, `threat_sphere_001`, …
+
+`_tag` writes `instance_id` and `class_name` as custom properties (debug in a `.blend` dump; JSON uses the Actor fields).
+
+### 11.18 `Actor` motion model
+
+See the field table in §11.19. `update(t, dt, corridor)`:
+
+1. If `static` or `stopped`: velocity = 0, `_tick_visuals`, return. Foliage still sways. Gait goes to idle.
+2. If `t >= stop_t`: latch `stopped`, same as (1).
+3. If `follow_spline` is set (all street actors):
+   - `_commanded_rates`: `(ds, dlat)` from `speed` / `lat_speed`→`lat_target`, with a smoothstep blend after `turn_t` into `post_speed` / `post_lat_*`. `swerve_t` holds lateral rate at 0 until that time (cut-in / swerve).
+   - Multiply `ds` by `_speed_scale` (erratic fBm, never negative).
+   - Integrate `s += ds*dt`. Integrate lateral toward target without overshoot. Then add `_wander_rate*dt` (differenced displacement; first sample returns 0 so frame 0 does not teleport).
+   - `corridor.confine`.
+   - `location = p + right*lat`, Z = `origin_z + ground_z(lat)`.
+   - `velocity = tan*ds + right*(vlat + v_wander)` — wander is in the **reported** velocity so TTC sees the true instantaneous motion.
+   - `look_along` on the horizontal heading (or `±tan` if stopped in s).
+   - **Then** `_tick_visuals` (gait / wheels / foliage).
+4. Else `hold_velocity` world step (legacy; street actors should not hit this), or raw `location += velocity*dt`.
+
+`finite_velocity(dt)` — fallback if `velocity` is still ~0 on a mover that is not marked stopped. Used by `build_frame_record` so a first-frame actor still gets a TTC.
+
+### 11.19 `Actor` fields
+
+| Field | Role |
+| --- | --- |
+| `obj` | Blender root |
+| `instance_id`, `class_name` | JSON identity |
+| `category` | `static` / `dynamic` — static skips integration |
+| `velocity` | World m/s, Z-up, written every update |
+| `speed` | Commanded \(\mathrm{d}s/\mathrm{d}t\) (signed; negative = oncoming) |
+| `follow_spline`, `s`, `lateral` | Frenet state |
+| `origin_z` | Added to corridor ground (pelvis, cube centre) |
+| `behavior` | Tag for occupancy / debug (`through`, `oncoming`, `cut_in`, …) |
+| `swerve_t` | No lateral rate until this time |
+| `stop_t`, `stopped` | Sudden stop |
+| `hold_velocity` | World-space fallback |
+| `annotatable` | False → omitted from JSON (puddle, bench) |
+| `threat_mode` | `volume` / `footprint` |
+| `threat_obj` | Sub-object for threat point (tree trunk) |
+| `gait` | `WalkRig` |
+| `wheels` | `(obj, radius)` |
+| `lat_speed`, `lat_target` | Jaywalk / cut-in |
+| `corridor_pad`, `allow_sidewalk` | Confine |
+| `wander_*`, `weave_*` | fBm drift vs deterministic sine |
+| `speed_noise`, `speed_amp` | Erratic \(\mathrm{d}s/\mathrm{d}t\) |
+| `_bounds`, `_world_corners` | Projection caches |
+| `turn_t`, `turn_dt`, `post_*` | Smooth heading blend (jaywalk-turn, run-off-road) |
+| `foliage`, `wind` | Visual only |
+
+### 11.20 `WorldGenerator` lifecycle methods
+
+**`__init__`.** Holds cfg, rng, empty lib, `_sites`, `_wind`, compose session, mover caches.
+
+**`prepare_biome`.** Weighted or requested name. Copies biome dict onto `cfg['world']`. One substrate: a park “lane” is a lateral band of a 3 m gravel path. Injectors do not branch on biome except where `ground_z` / planar TTC already handle it.
+
+**`prepare_scenario`.** Records slug, opens building gaps if any name is in `CROSS_GAP_SCENARIOS`, sparsifies if `empty_street` is in the mix.
+
+**`build`.** Reset scene, configure EEVEE, new `MeshLibrary`, `_wind = None`. Draw path and sidewalk lateral. `choose_environment`, then construct `WindField` from that draw (not before — an early field would ignore `--wind`). Ribbons, buildings, trees (which receive `_wind`), lamps, grass, lighting, furniture, background traffic. Fold `wind` / `wind_strength` onto the environment dict stored in `WorldState`. Returns `WorldState`.
+
+**`create_camera`.** Empty camera object, linked, clip/lens later overwritten by the rig.
+
+**`place_ego_props`.** If seated, spawn a bench at the (nudged) lateral, not annotatable.
+
+**`freeze`.** `_movers` = actors that are dynamic, or have gait, wheels, foliage, or `stop_t`. `_annotatable` = `annotatable=True`. Invalidated on `_append`.
+
+**`update`.** `mover.update` for each mover with the corridor.
+
+**`annotatable`.** Frozen list, or a live filter if freeze was skipped (should not happen).
+
+**Site occupancy** (`_occupy`, `_site_free`, `_carriage_free`, `_tree_free`, `_count_range`) — cheap XY / along-track reject for trees, lamps, furniture, background cars. Independent of `ComposeSession` (which is for **injected** dynamics vs each other and vs a seed of nearby background).
+
+### 11.21 Injector plumbing
+
+`_scenario_handlers` — canonical name → callable. Built once per `inject_scenarios`. Closures capture `near_miss_cpa_target` (1.0) and `critical_cpa_target` (0.12).
+
+`inject_scenarios`:
+
+1. Resolve aliases.
+2. Unknown names raise with the known list.
+3. `ComposeSession.from_cfg` with `s_lo = s0+3.2`, `s_hi = min(length-5, s0+look_ahead)`.
+4. `seed_from_actors` — background in the camera-relevant band become capsules tagged `"background"`.
+5. `sort_for_inject` — static → along-track → lateral (stable, user order preserved inside a bucket). Folder slug keeps **user** order (`compose_slug`).
+6. For each name: `session.begin`, skip noops, call handler.
+7. Clear `_compose`. Return slug.
+
+Shared helpers:
+
+- `_spawn_kind(kind, s, lat, heading_sign, cube_size, cube_z)` — person / vehicle / bicycle / shape.
+- `_bind(...)` — confine, `reserve` if composing (may flip lat / lane / nudge s), write speed / lat / turn / stop, snap location + `look_along`, `_append`.
+- `_cam_s` / `_cam_sl` — prefer `rig.arc_length_at` so hesitation is in the intercept.
+- `_ego_speed` — may be 0. Never floored to 0.25.
+- `_gait_lat` — `state.sidewalk_lateral`.
+- `_near_lane` / `_far_lane` — `±lane_offset`, sign relative to walker. `prefer_far_lane` can push a generic oncoming car out of a jaywalker’s ribbon.
+- `_resolve_lat(dlat, L, pad)` — `dlat` may be `"opposite"`, a float offset, or an absolute.
+- `_kind_pad` — vehicle 1.05, bicycle 0.40, shapes ~0.35, person 0.35.
+- `_frustum_half_width(depth, frac)` — `depth * tan(0.5*hfov*frac)`, min 1.20 m. Through-crossers spawn on a FOV edge, not a building face.
+- `_scale_person` — uniform scale for `child_darting` if the child mesh path is not used; the real child path uses `spawn_humanoid(child=True)`.
+- `_inject_oncoming` — spawn at \(s_0+\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},v_{\mathrm{obj}})\tau\), lateral = gait + `dlat` (or opposite sidewalk). Speed is **negative** (toward the camera) for oncoming kinds. Seated still gets \(v_{\mathrm{obj}}\tau\) ahead.
+- `_inject_through_cross` — enter one FOV/corridor edge, `lat_target` the other edge, `speed=0` (pure lateral), `behavior='through'`. Depth 3.8–7 m plus compose stride. CPA is a small lateral graze of the gait line, not a teleport.
+- `_inject_jaywalk_turn` — side entry, then `turn_t` blends into along-track toward or away from the camera.
+- `_inject_static_shapes` — `n=1` one cube; `n=0` draws 2–4 mixed shapes. On gait, 2.55 m apart, lead 5.4 m + static stride.
+- `_inject_pothole` — lead from config, `dlat` 0 / 0.85 / 1.80. On-gait: pothole/crater/broken_slab. Offset may also be debris.
+- `_inject_car_lane` / `_inject_parallel_person` / `_inject_cyclist_same_way` / `_inject_distant_jaywalk` / `_inject_parked_car` / `_inject_sudden_stop` / `_inject_cut_in` / `_inject_weaving` / `_inject_run_off_road` / `_inject_child_dart` / `_inject_head_cube` — see §15.
+
+There is **no** per-frame N-body. If two injectors still overlap after 14 nudges, `reserve` commits the last candidate (best-effort). The corridor clamp still keeps everyone on the street.
+
+---
+
+## 12. `scenario_compose.py` (no `bpy`)
+
+CLI parse + Frenet occupancy. Injector **bodies** stay in `world_generator.py` so this file can be tested with system Python.
+
+### 12.1 Catalogs
+
+**`CROSS_GAP_SCENARIOS`.** Lateral travellers that need a building gap so they are not born in a facade. Includes all jaywalk variants, crossing cars, cube/shape from left/right, `child_darting`, `distant_jaywalk`. `prepare_scenario` opens `[4,20]` m, or `[4,28]` if two or more.
+
+**`THROUGH_CROSSERS`.** Occupies every lane at a fixed `s` over a few seconds. Used to send a generic `car_approaching` to the far lane (`prefer_far_lane`).
+
+**`SPARSE_SCENARIOS`.** `{empty_street}` — zeroes background peds/cars and most clutter.
+
+**`NEAR_LANE_LOCKED`.** Cut-in / graze / swerve / weave / run-off **must** keep the near lane. Occupancy staggers `s` instead of flipping the lane.
+
+**`SCENARIO_ALIASES`.** Short names for compounds: `car`→`car_approaching`, `pothole`→`pothole_on_path`, `cube`→`cube_near_miss`, `cubes`→`cube_on_path`, `shape`→`shape_near_miss`, `shapes`→`shapes_on_path`, `sphere`/`pyramid`→`shape_head_on`, `child`→`child_darting`, etc. `--list-scenarios` prints the full map.
+
+**`_STATIC_CLASSES` / `_is_static_class`.** Potholes, trees, all `threat_*`. Static capsules only block the **spawn cell** (`t=0`), not the 5 s tube. Walking past a hole is realistic; treating the tube as solid shoved jaywalkers ~10 m down the road.
+
+**`_INJECT_PRIORITY`.** Lower runs first. 0 = static holes/shapes, 1 = parked, 2 = noops, 10 = along-track, 20 = lateral. `sort_for_inject` is a stable sort on this. User order is preserved inside a bucket and in the folder slug.
+
+**`_EXTENT_S` / `_EXTENT_LAT`.** Half-extents for occupancy. Unknown / `threat_*` map to `threat_cube` (0.48 × 0.36). `extents_for(cls, pad)` adds pad into the returned pair.
+
+### 12.2 Parsing
+
+`split_scenario_tokens` — commas, plus signs, whitespace; lowercased; `-` → `_`.
+
+`resolve_scenario_name` — alias, or canonical, or error.
+
+`pick_one_auto` — 40/30/30 over the three pools.
+
+`pick_scenarios` — `auto` / `random` / empty → one auto draw. Else split, resolve, drop empties.
+
+`pick_scenario` — first of `pick_scenarios` (legacy single-name API).
+
+`compose_slug` — user order, `_` joined, truncated to 72 chars for folder names.
+
+`compose_display` — same for the log line.
+
+`is_noop` — `safe_walk` / `empty_street` (empty still sparsifies in `prepare_scenario`; the injector is a no-op).
+
+`scenario_request_from_tokens` — joins repeated `--scenario` and `--scenarios`.
+
+### 12.3 `FrenetCapsule`
+
+Axis-aligned rectangle in `(s, lateral)` that moves with the **same piecewise rates** as `Actor.update`. If the occupancy predictor disagrees with the integrator, compounds that looked free at inject time interpenetrate on camera. The closed form is therefore a contract:
+
+1. Along-track: \(s(t)=s_0 + (\mathrm{d}s/\mathrm{d}t)\,t\) until `turn_t`. After `turn_t`: \(s = s_0 + (\mathrm{d}s/\mathrm{d}t)\,t_{\mathrm{turn}} + v_{\mathrm{post}}(t-t_{\mathrm{turn}})\). The occupancy helper does **not** model the 0.85 s smoothstep — it snaps the rate at `turn_t`. That is slightly conservative (the real actor is still blending) and is accepted.
+2. Lateral: `_lat_after(lat0, target, speed, t)` integrates toward the target without overshoot, same as `Actor.update`. If `swerve_t` is set, lateral time is 0 until that instant, then `t - swerve_t`.
+3. After `turn_t`, lateral target becomes `post_lat_target` (else the original target) at `post_lat_speed`.
+
+`Placement` is the triple `(s, lat, lat_target)` returned to `_bind`. `_bind` may then overwrite the actor’s `lat_target` with the reserved one when occupancy flipped a crossing.
+
+### 12.4 `ComposeSession`
+
+Per-episode reservation board. Cost is \(O(n_{\mathrm{actors}}\times n_{\mathrm{samples}}\times n_{\mathrm{nudges}})\) **once**, not per frame. Defaults come from `cfg['scenarios']['compose']`.
+
+**Seeding.** `seed_from_actors` copies every background actor in \([s_0-2,\,s_{\mathrm{hi}}+4]\) as a capsule tagged `"background"`. Those capsules only block the **spawn cell** (`t=0`). A far-lane cruiser must not shove every jaywalker 10 m down the road.
+
+**Stagger, not N-body.** Before a handler even calls `reserve`:
+
+- `take_group_offset("cross"|"along"|"static")` adds \(n\times\) stride to the next member of that family (4.0 / 3.2 / 2.4 m). First member gets 0.
+- `take_cross_layout(from_left)` returns `(n * cross_stride, side)` and **alternates entry side** after the first crosser so two jaywalkers do not occupy the same ribbon cell from the same kerb.
+- `prefer_far_lane` sends a generic `car_approaching` / `car_pass_far` to the far lane when any through-crosser is in the mix. `NEAR_LANE_LOCKED` scenarios refuse that flip; they stagger `s` instead.
+
+**`reserve` search order** (keeps the intended depth band as long as possible):
+
+1. Requested `(s, lat)`.
+2. Heading flip: swap start/target if `allow_flip_lat` (through-crossers).
+3. Lane flip: `-lat` if `allow_lane_flip` (generic oncoming cars).
+4. Walk `+s` in `nudge_s` (2.6 m) steps, up to `max_nudges` (14).
+5. Short `−s` search (3 steps) so a crowded street can still place slightly closer.
+6. If nothing is free, **commit the original anyway**. Occupancy is best-effort. The corridor clamp still keeps everyone on the street. A hard failure here would drop a requested critical event, which is worse than a rare overlap.
+
+**Conflict test.** Two capsules conflict if at any sampled time their expanded rectangles overlap: `|Δs| < half_s1+half_s2+0.20` and `|Δlat| < half_lat1+half_lat2+0.18`. Sample times are `{0}` when either capsule is background or a static class; otherwise 5.0 s at 0.12 s (about 42 samples).
+
+There is **no** per-frame N-body. If you add a new motion mode to `Actor.update` (a second weave, a teleport, a speed ramp that is not `post_speed`), you must teach `FrenetCapsule.pose_at` the same thing or compounds will lie.
+
+`python scenario_compose.py` asserts aliases, extents for `threat_*`, inject priority, and a few reserve / flip cases.
+
+---
+
+## 13. `humanoid.py`
+
+Articulated pedestrian. Faces +Y, +Z up. Root = **pelvis** (that is `Actor.obj`). A rectangular torso has a constant silhouette under yaw — the detector then keys on that rectangle. This module exists so “person” is an articulated biped, not a 1.7 m box.
+
+### 13.1 Why these surfaces
+
+Drillis & Contini / NASA-STD-3000 fractions of stature \(H\). Barr superquadrics for head / pelvis / hands: \((e_1,e_2)=(1,1)\) is a sphere; `(0.5, 0.6)` is a rounded hip without a hard edge. Torso is a loft of elliptical stations. Limbs are tapered capsules along **local −Z**. Neck is a **+Z** column — a −Z capsule grows into the chest (pitfall #14). Shoes are a lofted last.
+
+`spawn_humanoid(..., child=False)` draws adult \(H\sim U(1.58,1.84)\) at chaos 0 and widens toward 1.15–2.05 m as chaos → 1, plus width/depth/hip scales. Proportions stay internally consistent (limbs remain fractions of \(H\)), so the Winter step length \(0.41H\) is still valid at every size.
+
+`child=True` (`child_darting`) switches to a ~7-year-old station set: \(H\sim U(1.10,1.32)\), head fraction 0.090 (adult 0.068), shorter legs. It does **not** uniformly scale an adult — that would keep adult limb ratios and look like a doll.
+
+Skin / hair tones are small palettes. Cloth goes through `make_patterned_cloth` so two pedestrians in one frame are not the same albedo.
+
+Returns `(pelvis_root, WalkRig, hip_height)`. `origin_z` on the Actor is the hip height so `ground_z + origin_z` puts feet on the slab.
+
+### 13.2 `WalkRig` (Winter 1991, reduced)
+
+Step length \(\ell\approx 0.41H\), \(f=|v|/\ell\), floored at 0.8 Hz. Phase \(\phi=2\pi f t+\phi_0\).
+
+| Joint | Law | Why |
 | --- | --- | --- |
-| `street` | 0.42 | Historical defaults: asphalt, kerb, buildings both sides. |
-| `avenue` | 0.18 | 13 m carriageway, taller facades, more traffic. |
-| `park` | 0.24 | 3 m gravel path on open grass, **no kerb / buildings / lane paint**, ego walks *on the path*, 10–26 instanced trees, dense grass clumps. TTC uses `planar=True`. |
-| `plaza` | 0.16 | Wide paved open space, buildings on one side, jittered paving slabs, few cars. TTC planar. |
+| Hip | \(A_{\mathrm{hip}}\sin(\phi+\{0,\pi\})\) | Opposite legs |
+| Knee | \(-A_{\mathrm{knee}}[\max(0,\sin(\phi+\alpha+\{0,\pi\}))]^p\) | Half-wave: no hyperextension |
+| Shoulder | \(-A_{\mathrm{arm}}\sin(\phi+\{0,\pi\})\) | Antiphase with **ipsilateral** hip (contralateral swing) |
+| Elbow | \(-A_{\mathrm{elb}}(0.40+0.60\,\mathrm{sw}_{\mathrm{opposite}})\) | Flexes with the opposite knee |
+| Ankle | \(A_{\mathrm{ank}}\sin(\phi+\beta)\) | Small; reads as push-off |
+| Pelvis list / pitch / yaw | after `look_along` | Heading is Euler Z; list/pitch are X/Y |
+| Thorax yaw | \(-0.65\times\) pelvic yaw | Reciprocal trunk rotation |
+| Bob | \(A_{\mathrm{bob}}|\sin\phi|\) added to pelvis Z | Two peaks per stride, always up at double support |
 
-**MeshLibrary.** Trees, grass clumps, and the seated bench share mesh datablocks (`bpy.data.objects.new(name, shared_mesh)`). Per-instance variety is scale + yaw. `lib.stats()` is printed per episode. Pedestrians stay unique meshes (articulated gait); crowds are 3–11 people, not thousands.
+Amplitudes (radians / metres): hip 0.40, knee 0.88, arm 0.44, elbow 0.38, ankle 0.22, list 0.055, pitch 0.035, yaw 0.070, bob 0.018. Knee phase 0.35, power 1.15.
 
-**Ground hazards.** Poisson mix of pothole (capped cylinder well), crater (procedural bowl), broken_slab (tilted paver), debris (multi-box pile), puddle (`make_water`, **not annotated** — a dark patch is not a hole). On-path injectors (`pothole_on_path` / `near` / `offset`) draw from that trip-hazard set.
+Idle / `stopped` / `|speed|<0.08`: all joint angles 0, pelvic X/Y 0, thorax yaw 0. Called **every** frame including 0, and **after** `look_along` (which zeroes Euler X/Y). Calling it before `look_along` silently discards list/pitch.
 
-**EEVEE (`configure_eevee`).** TAA **16** + reprojection, shadows on, volumetric shadows **off**, raytracing on, Fast GI on (4 rays, quality 0.30, 6 steps), `shadow_pool_size='2048'`, cascade max distance 48 m, `indirect_light_intensity=1.35`. All `setattr` calls are `hasattr`-guarded.
+Wheels on cars/bikes are not in this file. They live on `Actor.wheels` and roll \(\Delta\theta=-\Delta s/r\) about local +X. The bottom of a +X-axis wheel must move −Y (local) for +Y travel; the sign is easy to get backwards (the car then moonwalks).
 
-**Black-frame bug (Blender 5.x).** Default `scene.render.use_sequencer=True` and `use_compositing=True`. The default VSE has **zero strips**, so every still is the empty sequencer (pitch black) even when the 3-D view is fine. `prepare_still_render()` forces both flags **False** and is called from `configure_eevee` **and** immediately before every PNG. Video mux may turn the sequencer back on; stills must turn it off again.
+---
 
-**Engine picker.** On this 5.2 build `enum_items` for `render.engine` may list only `BLENDER_EEVEE`. Setting `BLENDER_EEVEE_NEXT` raises `TypeError`. Never hard-code Next.
+## 14. `materials.py`
 
-**Cleanup.** `release_episode()` unlinks every object, nulls Actor Python refs, then `bpy.data.orphans_purge(do_recursive=True)` in a loop. Without this a 2000-episode pack leaks every mesh and material.
+Procedural PBR. **Object** metres (UV-less cubes still get storeys). No image textures. Domain randomization lives here: the low-poly meshes are what they are; colour, roughness, window occupancy, and cloth patterns are what stop a detector from memorising “grey box = building”.
 
-**Scenario injectors** (after the camera rig exists, so `predict_*` is valid). `prepare_scenario` runs *before* `build()` so cross-street episodes open a building gap at \(s\in[4,20]\) m (compounds with two or more crossers use \([4,28]\) m) and `empty_street` drops background traffic. `empty_street` in a compound still sparsifies the street; the other names still inject.
+### 14.1 Blender 4/5 socket traps
 
-Crossers stay in Frenet \((s,\mathrm{lateral})\) on the pavement. A through-jaywalker enters one FOV edge and walks at \(1.0\)–\(1.35\) m/s all the way out the other. A turn-jaywalker blends heading with a 0.9 s smoothstep and then walks along the sidewalk toward or away from the camera. Background pedestrians get a Perlin lateral wander; vehicles a lighter one. `cyclist_weaving` / `car_erratic_swerve` use a phased sine, not noise, so the swing is guaranteed to reach the gait.
+These wasted real days and will waste yours:
 
-**Black-frame bug (Blender 5.x).** Default `scene.render.use_sequencer=True` and `use_compositing=True`. The default VSE has **zero strips**, so every still is the empty sequencer (pitch black) even when the 3-D view is fine. `prepare_still_render()` forces both flags **False** and is called from `configure_eevee` **and** immediately before every PNG. Video mux may turn the sequencer back on; stills must turn it off again.
+- `ShaderNodeMix` has stacked sockets that **share a name**. `inputs["A"]` is the **float**, not the colour. A facade that silently mixes two greys is this bug.
+- Noise Texture outputs **`Factor`**, not `Fac` (the 2.7 name).
+- Math nodes have two sockets named `Value`. Night-window strength uses `_math_in(node, 1)` (the second operand).
+- Helpers `_input` / `_output` / `_link` / `_link_to` pick by `(name, type, enabled)` and skip disabled sockets. **Always** use them. Never `node.inputs["A"]` or `noise.outputs["Fac"]`.
 
-**Engine picker.** On this 5.2 build `enum_items` for `render.engine` may list only `BLENDER_EEVEE`. Setting `BLENDER_EEVEE_NEXT` raises `TypeError`. Never hard-code Next.
+`_new_mat` builds a material with nodes, returns `(mat, tree, output, bsdf)`. `_object_coords` is a Texture Coordinate → Mapping chain in object metres. `_mix_rgba` is a Mix node forced to RGBA. `_bump_from` wires a height into the BSDF normal.
 
-**Scenario injectors** (after the camera rig exists, so `predict_*` is valid). `prepare_scenario` runs *before* `build()` so cross-street episodes open a building gap at \(s\in[4,20]\) m (compounds with two or more crossers use \([4,28]\) m) and `empty_street` drops background traffic. `empty_street` in a compound still sparsifies the street; the other names still inject.
+### 14.2 Factories and why each exists
 
-Crossers stay in Frenet \((s,\mathrm{lateral})\) on the pavement. A through-jaywalker enters one FOV edge and walks at \(1.0\)–\(1.35\) m/s all the way out the other. A turn-jaywalker blends heading with a 0.9 s smoothstep and then walks along the sidewalk toward or away from the camera.
+| Factory | Used on | Notable law |
+| --- | --- | --- |
+| `make_asphalt` | Street carriageway | Voronoi + noise; not a flat grey |
+| `make_concrete_tiles` | Sidewalk, park path | Object-space brick; `tile_m` randomised |
+| `make_grass` | Verge ribbons | Green noise, high roughness |
+| `make_facade` | Buildings | Object-normal window lattice + **per-cell occupancy hash**, not smooth noise. After `look_along`, world \(\hat{x}\) is not the street face — object normals are. Night: emissive cells. Smooth noise made whole floors glow as one smear |
+| `make_car_paint` / `make_chaos_car_paint` | Vehicles | Clearcoat; chaos flakes / hue |
+| `make_glass` | Car windows | Transmission, slight tint |
+| `make_skin` | Humanoid | SSS-ish principled, not plastic |
+| `make_cloth` / `make_patterned_cloth` | Garments | Chaos picks stripes / checks / noise |
+| `make_water` | Puddles | Transmission + ripple normal |
+| `make_foliage` / `make_bark` | Trees | Two-sided-ish leaf, rough bark |
+| `make_canopy_gobo` | Overhead dapple sheet | Alpha-hashed; shadow only |
+| `make_emissive` | Lamp bulbs, night windows | Strength in W-ish EEVEE units |
+| `make_roof` / `make_rubber` / `make_simple` / `make_metal_paint` | Roofs, tyres, poles | One-layer principled |
+| `make_chaos_surface` | Threat shapes | Roughness + hue wander so “orange cube” is not a class cue |
+
+### 14.3 Chaos dial
+
+`chaos ∈ [0,1]` interpolates tame → anarchy. CLI `--chaos` locks `material_chaos` to `(c,c)` for every episode; else each episode draws \(U(0.20,1.00)\).
+
+`pick_family` — weighted cloth/paint family as chaos rises (more patterns, more hue).
+
+`chaos_albedo(rng, base, amount, family)` — HSV jitter. `amount` is often `chaos * 0.45` for roads (a magenta street is allowed at 1.0 but not forced at 0.2).
+
+`apply_surface_chaos` — extra noise / roughness on an existing BSDF.
+
+`--chaos 0` is the pre-chaos pipeline: useful as an ablation (“did the detector need anarchy, or was the geometry enough?”).
+
+---
+
+## 15. Injector catalog
+
+`prepare_scenario` runs **before** `build()` so gaps exist in the mesh. Injection runs **after** the rig exists so `predict_*` / `_cam_s` match the episode that will actually play.
+
+CPA targets: near-miss **1.0 m**, critical **0.12 m** (`near_miss_cpa_target` / `critical_cpa_target`). Those are lateral offsets of the gait line, not the point-mass CPA the annotator will later compute — but under constant Frenet rates they agree to centimetres.
+
+### 15.1 Shared placement laws
+
+**Oncoming** (`_inject_oncoming`, also cars via `_inject_car_lane`):
+
+\[
+s = s_0 + \max(v_{\mathrm{ego}}+v_{\mathrm{obj}},\,v_{\mathrm{obj}})\,\tau
+\]
+
+Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seated: spawn at \(v_{\mathrm{obj}}\tau\), not on the HMD. Compose adds `along_stride / v_close` to \(\tau\) for extra along-track members.
+
+**Through-cross** (`_inject_through_cross`):
+
+- Depth \(d\) from a small FOV/speed formula, clamped to [3.8, 7] m, plus 1.1× extra for larger CPA, plus compose cross-stride (cap 16 m).
+- `lat_start` / `lat_end` are the FOV edges at that depth, clamped to the corridor. The path is **edge-to-edge**, not a 2 m shuffle that dies in the middle of the road.
+- `speed=0`, `lat_speed=walk`, `lat_target=lat_end`. CPA is the graze of the gait line as they pass \(L\).
+
+**Turn** (`_inject_jaywalk_turn`): side entry, merge onto \(L\pm\mathrm{cpa}\), then `turn_t ≈ t_{\mathrm{arrive}}-0.40` blends into `post_speed` (negative = toward camera, positive = same way and pulling away).
+
+**Static on gait** (`_inject_static_shapes`, `_inject_pothole` with `dlat=0`): lead 5.4–7.8 m so a 50–90° HFOV still sees the object in the lower third. 4.2 m sat below a typical walking VFOV at 1.6 m eye height — that is why the pothole leads live in config.
+
+**Cut-in / swerve** (`_inject_cut_in`): near-lane car, `swerve_t` = 1.2 s (cut-in) or 1.8 s (swerve), then `lat_target` = gait ± cpa. Occupancy is `NEAR_LANE_LOCKED`.
+
+**Weave** (`_inject_weaving`): `weave_amp` / `weave_hz` on the Actor. Deterministic sine, **not** fBm — the injector aims the swing at the walker’s line. Amplitude is exactly `weave_amp`.
+
+### 15.2 One row per named scenario
 
 | Name | Bucket | Mechanism |
 | --- | --- | --- |
-| `safe_walk` | 40 % | Background only. |
-| `empty_street` | 40 % | No background peds/cars; almost no clutter. |
-| `oncoming_pedestrian` | 40 % | Opposite sidewalk, walking speed, CPA \(\approx 2\|L\|\). |
-| `parallel_pedestrian` | 40 % | Same direction, ~0.8 m toward the curb. |
-| `cyclist_same_way` | 40 % | Bicycle in the far lane, same way. |
-| `car_pass_far` / `car_approaching` | 40 % | Oncoming car, far vs near lane (CPA stays large). |
-| `distant_jaywalk` | 40 % | Person crossing ~16 m ahead. |
-| `pothole_offset` / `parked_car_opposite` | 40 % | Static miss. |
-| `near_miss_pass` | 30 % | Oncoming ped on the sidewalk, \(D_{\mathrm{cpa}}\approx 1.0\) m, walking speed. |
-| `jaywalker` | 30 % critical | Walks in from one FOV edge and **all the way out the other** at \(1.0\)–\(1.35\) m/s. |
-| `jaywalker_offset`, `jaywalker_from_left/right` | 30 % | Same through-cut, timed as a graze. |
-| `jaywalker_turn_toward` | critical | Side entry, then a ~0.9 s smoothstep turn onto the gait **toward** the camera. |
-| `jaywalker_turn_away` | 30 % | Same entry, then turn onto the sidewalk **with** the ego (ahead). |
-| `cyclist_near_miss` / `car_near_miss_lane` / `cube_near_miss` | 30 % | Oncoming, CPA 1.0 m. |
-| `car_cross_front` | 30 % | Car rolls left↔right across the ribbon in front of you, CPA 1.0 m. |
-| `pothole_near` | 30 % | Pothole ~0.85 m off the gait line. |
-| `sudden_stop` | critical | Ped 3 m ahead, same speed, `stop_t=1.6` s. |
-| `swerve_vehicle` / `car_cut_in` | critical | Oncoming near-lane car, then Frenet drift onto the sidewalk. |
-| `pothole_on_path` | critical | Pothole on the gait line. |
-| `cube_head_on`, `cube_from_left/right` | critical | Generic cube, along-track or lateral. |
-| `cyclist_head_on` | critical | Bicycle on the gait line, toward camera. |
-| `head_level_projectile` | critical | Eye-height `threat_cube` along the street (~3.6 m/s, \(\tau=1.8\) s). |
-| `car_cross_critical` | critical | L→R car, CPA 0.12 m. |
-| `cyclist_weaving` | 30 % | Oncoming bicycle, phased sine weave across the gait. |
-| `car_erratic_swerve` | critical | Oncoming car, violent sine weave onto the pavement. |
-| `car_runs_off_road` | critical | Vehicle leaves the carriageway and mounts the walker's side. |
-| `child_darting` | critical | Child anthropometry (~1.1–1.3 m, larger head fraction), 1.9–3.1 m/s lateral dart. |
+| `safe_walk` | safe | Background only. Injector is a no-op. |
+| `empty_street` | safe | `prepare_scenario` zeroes background peds/cars and most clutter. Injector no-op. |
+| `oncoming_pedestrian` | safe | Opposite sidewalk (`dlat="opposite"`), 0.95–1.30 m/s, \(\tau=3.0\). CPA stays large. |
+| `parallel_pedestrian` | safe | Same way, +0.80 m toward the curb, 4 m ahead, ego speed. |
+| `cyclist_same_way` | safe | Far lane, same way, bike speed, 7 m ahead. |
+| `car_pass_far` | safe | Oncoming, far lane, 5.5–8.0 m/s, \(\tau=3.2\). |
+| `car_approaching` | safe | Oncoming, near lane unless a through-crosser is present (then far). 5.0–7.0 m/s, \(\tau=3.0\). CPA still > 1.5 m because the lane offset is ~1.75 m. |
+| `distant_jaywalk` | safe | Crossing ~16 m ahead, not a hit. |
+| `pothole_offset` | safe | Hole / crater / slab / debris at `dlat=1.80`, lead 8.0 m. |
+| `parked_car_opposite` | safe | Static vehicle, far lane, 9 m ahead. |
+| `near_miss_pass` | near | Oncoming ped, `dlat=1.0`, \(\tau=2.8\). |
+| `jaywalker_offset` | near | Through-cross, CPA 1.0, from left. |
+| `jaywalker_from_left` / `_right` | near | Through-cross, CPA 1.0, forced side. |
+| `jaywalker_turn_away` | near | Side entry, merge off the gait, then walk the same way. |
+| `cyclist_near_miss` | near | Oncoming bike, `dlat=1.0`, \(\tau=2.5`. |
+| `car_near_miss_lane` | near | Oncoming car, `dlat=1.0`, \(\tau=2.8\), pad 1.05, **near lane locked**. |
+| `car_cross_front` | near | Through-cross vehicle, CPA 1.0, random side, 3.2–4.8 m/s. |
+| `cube_near_miss` / `shape_near_miss` | near | Oncoming primitive, `dlat=1.0`, \(\tau=2.6\), size ~0.35–0.65 m. |
+| `pothole_near` | near | Hole at `dlat=0.85`, lead 7.2 m. Shin-graze, not a trip. |
+| `cyclist_weaving` | near | Near-lane bike, sine 0.9–1.9 m @ 0.28–0.62 Hz. |
+| `jaywalker` | critical | Through-cross person, CPA 0.12, random side. |
+| `jaywalker_turn_toward` | critical | Side entry, then oncoming on the gait. |
+| `sudden_stop` | critical | Ped 3 m ahead (`sudden_stop_lead_m`), `stop_t=1.6` s. Walker closes on a now-static body. |
+| `swerve_vehicle` | critical | Near-lane car, `swerve_t=1.8`, then drift onto gait, CPA 0.12, \(v=5.5\), \(t_{\mathrm{hit}}=3.4\). |
+| `car_cut_in` | critical | Same family, `swerve_t=1.2`, \(v=6.2\), \(t_{\mathrm{hit}}=2.9\). |
+| `pothole_on_path` | critical | On-gait hole, lead 7.8 m, `dlat=0`. |
+| `cube_on_path` | critical | One static cube on the gait. |
+| `shapes_on_path` | critical | 2–4 mixed static primitives on the gait, 2.55 m apart. |
+| `cube_head_on` / `shape_head_on` | critical | Oncoming primitive, `dlat=0.12`, \(\tau=2.4\). |
+| `cube_from_left` / `_right` / `shape_from_*` | critical | Through-cross primitive, CPA 0.12. |
+| `cyclist_head_on` | critical | Oncoming bike on the gait, \(\tau=2.3\). |
+| `head_level_projectile` | critical | Eye-height cube, 3.6 m/s, \(\tau=1.8\) (`_inject_head_cube`). |
+| `car_cross_critical` | critical | Through-cross vehicle, CPA 0.12. |
+| `car_erratic_swerve` | critical | Near-lane car, weave 1.0–2.2 m @ 0.18–0.40 Hz. |
+| `car_runs_off_road` | critical | Car in the near lane, then `turn_t` mounts the walker’s sidewalk (`_inject_run_off_road`). |
+| `child_darting` | critical | `spawn_humanoid(child=True)`, 1.9–3.1 m/s lateral dart through the gait. |
 
-`pick_scenarios`: `auto` draws 40 / 30 / 30 then a name from that pool. A comma- or plus-separated list (or repeated `--scenario`) resolves each token and injects **all** of them into one episode. Aliases: `safe`→`safe_walk`, `near_miss`→`near_miss_pass`, `critical`→random from the critical pool, `jaywalk`/`jaywalker`→`jaywalker`, `turn_toward` / `turn_away`, `empty`→`empty_street`, `projectile`→`head_level_projectile`, plus compound shorts `car`→`car_approaching`, `pothole`→`pothole_on_path`, `person`→`oncoming_pedestrian`, `cyclist`→`cyclist_same_way`, `cube`→`cube_near_miss`, `parked`→`parked_car_opposite`, `cut_in`→`car_cut_in`. See §6.5.1.
+Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car.
 
-Horizontal FOV is drawn per episode from `camera.hfov_deg_range` (50°–90°) unless `--hfov` / `--lens-mm` / `--no-random-fov` locks it. Written to `episode.json` and every frame’s `camera_data`.
+### 15.3 Worked inject: `jaywalker` + `car_approaching` + `pothole`
 
-### 6.5.1 Compound scenarios
+1. `prepare_scenario` sees a `CROSS_GAP` name → building gap `[4,20]` (only one crosser).
+2. `sort_for_inject` → `pothole_on_path` (pri 0), `car_approaching` (10), `jaywalker` (20).
+3. Pothole: lead 7.8 m on the gait, reserved as static (blocks spawn cell only).
+4. Car: `prefer_far_lane` is True because a through-crosser is in the mix → far lane, \(\tau=3.0\). `reserve` may nudge +2.6 m if a background car sits there.
+5. Jaywalker: `take_cross_layout` (first crosser, no extra depth), through-cross at ~5 m, CPA 0.12. Static hole does not push them down the road. Far-lane car’s 5 s tube is not tested against them (background-style? No — the **injected** car is tagged with `current_key`, not `"background"`, so the full tube **is** tested). If the tubes overlap, the jaywalker is nudged +2.6 m or flipped.
 
-One episode can run several injectors at once, e.g. a jaywalker, an oncoming car, and a pothole sharing the same street.
+That last point is why injection order is static → along → lateral: the expensive lateral actor searches against already-committed tubes.
 
-**CLI** (all equivalent):
+---
 
-```bash
-./run.sh --episodes 1 --scenario jaywalker,car,pothole --media both
-./run.sh --episodes 1 --scenarios jaywalker+car_approaching+pothole_on_path
-./run.sh --episodes 1 --scenario jaywalker --scenario car --scenario pothole
-```
+## 16. `spatial_threat.py` (no `bpy`)
 
-`--scenario` is repeatable (`action=append`). Tokens split on `,`, `+`, or whitespace. `--scenarios` is joined with `--scenario` if both are set. `--scenario auto` is unchanged (one random injector). A lone `auto` inside a list is itself a random draw (`pothole,auto` = pothole plus one extra event).
+A cell is hot when the walker would **collide** with (or step into) the object: body-aware path occupancy, not a point-mass CPA. Ego motion for this score is **sidewalk tangent × walk speed**, not the jittered eye, so a pothole on the gait does not flicker as the head bobs.
 
-**Architecture.** `pick_scenarios` returns the canonical name list (user order). `prepare_scenario(names)` unions geometry flags. `inject_scenarios` sorts a **copy** for spawn order (static hazards → along-track movers → lateral crossers) but the folder slug and `episode.json` keep user order: `jaywalker__car_approaching__pothole_on_path`.
+`k` is **only** `--threat-grid`. It is not a config key. Changing it does not require a rebuild of anything else.
 
-`ComposeSession` (`scenario_compose.py`) is the occupancy board. It is created once per episode, after the camera rig exists and **before** the two-phase sim/render loop. It does not add per-frame work.
+### 16.1 Score knobs (not CLI)
 
-**Spatial math.** Every actor is a Frenet capsule — an axis-aligned rectangle in \((s,\mathrm{lateral})\) with class half-extents (person \(0.70\times 0.42\) m, vehicle \(2.45\times 1.05\) m, pothole \(0.90\times 0.55\) m, …). The capsule moves with the same piecewise rates as `Actor.update`: constant \(\mathrm{d}s/\mathrm{d}t\), lateral approach to `lat_target`, optional `swerve_t` delay, optional turn onto `post_speed`. Overlap is sampled at \(\Delta t=0.12\) s over a 5 s horizon (about 42 poses; a few dozen capsules; microseconds).
-
-Placement, in order:
-
-1. Seed capsules from background traffic already in the camera band \([s_0-2, s_{\mathrm{hi}}]\), so an injected car is not born inside a Poisson vehicle. Background **and ground hazards** only block the **spawn cell** (\(t=0\)): a far-lane cruiser must not shove a jaywalker 15 m down the road, and walking past a pothole is allowed. Injected *dynamic* actors still test full 5 s tubes against each other.
-2. Stagger groups: extra crossers \(+4\) m of depth and alternate `from_left`; extra along-track actors \(+3.2\) m (or the equivalent \(\tau\)); extra potholes \(+2.4\) m.
-3. Lane policy: a generic `car_approaching` in a scene that also has a through-crosser is sent to the **far** lane. Cut-in / swerve / `car_near_miss_lane` keep the near lane (their point) and rely on occupancy.
-4. `ComposeSession.reserve` tries, at inject time: requested \((s,\mathrm{lat})\), then a heading or lane flip at that \(s\), then \(+2.6\) m along-track nudges, then a short \(-s\) search. The first conflict-free tube is committed. `_bind` (and `_inject_pothole`) call this after corridor confine; world \(Z\) is still `origin_z + corridor.ground_z(lateral)`.
-5. Crossers are clamped so depth \(\le 16\) m, which stays inside the building gap.
-
-There is **no** per-frame steering. That would fight the gait integrator and the pose-replay render. Separation is a setup-time reservation so predicted tubes do not share a cell; the existing corridor clamp still prevents leaving the street.
-
-**Why this avoids clipping.** A through-jaywalker occupies every lane at one \(s\). An oncoming car will pass that \(s\). The only safe degree of freedom is *when* they meet (nudge \(s\) / \(\tau\)) and *where laterally* the jaywalker is at that instant (flip entry side, or put the car in the far lane so the meeting happens while the person is still on the near sidewalk). Static potholes claim the gait cell first so a `sudden_stop` ped is pushed further along the walk. Two jaywalkers get opposite `from_left` and \(4\) m of depth so they do not share a crossing line.
-
-Folder name uses `__` between components (filesystem-safe). Manifest:
-
-```json
-{
-  "scenario": "jaywalker__car_approaching__pothole_on_path",
-  "scenarios": ["jaywalker", "car_approaching", "pothole_on_path"],
-  "scenario_requested": "jaywalker,car,pothole"
-}
-```
-
-Knobs live under `config["scenarios"]["compose"]` (`cross_stride_m`, `nudge_s_m`, `dt_sample`, `look_ahead_m`, …). `python scenario_compose.py` runs the occupancy self-test (no Blender).
-
-### 6.6 `humanoid.py`
-
-Replaces the original box-person. Character faces **+Y**, +Z up.
-
-**Anthropometry** (Drillis & Contini / NASA-STD-3000) as fractions of stature \(H\sim U(1.58, 1.84)\):
-
-| Segment | Fraction of \(H\) |
-| --- | --- |
-| Head (radius) | 0.068 |
-| Neck | 0.048 |
-| Torso height | 0.300 |
-| Pelvis height | 0.100 |
-| Thigh / shank | 0.245 / 0.246 |
-| Foot length | 0.152 |
-| Upper arm / forearm | 0.186 / 0.146 |
-| Biacromial / bi-hip | 0.259 / 0.191 |
-
-Body-type scales: width \(U(0.88,1.16)\), depth \(U(0.90,1.12)\), hip \(U(0.92,1.18)\).
-
-**Meshes**
-
-- **Barr superquadric** (head, pelvis, hands), \(u\in[0,2\pi]\), \(v\in[-\pi/2,\pi/2]\):
-
-\[
-x=a\,|\cos v|^{e_1}|\cos u|^{e_2}\mathrm{sgn},\quad
-y=b\,|\cos v|^{e_1}|\sin u|^{e_2}\mathrm{sgn},\quad
-z=c\,|\sin v|^{e_1}\mathrm{sgn}
-\]
-
-  \((e_1,e_2)=(1,1)\) is a sphere; \(\sim(0.55,0.65)\) is a rounded box.
-
-- **Torso loft.** Elliptical rings, half-width / half-depth from smoothstepped stations (waist → chest → axilla → neck). Sagittal offset \(H(0.014\sin(\pi u)-0.009\sin(2\pi u))\) mimics lumbar lordosis / thoracic kyphosis. Back half of the ellipse is slightly flattened.
-- **Capsule limbs** along \(-\mathrm{Z}\), origin at the proximal joint. Radius \(\mathrm{lerp}(r_0,r_1,t)\cdot(1+b\sin(\pi t))\), distal hemisphere. Belly \(b\sim 0.06\)–\(0.12\).
-- **Neck** is a short +Z column (a \(-\mathrm{Z}\) capsule would grow into the chest).
-- **Foot** is a tapered shoe loft, heel behind the ankle, toes +Y.
-- Deltoid spheres, ears, hair cap. All parts `use_smooth`.
-
-**Walk cycle (Winter 1991, reduced).** Step length \(\ell\approx 0.41 H\) (Grieve & Gear). \(f=|v|/\ell\), \(\varphi=2\pi f t+\varphi_0\).
-
-\[
-\begin{aligned}
-\theta_{\mathrm{hip},L/R}&=A_{\mathrm{hip}}\sin(\varphi+\{0,\pi\})\\
-\theta_{\mathrm{knee},L/R}&=-A_{\mathrm{knee}}[\max(0,\sin(\varphi+\alpha+\{0,\pi\}))]^{p}\\
-\theta_{\mathrm{sh},L/R}&=-A_{\mathrm{arm}}\sin(\varphi+\{0,\pi\})\\
-\theta_{\mathrm{ank},L/R}&=A_{\mathrm{ank}}\sin(\varphi+\beta+\{0,\pi\})
-\end{aligned}
-\]
-
-Knees never hyperextend (half-wave). Arms antiphase with the ipsilateral hip. After `look_along` (which owns heading Z):
-
-- pelvic pitch \(A\sin 2\varphi\), list \(A\sin\varphi\), yaw added on Z, bob \(A_{\mathrm{bob}}|\sin\varphi|\) on location Z
-- thorax yaw \(=-0.65\times\) pelvic yaw
-
-Idle / stopped: zeros the pose. `Actor.update` calls `WalkRig.apply` every frame, including frame 0.
-
-Root object is the **pelvis**. 2-D boxes union all mesh children.
-
-### 6.7 `materials.py`
-
-Procedural PBR, **no image textures**. Sample **Object** coordinates (local metres) so a UV-less building cube still gets storeys.
-
-**Blender 4+/5 Mix node trap.** `ShaderNodeMix` has stacked sockets that share a name: `A` is a float *and* a colour. `node.inputs["A"]` is the **float**. `ShaderNodeTexNoise` outputs **`Factor`**, not `Fac`. The first realism pass wrote every layered mix to the wrong socket, so asphalt / cloth / tiles collapsed to a constant albedo. Helpers `_input` / `_output` / `_link` / `_link_to` pick by `(name, type, enabled)`.
-
-Math nodes have two sockets named `Value`. Night-window occupancy and roughness use explicit index linking (`_math_in(node, 1)`).
-
-| Factory | Idea |
-| --- | --- |
-| `make_asphalt` | Voronoi stones + 1/f noise. Roughness anticorrelated with albedo (oil-dark cells are glossier). Bump from noise. |
-| `make_concrete_tiles` | Brick lattice, period 0.40 m, dark grout, invert-Fac bump. |
-| `make_grass` | Two-tone noise + strong micro-bump. |
-| `make_facade` | Rectangular window pulse train on YZ (±X faces) and XZ (±Y faces), blended by \(\lvert N_x\rvert/(\lvert N_x\rvert+\lvert N_y\rvert)\) in **object** normals (world normals break after `look_along`). Night occupancy is a **per-cell hash** \(\mathrm{fract}(\sin(i\cdot 12.9898+j\cdot 78.233+s)\cdot 43758.5453)\), **not** smooth Noise (smooth noise painted leopard-print emission). Emission goes into Principled `Emission Color/Strength` (no Mix Shader). |
-| `make_car_paint` | Metallic + clear coat + slight flake noise. |
-| `make_glass` | Transmission 0.82, alpha 0.62, blend method HASH/BLEND if present. |
-| `make_skin` | SSS (radius 1.0, 0.35, 0.18) + fine noise + tiny bump. |
-| `make_cloth` | 1/f weave + sheen. |
-| `make_patterned_cloth` | Chaos print: stripe / checker / camo / dots / magic / noise. Two independent family colours. |
-| `make_chaos_car_paint` | Factory metallic, matte wrap, chrome, or neon + flake noise. |
-| `make_water` | Near-mirror roughness ramp + mild transmission. EEVEE SSR puddles. |
-| `make_foliage` / `make_bark` / `make_canopy_gobo` | Tree canopy / trunk / overhead dappled-shadow sheet. |
-| `make_emissive` / `make_roof` / `make_rubber` / `make_simple` | As named. |
-
-**Appearance chaos.** `chaos ∈ [0,1]` interpolates between the original tame palette and full anarchy. Families: natural, saturated, neon, chrome, matte, pastel, dark. `apply_surface_chaos` randomises metallic, roughness, coat, sheen, IOR, and (neon) emission. CLI `--chaos` locks the dial; otherwise each episode draws from `material_chaos` (0.20–1.00).
-
-### 6.8 `main.py`
-
-CLI (after `--`):
-
-| Flag | Default | Meaning |
+| Symbol | Value | Role |
 | --- | --- | --- |
-| `--episodes` | 4 | How many episodes this process |
-| `--start-episode` | *next free* | First episode index. Omitted ⇒ one past the highest `episode_*` already on disk. |
-| `--scenario` | `auto` | Injector name, alias, or compound (`jaywalker,car,pothole`). Repeatable. `--list-scenarios` prints the 36 names plus shorts. |
-| `--scenarios` | *unset* | Same as `--scenario`; comma or plus separated. Joined with `--scenario` if both are set. |
-| `--hfov` | *unset* | Lock horizontal FOV (degrees) for every episode. |
-| `--lens-mm` | *unset* | Lock focal length; ignored if `--hfov` is set. |
-| `--no-random-fov` | off | Use config `lens_mm` instead of drawing from `hfov_deg_range`. |
-| `--output` | `config.output.root` (`./output`) | Dataset root |
-| `--seed` | 42 | Master RNG |
-| `--frames` | 0 | Override `frames_per_episode` (0 = use config) |
-| `--media` | config (`both`) | `frames` \| `video` \| `both` |
-| `--no-rgb` | off | Delete `rgb/` after `preview.mp4` (and overlay) succeed. Same keep-policy as `--media video`. |
-| `--no-render` | off | JSON only |
-| `--no-annotations` | off | Skip `annotations/annotations.json`. Spatial matrices still written. |
-| `--no-occlusion` | off | Skip raycast flag |
-| `--threat-grid` | 3 | `k` for the episode `k×k` spatial matrices (`spatial_annotations/`). Always written. CLI only. |
-| `--spatial-overlay` | off | Write `spatial_overlay.mp4`: hazy RGB + k×k heat (blue=0, red=1). Needs a render. |
-| `--plan` | *unset* | JSON from `gen_dataset.py`: per-episode `scenario` list. Overrides `--scenario`. |
-| `--biome` | `auto` | `street` \| `avenue` \| `park` \| `plaza` \| `auto`. |
-| `--ego-mode` / `--ego` | `auto` | `walk` \| `diagonal_cross` \| `erratic` \| `seated` \| `auto`. |
-| `--chaos` | *unset* | Lock appearance chaos in \([0,1]\). Unset ⇒ per-episode draw from `material_chaos`. |
-| `--no-trees` | off | Skip procedural trees and grass clumps. |
+| `EGO_HALF_M` | 0.30 m | Shoulder half-width + sway |
+| `REACT_S` | 2.2 s | Time the walker still occupies if they keep going |
+| `REACT_BUF_M` | 0.55 m | Extra length of the stopping rectangle |
+| `HIT_FLOOR` | 0.58 | Definite collision maps to at least this before urgency |
+| `LAMBDA_V` | 0.22 | Urgency vs closing speed |
+| `LAMBDA_T` | 1.25 | Urgency vs time-to-hit |
+| `ADJ_PEAK` | 0.50 | Cap of the adjacent-lane term |
+| `ADJ_LANE_M` | 1.70 m | Preferred neighbour offset |
+| `CPA_SOFT_M` | 0.42 m | Softness of the planar CPA bump |
+| `CLOSE_GATE_MPS` | 0.30 | Closing rate at which the swept-volume term reaches full weight |
+| `BLEED_CELLS` | 0.55 | Gaussian extra width in grid-cell units |
+| `BLEED_WEIGHT_MIN` | 0.02 | Discard bleed below this |
 
-Per-frame JSON schema (Part 6.1):
+### 16.2 Frenet of one object
+
+\(\hat{s}\) = horizontal heading (camera tangent). \(\hat{r}=\hat{s}\times\hat{z}\) (via `heading_frame`).
+
+\[
+s=(P_{\mathrm{obj}}-P_{\mathrm{cam}})_{xy}\cdot\hat{s},\qquad
+\ell=(P_{\mathrm{obj}}-P_{\mathrm{cam}})_{xy}\cdot\hat{r}
+\]
+
+If the actor is on the same spline as the camera (or is static), `build_frame_record` passes `path_s = actor.s - cam.arc_length` and `path_lat = actor.lateral - cam.lateral` instead. That is the **ribbon** distance, not the chord, and it is what you want on a `corner_90`.
+
+Object half-extents come from `horizontal_extents(threat_corners, heading)` — projected AABB onto \(\hat{s},\hat{r}\), floored at 0.12 m. Trees use trunk corners here.
+
+\(v_s,v_\ell\) = object velocity in that frame. \(v_{\mathrm{close}}=v_{\mathrm{ego}}-v_s\) (>0 if the gap in \(s\) is shrinking). \(R=r_{\mathrm{ego}}+r_{\mathrm{obj,lat}}\).
+
+Already behind and not closing (`s < -(r_long+0.6)` and `v_close ≤ 0.05`) → score 0. Cheap reject for the crowd behind the camera.
+
+### 16.3 Four ways to hit, then a neighbour term
+
+\[
+W=\max(W_{\mathrm{stop}},W_{\mathrm{path}},W_{\mathrm{cross}},W_{\mathrm{cpa}})
+\]
+
+1. **Stopping volume.** Disk of the object vs the forward rectangle of length \(v_{\mathrm{ego}}T_{\mathrm{react}}+d_{\mathrm{buf}}\) and half-width \(R\). Soft edges (`_soft_unit`). Gated by \(v_{\mathrm{close}}/0.30\). A jaywalker filling the frame at 2 m is inside this box even if a point-mass CPA says they will have stepped aside. A bollard in front of a **seated** walker is not — the walker sweeps nothing.
+
+2. **Guaranteed path hit.** They occupy the gait tube now and \(t_{\mathrm{leave}}>t_{\mathrm{arrive}}\). Static hole: \(t_{\mathrm{leave}}=\infty\). Independent of camera bob. **`inf - inf` is NaN** — if `t_arr` is non-finite, `w_path=0` (we never get there); if `t_leave` is inf and `t_arr` is finite, `w_path=1`. Never subtract two infinities.
+
+3. **Crossing intercept.** They *enter* the tube at `t_in` (`_time_to_enter`) and are still at the walker’s \(s\) then. Gaussian on the along-track gap, exponential decay in `t_in`. Oncoming car, late cut-in.
+
+4. **Body-aware planar CPA.** Relative velocity in the ground plane, \(t^*=-(p\cdot v)/\|v\|^2\), clearance = miss − \(R\), \(W_{\mathrm{cpa}}=\exp(-(d_{\mathrm{clear}}/0.42)^2)\). `\|v\|~0` → no approach to solve; proximity alone is not a CPA.
+
+Urgency:
+
+\[
+U=1-\exp(-\lambda_v\max(v_{\mathrm{close}},0)-\lambda_t/\max(t_{\mathrm{hit}},0.08))
+\]
+
+\[
+S_{\mathrm{hit}}=W\,(0.58+0.42\,U)
+\]
+
+**Adjacent high speed** (not a hit): mid-band, peak 0.50, only if `lat_gap>0.05`. A fast neighbour that will miss.
+
+Return \(\mathrm{clamp}_{01}(S_{\mathrm{hit}}+(1-W)S_{\mathrm{adj}})\). `_clamp01` maps NaN → 0 so a bad frame cannot write the JSON token `NaN`.
+
+Stationary ego: arrival times divide by **closing** rate \(v_{\mathrm{ego}}-v_s\), never by \(v_{\mathrm{ego}}\). A car driving at a seated walker still produces a time-to-hit. Every division is floored.
+
+### 16.4 Splat
+
+`splat_object` scores, then `splat_bbox` paints the 2-D box’s cells. Occupied cells (pixel overlap > 1.5 px in both axes) keep the full score. Neighbours get a size-aware Gaussian (`σ = half_box + 0.55·cell`). Per-cell **max** — two hazards in one cell do not add to 1.8.
+
+Row 0 = **top** of the image (same as `bounding_box_2d`).
+
+`empty_grid` / `finalize_grid` / `frame_spatial_entry` / `episode_spatial_payload` are the JSON helpers. Spatial JSON is **always** written, even with `--no-annotations`.
+
+`python spatial_threat.py` self-tests seated, static-on-gait, adjacent miss, NaN guards, and splat monotonicity.
+
+---
+
+## 17. `spatial_overlay.py` (no `bpy`)
+
+Debug movie, not a training product. `write_heat_sequence` writes one PPM per frame (blue → red via `threat_to_rgb`). `overlay_filter_complex` is an ffmpeg graph: hazy RGB + the heat cells + per-cell score text. Cell size is a constant (`CELL_W`/`CELL_H`) so a 3×3 and a 5×5 stay readable.
+
+`main.encode_spatial_overlay_video` writes PPMs under `spatial_annotations/_heat/`, muxes `spatial_overlay.mp4`, then deletes `_heat`. Requires a render (`--no-render` prints a skip). Mux failure keeps `rgb/` so the episode is still inspectable.
+
+`python spatial_overlay.py` writes a tiny PPM and checks the filter string contains `geq` / overlay nodes.
+
+---
+
+## 18. `gen_dataset.py` (system Python)
+
+Does **not** import `bpy`. Builds a balanced scenario list, writes `datasets/pack_*/pack.json` + `plan.json`, then `exec`s `./run.sh --plan …` with the flags you passed through (`--media`, `--spatial-overlay`, `--no-render`, …).
+
+### 18.1 Why a planner at all
+
+Each episode already randomizes lighting, weather, path, FOV, body, colours, clutter. That is `ep_rng`. This script only chooses **which scenario name(s)** go in each episode so a 200-clip pack is not 80% `safe_walk`.
+
+### 18.2 `build_plan`
+
+1. Quotas: leftover after compounds is split **40 / 30 / 30** like `--scenario auto`.
+2. Compounds: `_COMPOUND_FRAC=0.22` of \(N\). `draw_compound` picks **at most one name per family** (jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car) so occupancy stays sane. `jaywalker+jaywalker_from_left` is refused by construction.
+3. Singles: cycle-draw from each pool so a small \(N\) still sees several names, not 8 copies of the first.
+
+`--dry-run` writes the JSON and prints the mix, does not launch Blender. `--self-test` checks determinism (same seed → same plan) and family uniqueness inside compounds.
+
+`pack_dirname` is `pack_YYYYMMDD_HHMMSS_s{seed}_n{N}` plus an optional name. `unique_pack_dir` appends `_2` if the folder exists.
+
+`launch_blender` is `os.execv` of `./run.sh` — it **replaces** the Python process. Flags after `--` include `--plan`, `--output` (the pack dir), and whatever media/overlay/render flags were on the planner CLI.
+
+---
+
+## 19. `main.py` (the rest)
+
+§3–§4 covered startup and the episode skeleton. This section is the annotation record, episode folders, and mux.
+
+### 19.1 `build_frame_record`
+
+Called once per sim frame after `view_layer.update()`. Returns `(record, threat_grid)`.
+
+For each `world.annotatable()` actor:
+
+1. **Range cull.** Skip if \(\|P-P_{\mathrm{cam}}\|^2 > (40+5)^2\), or if the object is more than 6 m **behind** the camera tangent (`(P-Pcam)·t < -6`). The +5 m pad and the −6 m back-face keep a wide box that is about to enter from the side.
+2. **Corners.** Sunken → cached mouth slab. Static → cached world AABB. Dynamic → `actor._bounds.world_corners()`.
+3. **Threat corners.** `threat_obj` if set and distinct (tree trunk), else the silhouette corners.
+4. **Threat point.** `threat_point_from_corners(..., cam.position.z, actor.threat_mode)`.
+5. **Velocity.** `actor.velocity`, or `finite_velocity(1/fps)` if that vector is ~0 and the actor is not static/stopped (first-frame movers).
+6. **Kinematics.** `relative_kinematics(..., planar=(biome in {park,plaza}))`. Skip if `kin.distance > 40`.
+7. **Box.** `project_object` with the shared view/proj matrices. `None` → omit.
+8. **Label.** `classify_threat(kin, \|v_obj\|, cfg['threat'])`.
+9. **Extents.** `horizontal_extents(threat_corners, tangent)` for the spatial score.
+10. **Path Frenet.** If the actor has `follow_spline` or is static: `path_s=actor.s-cam.arc_length`, `path_lat=actor.lateral-cam.lateral`. Background-only objects without a spline fall back to world-XY inside `object_threat_score`.
+11. **Splat.** `splat_object(...)`.
+12. **JSON object.** Root origin (not threat point) as `world_position`. Threat-point kinematics for distance / ttc / cpa / relative_velocity. All vectors Y-up. TTC non-finite → `9999.0`.
+
+Camera block: eye position (no Perlin translation), finite-difference velocity (includes gait \(dY/dt\) in Y-up), local pitch/yaw/roll, lens, HFOV, sensor, `ego_mode`, `ego_speed` (0 seated / halt — a consumer can tell “no optical flow” from “sensor dropout”).
+
+Environment block: copied from `world.state.environment` every frame (drawn once at `build()`). Includes `biome`, `dappled`, `chaos`.
+
+Dropped from a frame (not listed): `annotatable=False`, range cull, `project_object is None`. A tree behind the camera does not appear. A puddle never appears.
+
+### 19.2 Episode directories
+
+Pattern: `episode_(\d{4,})(?:_|$)` — `episode_0007`, `episode_0007_jaywalker`, `episode_12` all count. `existing_episode_ids` / `next_free_episode_id` scan the output root.
+
+`allocate_episode_dir(out_root, id, slug)` — if `episode_{id:04d}_{slug}` exists it bumps the id (a crashed re-run must not overwrite). Returns the chosen id and path.
+
+`rebuild_dataset_summary` walks every `episode_*/episode.json`, aggregates counts / histograms / media, writes `dataset_summary.json`. Older folders in the same root are included on purpose: a second `--episodes 4` appends, and the summary is the whole root.
+
+JSON is written with `separators=(',', ':')` (no spaces) plus a trailing newline. Compact on purpose — 150 frames × dozens of objects is already large.
+
+### 19.3 Pose snapshot / restore
+
+`_collect_pose_objects` — camera + every actor root and **every descendant** (gait bones, wheels, branch joints, triangle leaves). Missing a child means Phase B renders that part at the bind pose: a frozen walk cycle, a wheel that does not roll, a crown that does not rustle.
+
+`_snapshot_poses` stores `(location, rotation_mode, rotation_euler or quaternion, scale)` per object.
+
+`_restore_poses` writes them back. The `frame_change_pre` handler restores snapshot `scene.frame_current`. Blender may call the handler more than once per frame (depsgraph); restoring is idempotent.
+
+`_render_animation_sequence` sets `filepath` to `rgb/######.png`, `frame_start/end`, registers the handler, `bpy.ops.render.render(animation=True)`, unregisters. `_ensure_six_digit_pngs` checks `000000.png` … exist. Failure → `_render_stills_fallback` (same poses, `write_still=True` per frame). Labels are already written; pixels must match the snapshotted poses, not a re-integration.
+
+### 19.4 Video
+
+`_ffmpeg_has_encoder` / `_nvenc_usable` — actually encode a 2-frame test, do not trust the encoder list (a stub NVENC appears on some AMD boxes).
+
+`_encode_with_ffmpeg` — image2, 30 fps, yuv420p, `h264_nvenc` preset `p4` or `libx264` `veryfast` CRF 18.
+
+`_encode_with_blender_vse` — `sequences` on 4.x, `strips` on 5.x. After mux, `prepare_still_render()` again (sequencer must not stay on).
+
+`encode_episode_video` tries ffmpeg then VSE. Failure sets `keep_frames=True`.
+
+### 19.5 `--wind`
+
+`run_episode(..., wind=)` accepts `calm|breeze|windy|auto`. A concrete label replaces `cfg['domain_randomization']['wind_weights']` with `{label: 1.0}` **before** `prepare_biome` / `build()`, so `choose_environment` always draws that label. Strength is still a uniform draw inside that label’s range (a locked `breeze` is not a single number). `auto` keeps the config weights. `BTP_WIND` can still override the draw if it names a key that remains in the weights dict.
+
+The field is then constructed as `WindField(seed, strength, direction, label)` and stored on every tree Actor. Trunk pose and `Actor.velocity` stay 0. JSON `environment.wind` / `environment.wind_strength` come from that draw (copied onto every frame). The model (shared gust, per-joint phases) is §11.1.
+
+---
+
+## 20. Scene contents (what exists in the viewport)
+
+| Element | How it is built | Annotated? |
+| --- | --- | --- |
+| Road / path | Frenet ribbon. Asphalt Voronoi, or gravel tiles in park | no (ignore list) |
+| Sidewalks | Ribbon at curb Z, paver brick. Plaza: slight Z jitter | no |
+| Curb | Narrow ribbon. Park: none | no |
+| Grass verge | Outside the sidewalk (or path). Instanced tufts, never on asphalt | no |
+| Lane dashes | 3 m on / 3 m off, Frenet quads | no |
+| Buildings | Depth × width × height + roof. Start `s=14` m. Setback 3.6–4.2 m | no |
+| Streetlamps | Pole + arm toward the road + emissive bulb + downward SPOT | no (pole is ignore) |
+| Trees | Recursive forks + triangle leaves. Plant / curb / median / path | **yes**, class `tree`, threat = trunk |
+| Vehicles | Superquadric hull + glass + 4 +X-axis wheels | yes, `vehicle` |
+| Pedestrians | `humanoid.spawn_humanoid` + `WalkRig` | yes, `person` |
+| Bicycles | Frame + wheels | yes, `bicycle` |
+| Furniture | Trash / scooter / barricade / puddle on the **shop-front** sidewalk | trash/scooter/barricade yes; puddle **no** |
+| Trip holes | Injectors only: pothole well, crater bowl, tilted slab, debris | yes; footprint except debris |
+| Shape obstacles | Injectors: instanced unit cube/sphere/cylinder/pyramid/cone/capsule/lump | yes, `threat_<kind>` |
+| Head boxes | Off by default (`n_head_hazards=(0,0)`). Scenario `head_level_projectile` is separate | if spawned, yes |
+| Bench | Seated ego only | **no** |
+| Canopy gobo | Overhead alpha sheet | no (hidden from camera) |
+
+Collections: `WORLD`, `HAZARDS`, `ACTORS`, `LIGHTS`. New collections start excluded — `reveal_view_layer()` is mandatory.
+
+---
+
+## 21. Output contract
+
+Folder: `episode_{id:04d}_{slug}`. `dataset_summary.json` is rebuilt from every `episode_*/episode.json` already in that output root.
+
+Pixels: 1920×1080 RGB8 PNG, AgX, opaque film (`film_transparent=False` — no checkerboard alpha).
+
+### 21.1 `annotations/annotations.json`
 
 ```json
 {
-  "frame_id": "000000",
-  "timestamp": 0.0,
-  "camera_data": {
-    "world_position": [x, y_up, z_fwd],
-    "velocity": [..],
-    "pitch_yaw_roll": [pitch, yaw, roll],
-    "lens_mm": 24.0,
-    "hfov_deg": 73.74,
-    "sensor_width_mm": 36.0
-  },
-  "environment": { "lighting": "dusk", "weather": "clear" },
-  "objects": [
+  "frames": [
     {
-      "instance_id": "person_000",
-      "class_name": "person",
-      "threat_label": "SAFE_DYNAMIC",
-      "kinematics": {
-        "world_position": [..],
+      "frame_id": "000000",
+      "timestamp": 0.0,
+      "camera_data": {
+        "world_position": [x, y_up, z_fwd],
         "velocity": [..],
-        "relative_velocity": [..],
-        "distance": 3.11,
-        "ttc": 9999.0,
-        "cpa": 3.11
+        "pitch_yaw_roll": [pitch, yaw, roll],
+        "lens_mm": 24.0,
+        "hfov_deg": 73.74,
+        "sensor_width_mm": 36.0,
+        "ego_mode": "walk",
+        "ego_speed": 1.12
       },
-      "bounding_box_2d": { "xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0 },
-      "flags": { "truncated": false, "occluded": false }
+      "environment": {
+        "lighting": "dusk",
+        "weather": "clear",
+        "biome": "street",
+        "dappled": false,
+        "chaos": 0.65,
+        "wind": "breeze",
+        "wind_strength": 0.41
+      },
+      "objects": [
+        {
+          "instance_id": "person_000",
+          "class_name": "person",
+          "threat_label": "SAFE_DYNAMIC",
+          "kinematics": {
+            "world_position": [..],
+            "velocity": [..],
+            "relative_velocity": [..],
+            "distance": 3.11,
+            "ttc": 9999.0,
+            "cpa": 3.11
+          },
+          "bounding_box_2d": {"xmin": 0, "ymin": 0, "xmax": 0, "ymax": 0},
+          "flags": {"truncated": false, "occluded": false}
+        }
+      ]
     }
   ]
 }
 ```
 
-`class_name` values: `person`, `vehicle`, `bicycle`, `threat_cube`, `pothole`, `trash_can`, `scooter`, `barricade`, `tree_branch`, `ac_unit`, `sign`, `truck_door`, `projectile`.
-
-Annotation skips objects with range \(>40\) m or no on-screen box. Velocity prefers the integrator (`actor.velocity`) over finite difference, except when we need FD for a hold that just started.
-
-Video: `ffmpeg -framerate FPS -i %06d.png -c:v libx264 -pix_fmt yuv420p -crf 18 -movflags +faststart`. VSE fallback uses `sequences` (4.x) or `strips` (5.x).
-
-A failed episode is logged and the process continues; exit code is 2 if any episode failed.
-
-### 6.9 `run.sh`
-
-```bash
-BLENDER="${BLENDER:-blender}"
-exec "$BLENDER" --background --python "$ROOT/main.py" -- "$@"
-```
-
----
-
-## 7. Scene contents (what you actually see)
-
-| Element | Construction |
-| --- | --- |
-| Road | Ribbon, asphalt PBR, Object-metre Voronoi |
-| Sidewalks | Ribbon at z = 0.12 m, paver brick |
-| Curb | Narrow ribbon, simple concrete |
-| Grass verge | 4.5 m, two-tone grass |
-| Lane dashes | 3 m on / 3 m off |
-| Buildings | Depth × width × height boxes, window lattice, roof cap |
-| Streetlamps | Pole + arm + emissive bulb + downward spot |
-| Vehicles | Superquadric hull + cabin glass + bumpers + 4 cylinders (axis +X) |
-| Pedestrians | Full humanoid + WalkRig |
-| Ground hazards | Still mostly boxes: pothole, trash can, scooter, barricade |
-| Head hazards | Boxes: branch, AC unit, sign, truck door, at 1.2–1.8 m AGL |
-| Projectile | 0.28 m cube |
-
-Hazards were left boxy on purpose (the user ask for realism targeted **people, light, and street materials**). They are still annotatable and participate in TTC/CPA.
-
----
-
-## 8. Maths pocketbook (everything used in anger)
-
-### 8.1 Camera
-
-\[
-Z(t)=h+A\sin(2\pi ft),\qquad
-v_Z(t)=A\,2\pi f\cos(2\pi ft)
-\]
-
-Perlin fade \(6t^5-15t^4+10t^3\). fBm geometric normalisation so amplitude stays ~\([-1,1]\).
-
-### 8.2 TTC / CPA / intercept
-
-See section 6.2. Intercept with offset \(\vec{o}\) is the unique constant \(\vec{V}_{\mathrm{obj}}\) that makes \(\vec{P}_{\mathrm{obj}}(t^{\star})-\vec{P}_{\mathrm{cam}}(t^{\star})=\vec{o}\).
-
-### 8.3 Projection
-
-OpenGL symmetric frustum, `sensor_fit=HORIZONTAL`. Default 24 mm on a 36 mm sensor ⇒ HFOV \(\approx 2\arctan(18/24)\approx 73.7^\circ\). Per episode the pipeline draws HFOV from \(U(50^\circ,90^\circ)\) and sets `cam.lens = (sensor/2)/\tan(\mathrm{HFOV}/2)`, unless CLI locks it. Both `lens_mm` and `hfov_deg` are written on every frame.
-
-### 8.4 Human gait
-
-\(f=|v|/(0.41 H)\), half-wave knee, antiphase arms, pelvic 2-harmonic, trunk counter-rotation \(-0.65\).
-
-### 8.5 Superquadric / loft
-
-Barr 1981; torso stations are cubic Hermite / smoothstep between anthropometric keys.
-
-### 8.6 Window lattice
-
-\[
-\mathrm{win}_Y=\mathbf{1}\{0.22<\{Y/1.70\}<0.80\},\quad
-\mathrm{win}_Z=\mathbf{1}\{0.30<\{Z/3.20\}<0.82\}
-\]
-
-Front \(=\mathrm{win}_Y\cdot\mathrm{win}_Z\), side \(=\mathrm{win}_X\cdot\mathrm{win}_Z\), blend by object-space \(|N_x|\).
-
-Night hash: classical `fract(sin(dot(cell, vec2(12.9898, 78.233))+seed)*43758.5453)`.
-
-### 8.7 Sky gradient
-
-\(\mu=\mathrm{Incoming}\cdot(0,0,1)\). ColorRamp on \(\mu\) is a discrete Hosek limb \(L_{\mathrm{zenith}}+(L_{\mathrm{horizon}}-L_{\mathrm{zenith}})(1-\mu)^p\). Mixed with `TexSky` (factor 0.55 night, 0.22 dawn/dusk, 0.12 noon).
-
-### 8.8 Poisson / Bézier
-
-Bridson cell size \(r/\sqrt{2}\). Cubic Bézier \(\sum\binom{3}{k}(1-u)^{3-k}u^k P_k\).
-
----
-
-## 9. Output on disk
-
-```text
-<output>/
-  dataset_summary.json
-  episode_0000_safe_walk/
-    episode.json
-    preview.mp4
-    rgb/000000.png …
-    annotations/annotations.json
-    spatial_annotations/spatial_annotations.json
-  episode_0001_sudden_stop/
-    …
-```
-
-Folder name is `episode_{id:04d}_{scenario}`. A later `--episodes 4 --scenario auto` run continues at the next free id. `dataset_summary.json` is rebuilt by scanning every `episode_*/episode.json`.
-
-Pixel format: 1920×1080 RGB8 PNG, AgX, film **not** transparent.
-
-The rest of this section is the field-by-field contract: what is written, how it is measured, and what a downstream tactile model is supposed to do with it.
-
-### 9.1 What an episode is
-
-One episode is one continuous sidewalk walk: a fixed path, a fixed lighting/weather draw, a fixed set of background actors, plus **one or more injected** scenarios (`jaywalker`, `sudden_stop`, or a compound such as `jaywalker+car_approaching+pothole_on_path`). Default length is **150 frames at 30 Hz = 5.0 s**, unless `--frames` or the remaining spline is shorter.
-
-There are four products:
-
-| Product | When | Role |
+| Field | How it is measured | Do not confuse with |
 | --- | --- | --- |
-| `annotations/annotations.json` | default (skip with `--no-annotations`) | One file: every frame’s object boxes / TTC / labels. |
-| `spatial_annotations/spatial_annotations.json` | **always** | One file: every frame’s `k×k` float matrix in `[0,1]`. `k` from `--threat-grid` (default 3). |
-| `spatial_overlay.mp4` | `--spatial-overlay` | Hazy RGB with the k×k grid tinted blue→red. |
-| `rgb/XXXXXX.png` | `--media frames` or `both` | Egocentric RGB, 1:1 with that JSON. Deleted after mux if `--media video` or `--no-rgb`. |
-| `preview.mp4` | `--media video` or `both` | Same PNG sequence muxed at `fps` (CRF 18, yuv420p). Convenience only — do not train on the video clock; use the JSON `timestamp`. |
-| `episode.json` | always | Manifest for this walk (scenario, speed, label counts). |
+| `timestamp` | \(i/\mathrm{fps}\) from the start of **this** episode | Wall clock |
+| `camera_data.world_position` | Eye (Frenet + curb + gait bounce). **No** Perlin translation | IMU / pelvis |
+| `camera_data.velocity` | Finite difference of the eye (includes gait \(dY/dt\)) | `ego_speed` (ground, no vertical) |
+| `camera_data.pitch_yaw_roll` | Camera-**local** Perlin + pitch bob | World Euler |
+| `camera_data.ego_speed` | Ground speed; **0** seated / halt | Optical-flow magnitude |
+| `environment.*` | Drawn once at `build()`, copied onto every frame. Includes `wind` / `wind_strength` | Per-frame weather or a swaying canopy as a kinematic threat |
+| `kinematics.world_position` | **Root** origin (pelvis / body centre) → Y-up | Threat point |
+| `kinematics.distance` / `ttc` / `cpa` | **Threat point**, not the root | `‖world_position − camera.world_position‖` |
+| `bounding_box_2d` | Projected 3-D AABB (slightly loose), integers, top-left origin | Tight silhouette |
+| `flags.truncated` | Box hits the image edge, or < 8 corners in front | Occlusion |
+| `flags.occluded` | Centre-ray hit something else first | Pixel coverage |
 
-JSON `frame_id` `"000007"` is the same instant as `rgb/000007.png`. If video mux fails, PNGs are kept even when `--media video` or `--no-rgb`.
+`class_name` values you will actually see: `person`, `vehicle`, `bicycle`, `tree`, `threat_cube`, `threat_sphere`, `threat_cylinder`, `threat_pyramid`, `threat_cone`, `threat_capsule`, `threat_lump`, `pothole`, `crater`, `broken_slab`, `debris`, `trash_can`, `scooter`, `barricade`, `tree_branch`, `ac_unit`, `sign`, `truck_door`, `projectile`. Puddle and bench exist in the viewport and are **not** listed.
 
----
+`label_histogram` in `episode.json` counts **(object × frame)**, not unique instances. A 5 s jaywalker is ~150 CRITICAL counts, not 1.
 
-### 9.2 Coordinate convention in every JSON vector
+### 21.2 `spatial_annotations/spatial_annotations.json`
 
-Internal simulation is Blender **Z-up** `(X, Y_forward, Z_up)`. Every 3-D vector written to disk is converted with `blender_zup_to_yup`:
-
-```text
-JSON (X, Y, Z)  =  (Blender_X, Blender_Z, Blender_Y)
-```
-
-So in the files:
-
-| JSON axis | Physical meaning |
-| --- | --- |
-| **X** | right (same as Blender X) |
-| **Y** | **up / height above the pavement** |
-| **Z** | **forward along a +Y Blender path** |
-
-Units are metres and metres/second. Angles are **radians**. Time is seconds. Pixel boxes use the image convention: origin **top-left**, `x` right, `y` down, on a `1920×1080` canvas.
-
-A walker standing at sidewalk \(s=3\) m, eye height 1.6 m above a 0.12 m curb, therefore starts near `world_position ≈ [lateral, 1.72, 3.0]` on a straight \(+\mathrm{Y}\) road.
-
----
-
-### 9.3 Object annotations (`annotations/annotations.json`)
-
-Written by `main.build_frame_record` after `CameraRig.update` + `WorldGenerator.update` + a depsgraph refresh. **One file per episode** (same idea as the spatial matrix). `--no-annotations` skips this file; spatial matrices are still written. Objects that are too far or fully off-screen are omitted from that frame (they are not listed with empty boxes).
+Always written.
 
 ```json
-{
-  "frames": [
-    {"frame_id": "000000", "timestamp": 0.0, "camera_data": {}, "environment": {}, "objects": []},
-    {"frame_id": "000001", "timestamp": 0.0333, "camera_data": {}, "environment": {}, "objects": []}
-  ]
-}
+{"k": 3, "frames": [{"frame_id": "000000", "matrix": [[0.0, 0.12, 0.0], [0.81, 0.97, 0.41], [0.0, 0.72, 0.0]]}]}
 ```
 
-#### Top-level fields
+Row 0 = top of the image. Entries in `[0,1]`. A 3×3 is a tactile-vest resolution, not a segmentation.
 
-| Field | Type | How measured | What it tells |
-| --- | --- | --- | --- |
-| `frame_id` | string | `f"{i:06d}"` | Join key to `rgb/{frame_id}.png`. |
-| `timestamp` | float | \(t = i / \mathrm{fps}\) | Seconds from the start of **this** episode. Not a wall-clock. |
-| `camera_data` | object | `CameraRig` snapshot | Ego pose / velocity used for TTC (see 9.4). |
-| `environment` | object | Domain-randomization draw at `build()` | Lighting and weather **for the whole episode** (copied onto every frame). |
-| `objects` | array | One entry per annotatable actor that passed the filters | The supervision for that frame. |
+### 21.3 `episode.json`
 
-`environment.lighting` ∈ `{dawn, noon, dusk, night, harsh_glare, overcast}`.  
-`environment.weather` ∈ `{clear, light_fog, heavy_smog}`.  
-`environment.biome` ∈ `{street, avenue, park, plaza}`.  
-`environment.dappled` is the canopy-gobo flag. `environment.chaos` is the appearance dial.  
-These are **not** inferred from the image; they are the knobs that built the sky / sun. Use them for domain-shift analysis, not as a network target unless you want an auxiliary weather head.
+`episode_id`, `dir`, `scenario` (slug), `scenarios` (resolved list), `scenario_requested`, `frames`, `fps`, `walk_speed` (0 if seated), `sidewalk_lateral`, `biome`, `ego` (mode, eye height, stationary, sidestep, halt window), `camera` (lens / HFOV / sensor), `environment`, `label_histogram`, `render` / `media`, `rgb_dir` (null if deleted), `video` / `video_encoder`, `annotations` path or null, `spatial_annotations_k` / `spatial_annotations`, overlay paths.
 
-#### Filters (why an actor may be missing)
+### 21.4 Worked label: seated vs walking into a trunk
 
-An actor is **dropped from this frame** (not written) if:
+Walking, 1.2 m/s, trunk 2.0 m ahead on the gait, planar off (street). \(V_{\mathrm{rel}}=-V_{\mathrm{cam}}\), TTC ≈ 1.67 s, CPA ≈ 0 → **CRITICAL_THREAT**. Spatial \(W_{\mathrm{path}}=1\).
 
-1. `annotatable` is false (puddles, the seated bench — visual distractors, not collisions).
-2. Range from camera to the **threat point** (9.5) is \(> 40\) m (`annotation.max_distance`).
-3. `project_object` returns `None`: every AABB corner is behind the camera, or the projected box misses the image entirely.
-
-So `objects` is “what the vest could reasonably see right now”, not the full world census. Background cars 50 m ahead will vanish from the JSON even though they still exist in the sim.
+Same trunk, seated. \(V_{\mathrm{rel}}=0\), TTC = 9999, **SAFE_STATIC**. Spatial \(W_{\mathrm{stop}}=0\) (not closing), \(W_{\mathrm{path}}=0\) (`t_arr` infinite). Leaves may still sway in RGB. That pair is the point of the foliage design.
 
 ---
 
-### 9.4 `camera_data` — the ego walker
+## 22. Load-bearing pitfalls
 
-| Field | Units | How measured | What it tells |
-| --- | --- | --- | --- |
-| `world_position` | m, Y-up | Eye point: road Frenet origin at \(s(t)\) from the arc table, offset by \(L(t)\), then \(Y =\) curb \(+ h + A\sin(2\pi 1.8 t)\). \(h=1.6\) standing, \(\sim 1.1\) seated. **No** Perlin translation. | Where the camera is in the spec frame. \(Y\) is height; it bobs only while walking. |
-| `velocity` | m/s, Y-up | Finite difference of the eye point (frame 0: central difference of `predict_position`). | Instantaneous ego velocity **including gait \(dY/dt\)**. Typical walk is \(\sim 1.0\)–\(1.4\) m/s along \(+Z_{\mathrm{JSON}}\). Seated / halt ⇒ \(\approx 0\). |
-| `pitch_yaw_roll` | rad | Perlin fBm on each axis **plus** the tiny gait pitch bob. These are **camera-local jitter angles**, not the world heading of the sidewalk. | How much the head is nodding / scanning / rolling **relative to the Frenet gaze**. |
-| `lens_mm` / `hfov_deg` / `sensor_width_mm` | mm / deg / mm | Episode FOV draw or CLI lock. `lens = (sensor/2) / tan(HFOV/2)`. | Which frustum this PNG was rendered with. |
-| `ego_mode` | string | Profile drawn for the episode. | `walk` / `diagonal_cross` / `erratic` / `seated`. |
-| `ego_speed` | m/s | `CameraRig.speed_at(t)`. | Instantaneous ground speed. **0** while seated or hesitating. |
-
-`pitch_yaw_roll` is **not** a global IMU in the JSON Y-up frame. If you need a 4×4 camera matrix, rebuild it from `world_position` + the sidewalk tangent (not stored) + these angles — or treat the PNG as the only appearance signal and use `world_position` / `velocity` only for kinematics losses.
+1. **Black PNGs, valid JSON.** Empty VSE with `use_sequencer=True`. Always `prepare_still_render()` before writing pixels; turn it off again after VSE mux.
+2. **`BLENDER_EEVEE_NEXT` TypeError** on 5.2. Use whatever `enum_items` lists. Sky type is `MULTIPLE_SCATTERING`, not `NISHITA`.
+3. **World Volume Scatter** in EEVEE = full-frame black. Fog via sky turbidity only. Do not “add atmosphere” with a volume shader.
+4. **Euler `matrix_world` ignored.** Camera must be quaternion + decompose (`_apply_camera_matrix`).
+5. **Collections start excluded.** `reveal_view_layer()` then re-apply daytime lamp hide. A “empty viewport, labels exist” episode missed the reveal.
+6. **`view_layer.update()` every sim frame** or AABBs are empty (`objects=0`).
+7. **One Frenet `s`.** Never mix sidewalk-spline arc length with road `s`. Never treat world-Y as arc length on a curve.
+8. **`look_along` zeroes Euler X/Y.** Walk pelvic list/pitch **after** it. Yaw = `atan2(-dx, dy)`, not `atan2(dx, dy)`.
+9. **Threat point ≠ root.** Labels used the threat point. `distance` is not `‖world_position − camera.world_position‖`. Trees: box = canopy, threat = trunk.
+10. **Undefined TTC** is `9999.0`, not `null` / `Infinity`. Small TTC + large CPA is SAFE_DYNAMIC. `NaN < 2.5` is False — `_finite3` exists so that cannot silently classify as SAFE.
+11. **Mix / Noise sockets.** Never `node.inputs["A"]` or `noise.outputs["Fac"]`. Use `_input` / `_output`.
+12. **Facade windows** use **object** normals (after `look_along`, world \(\hat{x}\) is not the street face). Occupancy is a per-cell hash, not smooth noise.
+13. **Shadow pool 2048.** Key sun + every other lamp. Fill/bounce: `use_shadow=False`. Adding a dozen shadowed area lights pages out the key.
+14. **Neck along −Z** grows into the chest. Neck is +Z.
+15. **Seated `walk_speed=0`.** Intercepts use `max(v_ego+v_obj, v_obj)*tau`. Nothing floors ego speed to 0.25. Spatial arrival divides by **closing** rate, not \(v_{\mathrm{ego}}\).
+16. **Tree threat is the trunk.** Canopy sway must not change `Actor.velocity` or `threat_obj` pose.
+17. **`ray_tracing_method='SCREEN'`** (not `'SCREEN_TRACE'`, a silent no-op on 5.2).
+18. **`inf - inf` in `w_path`.** Resolve infinite `t_arr` / `t_leave` **before** subtracting or the matrix gets NaN.
+19. **Phase B descendants.** Snapshot every child. A missing sprig is a frozen canopy in the video and a swaying one in your head.
+20. **`release_episode` is the memory budget.** Null Python cycles first, then unlink, then recursive purge. A new datablock type (node group, image, curve) that you allocate without a users-drop will leak across 2000 episodes.
+21. **`MeshLibrary` is per-episode.** Do not cache it on the generator across `build()` calls. The datablocks were purged.
+22. **Occupancy predictor must match `Actor.update`.** New motion modes need a `FrenetCapsule.pose_at` twin.
+23. **Planar TTC in park/plaza only.** Turning it on for streets would collapse a 1.6 m overpass / sign into a ground hit. Turning it off in a park labels a seated walker vs a bollard SAFE on a vertical residual.
+24. **Head hazards default off.** Re-enable via `n_head_hazards` if a pack specifically wants floating boxes. Do not “put them back” in `_scatter_ground` — that is how they ended up on the gait as junk.
 
 ---
 
-### 9.5 How object kinematics are measured (read this before trusting `distance`)
+## 23. Defaults that matter (`config.py`)
 
-For each actor we keep **two different 3-D points**:
-
-1. **Root origin** — `obj.matrix_world.translation`. For a person this is the **pelvis**; for a car the body centre; for a pothole the box centre. This is what is written as `kinematics.world_position`.
-2. **Threat point** — `projection.threat_point`. Used for `distance`, `ttc`, `cpa` only.
-
-Threat point, in Blender Z-up:
-
-- `threat_mode = "volume"` (people, cars, branches, projectile): XY of the world AABB centre (union of the root **and all mesh children**), Z clamped into that AABB, preferring the camera height. A 1.5 m car roof vs a 1.6 m camera leaves a 0.1 m vertical residual instead of a fake 1.6 m miss.
-- `threat_mode = "footprint"` (potholes): XY of the AABB centre, **Z = camera height**, so the hole occupies the walker’s vertical column. A pothole you will step in is a collision even though the mesh sits on the pavement.
-
-Then, in the **same Blender frame** (conversion to Y-up happens only when writing vectors):
-
-\[
-\vec{P}_{\mathrm{rel}} = \vec{P}_{\mathrm{threat}} - \vec{P}_{\mathrm{cam}},\qquad
-\vec{V}_{\mathrm{rel}} = \vec{V}_{\mathrm{obj}} - \vec{V}_{\mathrm{cam}}
-\]
-
-\(\vec{V}_{\mathrm{obj}}\) is the integrator velocity (`Actor.velocity`) when the actor is moving, static, or has just stopped; otherwise a one-frame finite difference. \(\vec{V}_{\mathrm{cam}}\) is the ego velocity from 9.4.
-
-**Constant-velocity point model** (`threat_math.py`):
-
-- Converging iff \(\vec{P}_{\mathrm{rel}}\cdot\vec{V}_{\mathrm{rel}} < 0\) (range is shrinking).
-- If \(\|\vec{V}_{\mathrm{rel}}\| < 10^{-4}\) m/s or not converging: TTC is undefined.
-
-\[
-\mathrm{TTC}
-= -\frac{\vec{P}_{\mathrm{rel}}\cdot\vec{V}_{\mathrm{rel}}}{\|\vec{V}_{\mathrm{rel}}\|^2}
-\qquad
-D_{\mathrm{cpa}}
-= \|\vec{P}_{\mathrm{rel}} + \mathrm{TTC}\,\vec{V}_{\mathrm{rel}}\|
-\]
-
-Undefined TTC is written as **`9999.0`** (must remain a JSON number). Undefined CPA falls back to current range.
-
-**Implication:** `distance` is \(\|\vec{P}_{\mathrm{threat}}-\vec{P}_{\mathrm{cam}}\|\), **not** \(\|\texttt{world\_position}-\texttt{camera\_data.world\_position}\|\). For a person those can differ by ~0.6–0.9 m (pelvis vs chest-height threat point). Do not recompute TTC from the written `world_position` and expect the same label.
-
-#### `objects[i]` fields
-
-| Field | How measured | What it tells |
+| Key | Default | Why it is that number |
 | --- | --- | --- |
-| `instance_id` | `{class}_{nnn}` from a per-episode counter (`person_000`, `vehicle_001`, …) | Stable id **inside this episode**. The same physical walker keeps the id across frames. Ids restart every episode. |
-| `class_name` | Spawn type | Semantic class. See table below. This is **what it is**, not how dangerous it is. |
-| `threat_label` | `classify_threat(TTC, CPA, speed, range)` | **What the vest should do.** The primary training target. |
-| `kinematics.world_position` | Root origin → Y-up | Where the actor’s root sits. Useful for 3-D debugging / secondary losses. |
-| `kinematics.velocity` | \(\vec{V}_{\mathrm{obj}}\) → Y-up | Absolute velocity in the world. Zero ⇒ static (or just stopped). |
-| `kinematics.relative_velocity` | \(\vec{V}_{\mathrm{obj}}-\vec{V}_{\mathrm{cam}}\) → Y-up | How the object is moving **as seen from the walker**. Closing along \(-\,Z_{\mathrm{JSON}}\) is “coming at you”. |
-| `kinematics.distance` | \(\|\vec{P}_{\mathrm{rel}}\|\) at the threat point | Current range that entered the TTC formula. |
-| `kinematics.ttc` | seconds, or `9999.0` | Time until closest approach **if both keep this velocity**. Not “time until impact” unless CPA ≈ 0. |
-| `kinematics.cpa` | metres | Miss distance at that future instant. 0 = the two threat-points coincide. 6 m = they pass a lane apart. |
-| `bounding_box_2d` | Projected AABB (9.7) | Pixel supervision for a detector head. |
-| `flags.truncated` | Box / corners vs the image | The object is cut by the frame edge (or some AABB corners are behind the camera). |
-| `flags.occluded` | Raycast (9.8) | Something closer sits on the line of sight to the centroid. |
+| Resolution / fps / length | 1920×1080 / 30 / 150 frames | Vest training clip; 5.0 s |
+| HFOV | \(U(50^\circ,90^\circ)\) unless CLI locks | 35 mm → 18 mm full-frame |
+| Walk speed / bounce | \(U(1.0,1.4)\) m/s, 0.04 m @ 1.8 Hz | Adult sidewalk gait |
+| Path | \(U(48,78)\) m; straight / gentle / S / 90° | 5 s at 1.4 m/s is 7 m; the rest is look-ahead + buildings |
+| `sidewalk_s0` | 3.0 m (code, not config) | First frame is not inside a facade |
+| Street ribbon | road 7.0 m, sidewalk 2.4 m, curb 0.12 m, setback 3.6 m | Two lanes + planting strip |
+| Trees | plant \(U(6,12)\), curb \(U(2,5)\), median \(U(1,3)\) | Real street, not a forest |
+| Furniture Poisson | \(U(3,7)\), radius 3.2 m, shop-front band | Walking line stays clear |
+| Head hazards | `(0, 0)` | Floating boxes read as junk |
+| Background peds / cars | \(U(3,6)\) / \(U(2,5)\) | Occupancy still has room for injectors |
+| Auto mix | 0.40 / 0.30 / 0.30 | Spec Part 4.3 |
+| Critical / near-miss | TTC 2.5 s + CPA 0.5 m / TTC 4.0 s + CPA [0.5, 1.5] | Spec Part 4.2 |
+| Inject CPA targets | 1.0 m / 0.12 m | Graze vs hit under constant rates |
+| Jaywalk / projectile | \(\tau=3.2\) s, \(U(1.00,1.35)\) m/s / \(\tau=1.8\) s, 3.6 m/s | Walking crosser, not a sprint; cube at eye |
+| Pothole leads | 7.8 / 7.2 / 8.0 m | In the lower third at 50–90° HFOV |
+| Compose strides | cross 4.0 / along 3.2 / static 2.4 m; nudge 2.6 m | One body + clearance |
+| Lighting weights | noon 0.24, dawn/dusk/night 0.16, glare/overcast 0.14 | Easy domain is not the majority |
+| Weather | clear 0.50, light_fog 0.30, heavy_smog 0.20 | Turbidity only |
+| Chaos | \(U(0.20,1.00)\) unless `--chaos` | Never fully tame unless asked |
+| Wind | calm 0.32 / breeze 0.48 / windy 0.20; strengths `(0.02,0.08)` / `(0.28,0.55)` / `(0.70,1.00)` | Leaves move; trunk TTC does not |
+| Annotation range | 40 m | Vest horizon |
+| TAA / Fast GI | 16 + reprojection; 4 rays, 6 steps, quality 0.30 | Matches 32 samples on this lighting |
+| Shadow pool | 2048 | Key + half the night lamps |
+| PNG compression | 1 | Almost as fast as 0, much smaller |
+| Video | CRF 18, `veryfast` / NVENC `p4` | Preview, not archival |
 
-#### `class_name` values
-
-| `class_name` | Typical threat_mode | What it is |
-| --- | --- | --- |
-| `person` | volume | Articulated pedestrian (background or injected). |
-| `vehicle` | volume | Superquadric car. |
-| `pothole` | footprint | Hole on the gait line. |
-| `trash_can` | volume | Sidewalk clutter. |
-| `scooter` | volume | Sidewalk clutter. |
-| `barricade` | volume | Sidewalk clutter. |
-| `tree_branch` | volume | Head-height (1.2–1.8 m). |
-| `ac_unit` | volume | Head-height. |
-| `sign` | volume | Head-height. |
-| `truck_door` | volume | Head-height swing. |
-| `projectile` | volume | Silent eye-height object (`head_level_projectile`). |
-
----
-
-### 9.6 `threat_label` — the tactile taxonomy
-
-Computed **after** TTC/CPA, **not** from the pixels. The image can lie (a car behind a wall still has a TTC); the label is kinematic truth for a warning device.
-
-Priority (a real hit can never fall through to SAFE):
-
-| Label | Rule (defaults) | What it tells the vest |
-| --- | --- | --- |
-| `CRITICAL_THREAT` | converging **and** \(TTC < 2.5\) s **and** \(D_{\mathrm{cpa}} < 0.5\) m | On a collision course and close in time. Strong / immediate cue. |
-| `NEAR_MISS` | converging **and** \(TTC < 4.0\) s **and** \(0.5 \le D_{\mathrm{cpa}} \le 1.5\) m | Will pass within a shoulder-width. Graded / early cue. |
-| `SAFE_STATIC` | \(\|V_{\mathrm{obj}}\| \le 0.05\) m/s **and** (range \(> 5\) m **or** CPA \(> 1.5\) m **or** not converging) | Furniture / a far pole. No cue. **Exception:** a static object you are walking straight into (pothole, low branch) still converges with \(V_{\mathrm{rel}}=-V_{\mathrm{cam}}\) and can be CRITICAL / NEAR_MISS. |
-| `SAFE_DYNAMIC` | moving, and not in the two threat bins | Parallel traffic, receding walkers, a car that will miss by \(> 1.5\) m. No cue, even if it is visually large. |
-
-Worked readings from a real frame (`output/episode_0000/annotations/000000.json`):
-
-- `vehicle_000`: TTC \(1.93\) s but CPA \(6.31\) m → **SAFE_DYNAMIC**. Closing fast, but a full lane away — do not buzz.
-- `vehicle_001`: TTC `9999.0`, CPA = distance \(11.6\) m → **SAFE_DYNAMIC**. Relative \(+Z\) is large: they are pulling away / crossing out of the cone of approach.
-- `truck_door_000`: static, TTC \(12.4\) s, CPA \(6.14\) m, range \(15.4\) m → **SAFE_STATIC**. Head-height clutter you will walk past, not into.
-- `person_001`: TTC \(4.60\) s, CPA \(2.73\) m → **SAFE_DYNAMIC**. Closing, but late and wide of the 1.5 m near-miss band.
-
-A `jaywalker` injector places the person already on the carriageway so they cover ~3 m of lateral travel at \(1.0\)–\(1.35\) m/s (\(TTC\approx 3.2\) s, \(D_{\mathrm{cpa}}\approx 0.12\) m) without leaving the street ribbon. `sudden_stop` is SAFE_DYNAMIC while the lead walker matches your speed, then TTC collapses when they freeze.
-
-`label_histogram` in `episode.json` counts **(object × frame)** labels, not unique instances. 150 frames × 2 people can produce 300 `SAFE_DYNAMIC` ticks.
+Change numbers **in `config.py`**, not by scattering literals. Injector literals that remain (`tau=2.4` on `cube_head_on`, weave Hz ranges) are listed in §15.2; promote them if you touch them twice.
 
 ---
 
-### 9.7 `bounding_box_2d` — how the box is measured
+## 24. Where is X?
 
-Not a tight silhouette and not a semantic mask. Pipeline (`projection.py`):
-
-1. Take the 8 AABB corners of every **MESH** in the actor hierarchy (pelvis + torso + limbs + head, or body + cabin + wheels). Parenting is evaluated on the depsgraph, so a mid-stride leg is included.
-2. Transform to camera space. Drop corners with \(Z_{\mathrm{cam}} \ge 0\) (behind the lens). If none survive → object omitted.
-3. Project with `camera.calc_matrix_camera` (the matrix EEVEE itself uses), fallback to the analytic 24 mm / 36 mm frustum.
-4. NDC → pixels, origin top-left:
-
-\[
-u = (n_x + 1)\,W/2,\qquad
-v = (1 - n_y)\,H/2
-\]
-
-5. Box = axis-aligned min/max of surviving corners, clamped to \([0,1920]\times[0,1080]\). Integers: `xmin/ymin` floored, `xmax/ymax` ceiled.
-
-So the box is a **conservative 3-D AABB projection**. It is slightly loose around a walking figure (axis-aligned world corners, not a fitted 2-D hull). That is intentional: cheap, stable, and it covers articulated children.
-
-`truncated = true` if any of: `xmin<0`, `ymin<0`, `xmax>W`, `ymax>H`, or fewer than 8 corners were in front of the camera. A car half out of the right edge (`xmax=1920`) is truncated.
-
-If you train a detector, this is the box target. If you train **only** a threat classifier on a crop, still honour `truncated` / `occluded` — a truncated CRITICAL crop is a different visual.
-
----
-
-### 9.8 `flags.occluded` — how occlusion is measured
-
-A physics ray (`scene.ray_cast` on the evaluated depsgraph) from the **camera origin** toward the actor’s AABB **centroid**:
-
-- Hit the actor (or a child) first → not occluded.
-- Hit something else whose distance is at least `occlusion_epsilon` (0.08 m) closer than the centroid → `occluded: true`.
-- Ground ribbons (`road_surface`, `sidewalk_*`, `curb_*`, `centerline`, `lamp_pole`) are skipped and the ray is stepped, so a pothole is not “occluded by the sidewalk it sits on”.
-- Up to 10 steps. `--no-occlusion` forces `false`.
-
-This is a **centre-ray**, not a pixel-coverage test. A person 90 % hidden behind a pole can still be `occluded: false` if the centroid ray threads the gap, and a person barely covered can be `true`. Treat it as a coarse flag, not as a visibility fraction.
-
----
-
-### 9.9 `episode.json` — per-walk manifest
-
-| Field | Meaning |
+| Change… | File / symbol |
 | --- | --- |
-| `episode_id` | Numeric id used in the folder name. |
-| `dir` | Folder name (`episode_0002_jaywalker`). Present on new writes. |
-| `scenario` | Injector that actually ran, or `__`-joined compound slug. |
-| `scenarios` | List of canonical injector names (length 1 for a single event). |
-| `scenario_requested` | CLI value (`auto`, `jaywalker,car,pothole`, …). |
-| `frames` / `fps` | Length of this walk. |
-| `walk_speed` | Ego arc-speed drawn for the episode (m/s). **0** when `ego.mode` is `seated`. |
-| `sidewalk_lateral` | Signed offset from the road centreline (m). Negative = left side of a +Y path. |
-| `biome` | `street` / `avenue` / `park` / `plaza`. |
-| `ego` | `{mode, eye_height_m, stationary, sidestep_amp_m, halt_s}`. |
-| `camera` | `{lens_mm, hfov_deg, sensor_width_mm}` for this episode. |
-| `environment` | Lighting / weather / biome / chaos / dappled for the whole walk. |
-| `label_histogram` | Sum of per-frame `threat_label`s. Use it to see whether the injector fired (CRITICAL/NEAR_MISS counts). |
-| `render` / `media` | Whether RGB/video were requested. |
-| `rgb_dir` | `"rgb"` if PNGs were kept, else `null`. |
-| `video` / `video_encoder` | `preview.mp4` and `ffmpeg (...)` or `blender-vse` if mux succeeded. |
-| `annotations` | `"annotations/annotations.json"` or `null` if `--no-annotations`. |
-| `spatial_annotations_k` / `spatial_annotations` | Grid resolution and path (`spatial_annotations/spatial_annotations.json`). |
-| `spatial_overlay` / `spatial_overlay_encoder` | `spatial_overlay.mp4` when `--spatial-overlay` succeeded. |
-
-This file is the index card. It does **not** replace `annotations/annotations.json`.
-
----
-
-### 9.9a Spatial threat matrix (`spatial_annotations/spatial_annotations.json`)
-
-Always written by `./run.sh` / `main.py` (including `--no-render`). One JSON per episode, not one file per frame. `k` comes **only** from `--threat-grid` (default 3; not a `config.py` key).
-
-```json
-{
-  "k": 3,
-  "frames": [
-    {"frame_id": "000000", "matrix": [[0.0, 0.12, 0.0], [0.81, 0.97, 0.41], [0.0, 0.72, 0.0]]},
-    {"frame_id": "000001", "matrix": [[0.0, 0.18, 0.0], [0.70, 0.91, 0.33], [0.0, 0.64, 0.0]]}
-  ]
-}
-```
-
-Row 0 is the **top** of the image. Each entry is a float in \([0,1]\). Math lives in `spatial_threat.py`. Ego motion is the **sidewalk tangent × walk speed** (not the jittered eye velocity), so a pothole on the gait does not flicker.
-
-Frenet on the road spline (same \((s,\mathrm{lateral})\) as the injectors): \(s=s_{\mathrm{obj}}-s_{\mathrm{cam}}\), \(\ell=\ell_{\mathrm{obj}}-\ell_{\mathrm{cam}}\), \(R=r_{\mathrm{ego}}+r_{\mathrm{obj}}\). World-XY is the fallback. Then \(W=\max(W_{\mathrm{stop}},W_{\mathrm{path}},W_{\mathrm{cross}},W_{\mathrm{cpa}})\):
-
-- **Stopping volume** \(W_{\mathrm{stop}}\): object disk overlaps the forward rectangle of length \(v_{\mathrm{ego}}T_{\mathrm{react}}+d_{\mathrm{buf}}\) (~2.2 s of walking). A jaywalker 2 m ahead is a hit even if a point-mass CPA says they will have stepped aside.
-- **Guaranteed path hit** \(W_{\mathrm{path}}\): they occupy the gait tube now and \(t_{\mathrm{leave}}>t_{\mathrm{arrive}}\) (a static pothole has \(t_{\mathrm{leave}}=\infty\)).
-- **Crossing intercept** \(W_{\mathrm{cross}}\): they enter the tube at \(t_{\mathrm{in}}\) and are still at the walker's \(s\).
-- **Body CPA** \(W_{\mathrm{cpa}}=\exp(-(d_{\mathrm{clear}}/0.42)^2)\) with \(d_{\mathrm{clear}}=\max(0,D_{\mathrm{cpa}}-R)\).
-- \(S=W\,(0.58+0.42\,U)\) plus a mid-band adjacent-lane term. Overlaps: per-cell \(\max\).
-- Spatial: any grid cell the 2-D box overlaps gets the full \(S\); neighbours get a Gaussian bleed.
-
-`python spatial_threat.py` is the unit test (no Blender). `--spatial-overlay` writes `spatial_overlay.mp4` next to `preview.mp4` (hazy RGB, cell colour from the matrix, score printed in the cell).
-
----
-
-### 9.10 `dataset_summary.json` — whole output directory
-
-Rebuilt after every launch by reading **every** `episode_*/episode.json` already on disk (including older `episode_0000` folders without a scenario suffix).
-
-| Field | Meaning |
-| --- | --- |
-| `episodes_on_disk` | How many manifests were found. |
-| `episodes_this_run` | `--episodes` of the process that last wrote the file. |
-| `label_histogram` | Sum over all episodes on disk (object×frame counts). |
-| `episodes[]` | `{episode_id, dir, scenario, labels}` for each folder. |
-
-Use this to check class balance before training. A healthy `auto` mix should show a non-trivial `NEAR_MISS` + `CRITICAL_THREAT` tail; an all-`safe_walk` pack will be dominated by SAFE_*.
-
----
-
-### 9.11 RGB and video
-
-- PNG: 1920×1080, 8-bit RGB, AgX view transform, opaque film. Filename index = `frame_id`.
-- Video: constant frame rate `fps`, no audio, `+faststart`. It is a preview of the PNG sequence. The **labels live in JSON**, not in a subtitle track.
-
-Do not assume ffmpeg’s frame \(n\) equals `timestamp = n/fps` if you re-encode with a different rate. Always key off `frame_id` / `timestamp` in the JSON.
-
----
-
-### 9.12 How to consume this for the tactile model
-
-Typical heads:
-
-1. **Threat classifier** on the full frame or on each `bounding_box_2d` crop → `threat_label` (4-way). This is the vest.
-2. **Detector** → `bounding_box_2d` + `class_name` (optional).
-3. **Optional regression** → `ttc` and `cpa` (mask out `ttc == 9999.0`). A model that only sees pixels cannot be blamed for a label that was computed from 3-D; the regression head is how you check it learned “closing vs missing”.
-
-Recommended filters when building a batch:
-
-- Drop or down-weight `occluded` + `truncated` if you crop tightly.
-- Do not treat `SAFE_DYNAMIC` with TTC 1.9 s / CPA 6 m as a collision — the taxonomy already decided it is safe.
-- Instance ids are **per episode**. Across episodes, `person_000` is a different human.
-
----
-
-### 9.13 Common misreads
-
-| Mistake | Reality |
-| --- | --- |
-| Recompute TTC from `world_position` | Labels used the **threat point**, not the root. |
-| `ttc == 9999` means “very far” | It means **not converging** (or relative speed ≈ 0). Current range is `distance`. |
-| Small TTC ⇒ CRITICAL | Also need CPA \(< 0.5\) m. A 2 s TTC with CPA 6 m is SAFE_DYNAMIC. |
-| `pitch_yaw_roll` is world IMU | Camera-local Perlin jitter only. |
-| Histogram “214 SAFE_STATIC” = 214 objects | It is object×frame counts over the walk. |
-| `occluded` = pixel IoU | Centre-ray flag. |
-| Box = silhouette | Projected 3-D AABB, slightly loose. |
-
----
-
-## 10. Run commands
-
-Always `cd` is optional if you pass absolute paths.
-
-```bash
-# Default useful run: 1 episode, frames + video + JSON
-blender --background --python /storage/BTP/blender_sim/main.py -- \
-  --episodes 1 --scenario safe_walk --media both --output /storage/BTP/blender_sim/output
-
-# Wrapper
-/storage/BTP/blender_sim/run.sh --episodes 1 --scenario safe_walk --media both --output ./output
-
-# Balanced dataset
-blender --background --python /storage/BTP/blender_sim/main.py -- \
-  --episodes 30 --scenario auto --media both --seed 42 --output ./output
-
-# Shard 10 episodes starting at index 20
-blender --background --python /storage/BTP/blender_sim/main.py -- \
-  --episodes 10 --start-episode 20 --scenario auto --seed 42 --output ./output
-
-# Annotations only (no GPU / no EGL)
-blender --background --python /storage/BTP/blender_sim/main.py -- \
-  --episodes 1 --scenario safe_walk --no-render --output ./output
-
-# True headless box
-xvfb-run -a blender --background --python /storage/BTP/blender_sim/main.py -- \
-  --episodes 1 --scenario auto --media frames --output ./output
-
-# Force time of day (QA only; not a CLI flag)
-BTP_LIGHTING=dusk blender --background --python /storage/BTP/blender_sim/main.py -- \
-  --episodes 1 --scenario sudden_stop --frames 30 --media both --output ./output
-
-# Math unit test (system Python)
-python /storage/BTP/blender_sim/threat_math.py
-
-# Force EEVEE onto the RTX 4060 (hybrid AMD+NVIDIA laptop)
-./run.sh --episodes 1 --scenario safe_walk --media frames --output ./output
-# equivalent raw blender:
-__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia \
-  blender --background --python /storage/BTP/blender_sim/main.py -- \
-    --episodes 1 --scenario safe_walk --media frames --output ./output
-
-# Stay on the AMD iGPU
-BTP_GPU=amd ./run.sh --episodes 1 --scenario safe_walk --media frames --output ./output
-```
-
-`--scenario` values: `auto`, any name from the 36-injector table in §6.5, plus aliases `safe`, `near_miss`, `critical`, `jaywalk`, `empty`, `projectile`, `car`, `pothole`, `weave`, `erratic`, `child`. Compounds: `--scenario jaywalker,car,pothole` (see §6.5.1). `--list-scenarios` prints the pools and shorts.
-
-```bash
-# Compound: jaywalker + oncoming car + pothole on the gait (annotations only)
-./run.sh --episodes 1 --scenario jaywalker,car,pothole --no-render --frames 30 --output ./output
-```
-
-A 150-frame EEVEE episode is typically well under a minute on an RTX-class GPU after the performance pass (TAA 16, animation batch, NVENC). `--frames 8` is enough to see gait; `--frames 1` is enough to see lighting.
-
----
-
-## 11. Parameters (authoritative defaults)
-
-Copied from `config.py`. Change them **there**, not by scattering literals.
-
-### Render / camera
-
-| Key | Default |
-| --- | --- |
-| engine | `BLENDER_EEVEE` (auto-picked) |
-| resolution | 1920 × 1080 |
-| fps | 30 |
-| frames_per_episode | 150 (5.0 s) |
-| taa_render_samples | 16 (reprojection on; 32 was oversampling this lighting) |
-| use_raytracing | True (`SCREEN` method, half-res traces) |
-| fast_gi_ray_count / step / quality | 4 / 6 / 0.30 |
-| png_compression | 1 (zlib; 0 is uncompressed) |
-| lens / sensor | 24 mm / 36 mm default; HFOV randomized \(U(50^\circ, 90^\circ)\) per episode |
-| clip | 0.05 – 120 m |
-| eye_height_m | 1.6 |
-
-### Gait / jitter
-
-| Key | Default |
-| --- | --- |
-| walk_speed | U(1.0, 1.4) m/s |
-| amplitude_m | 0.04 |
-| frequency_hz | 1.8 |
-| pitch_bob_amp_rad | 0.015 |
-| yaw / pitch / roll | 15° @ 0.22 Hz / 5° @ 0.55 Hz / 2° @ 1.9 Hz |
-
-### World
-
-| Key | Default |
-| --- | --- |
-| path length | U(48, 78) m |
-| path types | straight, gentle_curve, s_curve, corner_90 |
-| road_width / lane_offset | 7.0 / 1.75 m |
-| sidewalk_width / curb | 2.4 / 0.12 m |
-| sample_ds | 0.40 m |
-| building depth / height / gap | U(4,10) / U(6,18) / U(0.4,2.2) m |
-| n_streetlamps / height / energy | 6 / 5.6 m / 900 W night |
-| Poisson static r / n | 3.2 m / U(6,12) |
-| Poisson head r / n | 7.5 m / U(3,7) |
-| background peds / cars | U(3,6) / U(2,5) |
-| vehicle speed | U(5.0, 9.0) m/s (urban; stays in frame) |
-| ped speed | U(0.90, 1.45) m/s |
-| bicycle / cube / cross-car speed | U(3.2, 5.5) / U(1.15, 2.20) / U(3.2, 4.8) m/s |
-| head hazard height | U(1.2, 1.8) m |
-
-### Threat / scenarios
-
-| Key | Default |
-| --- | --- |
-| critical | TTC < 2.5 s and CPA < 0.5 m |
-| near miss | TTC < 4.0 s and CPA in [0.5, 1.5] m |
-| safe static distance | 5.0 m |
-| safe dynamic CPA | 1.5 m |
-| static_speed_eps | 0.05 m/s |
-| auto mix | 0.40 / 0.30 / 0.30 |
-| swerve_trigger_s / cut_in_trigger_s | 1.8 / 1.2 |
-| sudden_stop lead / trigger | 3.0 m / 1.6 s |
-| jaywalker_ttc / cross_person_speed | 3.2 s / U(1.00, 1.35) m/s |
-| projectile_ttc / speed | 1.8 s / 3.6 m/s |
-| CPA targets | near-miss 1.0 m, critical 0.12 m |
-| compose (compounds) | cross/along/static stride 4.0 / 3.2 / 2.4 m; nudge 2.6 m; sample 0.12 s |
-| annotation max_distance | 40 m |
-| occlusion_epsilon | 0.08 m |
-
-### Domain randomization
-
-Lighting weights: dawn 0.22, noon 0.38, dusk 0.22, night 0.18.  
-Weather: clear 0.50, light_fog 0.30, heavy_smog 0.20.  
-Sun elevation: dawn 4–18°, noon 55–85°, dusk 3–16°, night −12–−2°.  
-`volume_density` is **kept in config but not applied as a world volume** (black-frame / EEVEE world-volume lesson). Fog is faked via sky `air_density` / `aerosol_density` / `turbidity`.
-
-Video: `preview.mp4`, CRF/QP 18, `ffmpeg_bin=ffmpeg`. Encoder is `h264_nvenc` (preset `p4`) when the NVIDIA encoder actually runs, else `libx264` `-preset veryfast`. Override with `output.video_encoder` = `nvenc` | `libx264` | `auto`.
-
----
-
-## 12. Pitfalls we already hit (do not re-learn)
-
-1. **Black PNGs, valid JSON.** Blender 5 defaults `use_sequencer=True` with an empty VSE. Always `prepare_still_render()` before `write_still`. After VSE mux, turn it off again.
-2. **`BLENDER_EEVEE_NEXT` TypeError** on 5.2. Use `BLENDER_EEVEE`. Sky type is `MULTIPLE_SCATTERING`, not `NISHITA`.
-3. **World Volume Scatter** in EEVEE = full-frame black. Fog via sky turbidity only.
-4. **Euler `matrix_world` ignored.** Camera must be quaternion + decompose.
-5. **Collections start excluded** from the view layer. `reveal_view_layer()` walks `layer_collection` and clears `exclude` / `holdout` / `indirect_only`. Then re-apply lamp hide/energy.
-6. **24 mm vs facade.** Buildings start at \(s=14\), facade setback +1.6 m, walker at 38 % of sidewalk width from the curb.
-7. **Mix / Noise sockets.** Never `node.inputs["A"]` or `noise.outputs["Fac"]`. Use typed helpers.
-8. **Smooth Noise as window occupancy** = leopard print. Use a per-cell hash.
-9. **Night exposure 0.85 + fill SUN 14 + sky 0.55** = whiteout. Current night: exposure 0.30, fill 1.8, sky strength 0.16, window emit 4.5, spots 900 W.
-10. **Shadow buffer full (2053/2048).** Cap casters: key sun only + every other lamp. Fill and bounce: `use_shadow=False`. `shadow_pool_size='2048'`.
-11. **Pelvis-only AABB.** `world_aabb_corners` must recurse MESH children or 2-D boxes cover only the hips.
-12. **Feet origin vs 1.6 m camera** inflates CPA. Always `threat_point` / planar intercept at camera Z.
-13. **Undefined TTC** must be `9999.0`, not `null` / `Infinity`.
-14. **Old `output/episode_*` RGB** may still be the black set or the pre-realism boxes. Re-render.
-15. **Do not enable world volume** when iterating “atmosphere”.
-16. **`look_along` zeroes Euler X/Y** every frame. Walk pelvic list/pitch must be applied *after* it (`_tick_visuals` order is correct; do not invert). Yaw is \(\mathrm{atan2}(-d_x,d_y)\). The old `atan2(d_x,d_y)` moonwalks people, parks cars across the lane, and sends dashes through the asphalt on any heading other than \(+\mathrm{Y}\).
-17. **Neck along −Z** grows into the chest. Neck is a +Z column.
-18. **Object vs world normals on facades.** After `look_along`, world \(\hat{x}\) is not the street face. Window blend uses TexCoord **Normal** (object space).
-19. **One Frenet \(s\).** Camera, dashes, cars, and people all use road \(s\) plus a lateral. Never mix a resampled sidewalk spline’s arc length with road \(s\).
-20. **Curb Z.** Sidewalk mesh is at 0.12 m. People / camera / clutter on the sidewalk add that height. Asphalt stays at 0.
-21. **Per-frame `bpy.ops.render.render(write_still=True)`.** Restarts EEVEE every still. Simulate on the CPU, then one `animation=True` batch with poses replayed in `frame_change_pre`.
-22. **`ray_tracing_method = 'SCREEN_TRACE'`.** That identifier does not exist on Blender 5.2 (enum is `SCREEN`); the setattr was a silent no-op.
-
----
-
-## 13. Design constraints that are load-bearing
-
-- Asset-free: a stock Blender 4/5 install must run `blender --background --python main.py`.
-- Labels are kinematics-first, pixels-second. A beautiful frame with a wrong TTC is a failed episode.
-- Domain randomization is the regulariser. Do not “fix” lighting to one pretty dusk for the whole dataset.
-- Humans must not be rectangles. The detector will key on that silhouette.
-- Still realism is **stylized low-poly PBR**, not photogrammetry. No downloaded textures, no Mixamo, no MakeHuman.
-
----
-
-## 14. Suggested future work (not implemented)
-
-- Hazard meshes (trash, scooter, signs) are still boxes.
-- No facial features / fingers; hands are superquadrics.
-- Weather is sky-parameter only; no particles, no wet-road puddles beyond asphalt roughness.
-- `volume_density` in config is unused (intentionally, after the world-volume black frames).
-- No CLI `--lighting` flag; only `BTP_LIGHTING` env.
-- Cycles path is not wired (engine picker can land on it if EEVEE is missing; materials are EEVEE-tuned).
-- No train/val split helper; `--start-episode` + `--seed` is the sharding story. Default is append-to-output (next free id).
-
----
-
-## 15. Performance (how the episode loop was sped up)
-
-The old loop called `bpy.ops.render.render(write_still=True)` 150 times. Each call tears down and rebuilds the EEVEE GPU context, re-uploads shadows / GI, writes a zlib-15 PNG, then Python walked every actor with `evaluated_get` + `calc_matrix_camera` + a fresh AABB crawl + a raycast. That is why a 5 s clip felt slow even on an RTX 4060: the GPU was never allowed to stay warm, and the CPU work between frames was redundant.
-
-Nothing below changes the Frenet math, TTC/CPA, box placement, or occlusion rule. The pixels stay 1920×1080, 8-bit, AgX, raytraced EEVEE. Annotations keep the same keys; JSON is compact (no indent) which is still valid Part-6.1 JSON.
-
-### 15.1 Two-phase episode (biggest wall-clock win)
-
-**Phase A — CPU simulation** (`main.run_episode`). For each frame: integrate camera + actors, `view_layer.update()` (actors write `location` / Euler; `matrix_world` is stale until the depsgraph runs), snapshot local `location` / Euler-or-quat of the camera and every actor descendant (pelvis, limbs, wheels), project boxes. After the loop: write `annotations/annotations.json` (unless `--no-annotations`) and `spatial_annotations/spatial_annotations.json`. No EEVEE.
-
-**Phase B — GPU animation.** Register `frame_change_pre` that restores snapshot `i` when Blender seeks to frame `i`, set `filepath` to `rgb/######`, `use_sequencer=False`, then **one** `bpy.ops.render.render(animation=True)`. EEVEE keeps the shadow pool, TAA history, and ray-trace buffers resident. If the batch does not produce `%06d.png`, we fall back to stills from the same snapshots (never lose the episode).
-
-Why snapshot instead of integrating twice: walk-cycle pelvic bob and wheel `euler[0]` are incremental. Replaying from a pose cache is exact and does not require resetting `Actor` / `WalkRig` state.
-
-Measured on this box (RTX 4060 Max-Q, Blender 5.2.1, 1920×1080, `jaywalker_turn_away`): **30 frames = 0.32 s sim + 12.2 s EEVEE + NVENC mux**. Previously ~0.9 s/frame stills (~27 s GPU plus JSON). Full 150-frame episodes should land around **one minute**, not several.
-
-### 15.2 EEVEE knobs (`configure_eevee`, `config["render"]`)
-
-| Change | Why | Visual |
-| --- | --- | --- |
-| TAA 32 → **16** + `use_taa_reprojection` | Sample count is linear in GPU time. Reprojection reuses the previous frame on this slow-moving walk. | Indistinguishable on low-poly PBR; 32 was oversampling. |
-| Fast GI rays 8 → **4**, steps 8 → **6**, quality 0.45 → **0.30** | We had cranked GI far past Blender’s defaults (2 rays). | Bounce on facades stays; noise is in the TAA. |
-| `ray_tracing_method = 'SCREEN'` | Previous `'SCREEN_TRACE'` never applied. Half-res traces (`resolution_scale='2'`) + denoise kept. | Same SSR on paint/glass as a working SCREEN trace. |
-| Volumetric tile `'2'` → **`'8'`**, samples 32 → **16**, volumetric shadows **off** | There is no world volume. Tile size 2 was paying for empty froxels. | No change (no volume shader). |
-| PNG compression **1**, `color_mode=RGB` | Default zlib 15 is CPU-heavy; RGBA wrote a useless alpha. | Bit-identical RGB. |
-| `use_persistent_data`, `use_lock_interface` | Keep GPU resources across the animation; skip UI sync in background. | None. |
-| Sequencer/compositor **off** once | Same black-frame guard as before, not per still. | None. |
-
-Raytracing stays **on**. Turning it off would be faster but would change car paint and windows.
-
-### 15.3 Annotation / projection (`projection.py`, `build_frame_record`)
-
-- **`LocalBoundCache`**: limb `bound_box` is constant in object space. Capture once per object pointer; each frame only does `matrix_world @ corner`. Cleared with `clear_bound_caches()` at episode start (pointers are reused after `reset_blender_scene`).
-- **Static actors** cache *world* corners for the whole episode (potholes, trash, parked cars).
-- **One view matrix + one `calc_matrix_camera` per frame**, passed into every `project_object`. Previously both were rebuilt per actor.
-- **No `evaluated_get`**. None of our meshes have modifiers; parenting is already in `matrix_world` after `view_layer.update()`.
-- AABB / threat point / raycast centroid share the **same corner list** (was three walks).
-- Coarse **distance** and **behind-camera** culls (`max_distance+5 m`, \(>6\) m behind the tangent) skip projection and raycasts for actors that cannot appear in the JSON anyway.
-- Integrator velocity is used directly; finite-difference only if the actor is moving but `velocity` is still zero.
-
-Box math, truncation, and `scene.ray_cast` occlusion (including ground-ribbon skip) are unchanged.
-
-### 15.4 Video encode (`_encode_with_ffmpeg`)
-
-PNG decode stays on the CPU (there is no useful CUDA PNG decoder). Encode:
-
-1. Probe `h264_nvenc` with a 64×64 lavfi frame (the encoder can be *listed* without a working driver).
-2. If the probe succeeds: `-c:v h264_nvenc -preset p4 -tune hq -rc constqp -qp 18` (QP 18 ≈ x264 CRF 18).
-3. Else: `libx264 -preset veryfast -crf 18 -threads 0` (old path used the slow default medium preset at the same CRF).
-
-VSE fallback is unchanged if ffmpeg is missing.
-
-### 15.5 I/O
-
-JSON is `separators=(",", ":")` with no indent. Schema and numeric rounding are the same; parsers do not care about whitespace. Compact dumps are CPU-cheap next to EEVEE.
-
-### 15.6 What we did not do (and why)
-
-- **JPEG / 16-bit / float16 colour.** Would change pixels or blow disk; the display buffer is already 8-bit PNG.
-- **`bpy.ops.render.opengl`.** Viewport shading is not EEVEE-Next raytrace/GI.
-- **Cycles.** Slower, not the look.
-- **Dropping raytracing or Fast GI.** Faster, but not perceptually identical to the current lighting.
-- **Numpy in the Blender interpreter.** No extra pip; the hot path is EEVEE, not Python loops.
-- **Per-frame N-body steering for compounds.** Occupancy is reserved once at inject time (`ComposeSession`); extra actors only add a few objects to the existing pose snapshot / animation replay.
-
----
-
-## 16. Quick “where is X?” index
-
-| I want to change… | File / symbol |
-| --- | --- |
-| Resolution, FPS, episode length | `config.py` → `render` |
-| Lens / eye height | `config.py` → `camera` |
-| Gait bounce / Perlin | `config.py` → `gait`, `jitter`; logic in `CameraRig` |
-| TTC thresholds / class mix | `config.py` → `threat`, `scenarios` |
-| Street width, Poisson, lamp watts | `config.py` → `world` |
-| Sun / sky / AgX | `apply_domain_randomization`, `_setup_world_shader` |
-| Window grid / asphalt | `materials.py` |
-| Body proportions / walk | `humanoid.py` → `spawn_humanoid`, `WalkRig` |
-| Forced collisions | `WorldGenerator.inject_scenarios` and `_inject_*` |
-| Compound occupancy / CLI aliases | `scenario_compose.py` |
-| JSON schema | `main.build_frame_record` |
-| Spatial threat matrix | `spatial_threat.py`; CLI `--threat-grid` |
-| Spatial overlay video | `spatial_overlay.py`; CLI `--spatial-overlay` |
-| Mixed dataset pack | `gen_dataset.py`; `main.py --plan` |
-| 2-D boxes / occlusion | `projection.py` |
-| TAA / GI / PNG / encoder | `config.py` → `render`, `output`; `configure_eevee` |
+| Resolution, FPS, episode length, TAA/GI | `config.py` → `render`; `configure_eevee` |
+| Lens / eye height / HFOV range | `config.py` → `camera`; `apply_camera_fov` |
+| Gait / Perlin / ego weights | `config.py` → `gait`, `jitter`, `ego`; `CameraRig`, `choose_ego_profile` |
+| TTC thresholds / class mix | `config.py` → `threat`, `scenarios.ratios` |
+| Street widths, setback, tree counts, Poisson | `config.py` → `world` / `world.biomes` |
+| Sun / sky / AgX | `apply_domain_randomization`, `_setup_world_shader`, `_apply_view_transform` |
+| Asphalt / windows / foliage / chaos | `materials.py` |
+| Body / walk cycle | `humanoid.py` → `spawn_humanoid`, `WalkRig` |
+| Forced collisions | `WorldGenerator._inject_*`, `_scenario_handlers` |
+| CLI aliases / occupancy / inject order | `scenario_compose.py` |
+| Per-frame object JSON | `main.build_frame_record` |
+| Spatial matrix / overlay | `spatial_threat.py` / `spatial_overlay.py` |
+| Mixed pack | `gen_dataset.py` → `main.py --plan` |
+| 2-D boxes / occlusion / threat point | `projection.py` |
 | Animation-batch render | `main._render_animation_sequence` |
-| AABB cache | `projection.LocalBoundCache` |
 | Black frames | `prepare_still_render` |
 | Camera not rotating | `CameraRig._apply_camera_matrix` |
+| GPU device | `run.sh` / `BTP_GPU` |
+| Leak across episodes | `release_episode`, `purge_orphans` |
+| Leaf wind / `--wind` / `BTP_WIND` | `choose_environment`, `WindField`, `foliage_wind_euler`; weights in `config.py` → `domain_randomization` |
+| Tree / building overlap | `building_setback`, `_scatter_trees`, `offset_folds` |
+| Median trees rejected | `_tree_free(..., along=)` — do not use one Euclidean radius |
+| Moving leaves labelled CRITICAL | Foliage must not write `Actor.velocity`; threat is the trunk |
+| `objects=0` in the sim log | Missing `view_layer.update()`, or `reveal_view_layer`, or bound cache not cleared |
+| Compound actors inside each other | `ComposeSession.reserve` / `FrenetCapsule.pose_at` mismatch with `Actor.update` |
+| Park bollard labelled SAFE | `planar=True` not applied; or threat point not at camera Z |
+| New primitive shape | `SHAPE_KINDS`, `_shape_unit_geom`, `spawn_threat_shape`, aliases, `_STATIC_CLASSES`, `gen_dataset` family `shape` |
 
 ---
 
-*Last updated for the performance pass (animation-batch EEVEE, TAA 16, NVENC, AABB cache) on Blender 5.2. If the code and this file disagree, the code wins — then fix this file.*
+## 25. How to add something (without breaking C1–C10)
+
+### 25.1 A new named scenario
+
+1. Pick a bucket and add the canonical name to `safe_pool` / `near_miss_pool` / `critical_pool` in `config.py`.
+2. Add a handler in `_scenario_handlers` that only uses Frenet (`_spawn_kind` + `_bind` or `_inject_oncoming` / `_inject_through_cross` / `_inject_static_shapes`).
+3. If it crosses the ribbon, add the name to `CROSS_GAP_SCENARIOS` and `THROUGH_CROSSERS` as appropriate.
+4. Set `_INJECT_PRIORITY` (0 static, 10 along, 20 lateral).
+5. Optional alias in `SCENARIO_ALIASES`.
+6. If it is a new class of motion, teach `FrenetCapsule.pose_at`.
+7. If it is a new `class_name`, add extents and decide `_is_static_class`.
+8. If packs should compound it, put it in exactly one `_FAMILIES` entry in `gen_dataset.py`.
+9. Add a row to §15.2 of this file.
+10. `python scenario_compose.py` and a `--no-render` episode.
+
+Do **not** aim a world-space `hold_velocity` through a `corner_90`. Do **not** divide by `walk_speed` to place an intercept.
+
+### 25.2 A new biome
+
+Add a key under `world.biomes` and a weight under `biome_weights`. You may override widths, `ground`, `buildings`, `building_sides`, `lane_paint`, tree counts, traffic counts, `path_types`. You may **not** introduce a second spline parameter. Park works because a “lane” is still a lateral band. If you need a river, it is a ribbon at a new lateral, not a new `s`.
+
+### 25.3 A new annotatable class
+
+Spawn an `Actor` with `class_name`, `threat_mode`, `annotatable=True`, Frenet `s`/`lateral` if it lives on the street. If the silhouette ≠ the hazard (tree), set `threat_obj`. Add extents. If it is sunk into the pavement, add the class to `SUNKEN_CLASSES` in `main.py` and give it a mouth-slab path. Mention it in §21.1.
+
+### 25.4 A new lighting state
+
+Add energy + elevation ranges and a weight. Teach `apply_domain_randomization` colour / angle / shadows and `_apply_view_transform` exposure. Do not add a world volume. Do not add a dozen shadowed lamps.
+
+---
+
+## 26. Self-tests and what they prove
+
+| Command | What must stay true |
+| --- | --- |
+| `python threat_math.py` | Parallel / diverging / head-on / seated / planar / taxonomy priority / no NaN / no ZeroDivision |
+| `python spatial_threat.py` | Seated bollard ~0, static-on-gait high, adjacent miss mid, `inf-inf` guarded, splat max not sum |
+| `python spatial_overlay.py` | PPM header, filter graph parses |
+| `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only |
+| `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds |
+| `./run.sh --episodes 1 --scenario safe_walk --no-render --output /tmp/btp` | `objects>0` if the street has people; `cleanup: purged` is large |
+| `./run.sh --episodes 1 --scenario jaywalker --no-render` | Some `CRITICAL_THREAT` in `label_histogram` for a walking ego |
+| `./run.sh --episodes 1 --ego-mode seated --scenario pothole_on_path --no-render` | Hole is `SAFE_STATIC`; TTC 9999 |
+| `./run.sh --list-scenarios` | Pools + aliases, exit 0 |
+
+A render test (`--media frames --frames 4`) is the check for black PNGs and for Phase B descendants (look at a tree: leaves should not be at rest if wind > 0).
+
+---
+
+## 27. Data-flow recap (one page)
+
+```text
+run.sh → blender --python main.py -- <flags>
+           │
+           ├─ get_config() deepcopy
+           ├─ pick_scenarios / plan JSON
+           └─ run_episode
+                ├─ apply_camera_fov, chaos lock, no-trees
+                ├─ prepare_biome → cfg['world'] widths / props
+                ├─ prepare_scenario → gaps / sparse
+                ├─ build()
+                │    reset scene, EEVEE, MeshLibrary, WindField
+                │    PathSpline, ribbons, buildings, trees, lamps, grass
+                │    lighting, furniture, background cars/peds
+                │    WorldState {road, corridor, actors, walk_speed, …}
+                ├─ CameraRig on road spline (arc table if erratic)
+                ├─ inject_scenarios
+                │    ComposeSession.seed background
+                │    sort_for_inject → _inject_* → _bind → reserve
+                ├─ freeze() → movers / annotatable
+                ├─ Phase A: for each t
+                │    rig.update, world.update, view_layer.update
+                │    snapshot poses
+                │    build_frame_record
+                │       threat_point → relative_kinematics → classify_threat
+                │       project_object → splat_object
+                ├─ write annotations.json + spatial_annotations.json
+                ├─ Phase B: restore poses, render animation, mux
+                ├─ episode.json
+                └─ release_episode + clear_bound_caches
+```
+
+Everything a downstream model needs is in those two JSON files plus optional RGB. Everything it must not recompute from the wrong point is in §21.1.
+
+---
+
+## 28. Glossary
+
+| Term | Meaning in this repo |
+| --- | --- |
+| Episode | One clip: one street, one ego, one (compound) scenario, one folder |
+| Frenet `(s, lateral)` | Arc length along the **road** centreline + signed offset along \(\hat{t}\times\hat{z}\) |
+| Threat point | The 3-D point TTC/CPA use. Not the mesh origin. Not the 2-D box centre |
+| Threat label | One of four strings from `classify_threat` |
+| Spatial matrix | K×K body-aware heat, separate product from the four-class label |
+| Injector | Closed-form placement of a forced event after the rig exists |
+| Compose | Occupancy reservation so several injectors share one street |
+| Chaos | Appearance dial, not motion. `--chaos 0` is tame materials |
+| Biome | Widths / ground / props on the **same** Frenet corridor |
+| Mover | Actor that `freeze()` put in the per-frame integration list |
+| Phase A / B | CPU integrate+label / GPU animation render |
+| PRIME | Laptop GPU offload; `run.sh` + `BTP_GPU` |
+
+If a word is not in this table, it is not a hidden API — it is ordinary English.

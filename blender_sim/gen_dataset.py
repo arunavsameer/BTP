@@ -64,7 +64,14 @@ _FAMILIES: dict[str, tuple[str, ...]] = {
     "cyclist": (
         "cyclist_same_way", "cyclist_near_miss", "cyclist_head_on", "cyclist_weaving",
     ),
-    "cube": ("cube_near_miss", "cube_head_on", "cube_from_left", "cube_from_right"),
+    "cube": (
+        "cube_near_miss", "cube_head_on", "cube_from_left", "cube_from_right",
+        "cube_on_path",
+    ),
+    "shape": (
+        "shape_near_miss", "shape_head_on", "shape_from_left", "shape_from_right",
+        "shapes_on_path",
+    ),
     "ped": ("oncoming_pedestrian", "parallel_pedestrian", "sudden_stop", "child_darting"),
     "erratic_car": ("car_erratic_swerve", "car_runs_off_road"),
 }
@@ -289,6 +296,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
                    help="Lock appearance chaos in [0,1] for every episode.")
     p.add_argument("--no-trees", action="store_true",
                    help="Disable procedural trees and grass.")
+    p.add_argument("--wind", type=str, default="auto",
+                   help="calm | breeze | windy | auto. Default: auto.")
     p.add_argument("--no-render", action="store_true", help="JSON only (no EEVEE / video).")
     p.add_argument(
         "--no-annotations",
@@ -348,6 +357,8 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
         cmd += ["--chaos", str(float(args.chaos))]
     if args.no_trees:
         cmd.append("--no-trees")
+    if str(getattr(args, "wind", "auto")) not in ("", "auto"):
+        cmd += ["--wind", str(args.wind)]
     print(f"[gen_dataset] exec: {' '.join(cmd)}", flush=True)
     env = os.environ.copy()
     return int(subprocess.call(cmd, cwd=str(_ROOT), env=env))

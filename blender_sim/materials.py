@@ -1047,6 +1047,31 @@ def make_foliage(
     return mat
 
 
+def make_leaf(
+    name: str,
+    rng: random.Random,
+    chaos: float = 0.0,
+    base: Sequence[float] = (0.12, 0.28, 0.07),
+) -> Any:
+    """Single-leaf / sprig card: two-sided, slightly translucent.
+
+    Individual triangles need both faces (wind flips them) and a bit of
+    subsurface so a backlit sprig does not read as a plastic kite.
+    """
+    mat = make_foliage(name, rng, chaos, base=base)
+    if hasattr(mat, "use_backface_culling"):
+        try:
+            mat.use_backface_culling = False
+        except Exception:
+            pass
+    nt = getattr(mat, "node_tree", None)
+    bsdf = nt.nodes.get("Principled BSDF") if nt is not None else None
+    if bsdf is not None:
+        _set(bsdf, "Subsurface Weight", rng.uniform(0.12, 0.32))
+        _set(bsdf, "Specular IOR Level", 0.18)
+    return mat
+
+
 def make_canopy_gobo(name: str, rng: random.Random, chaos: float = 0.0) -> Any:
     """Alpha-punched sheet used as an overhead shadow gobo.
 

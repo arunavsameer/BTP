@@ -53,6 +53,8 @@ CROSS_GAP_SCENARIOS = frozenset(
         "car_cross_critical",
         "cube_from_left",
         "cube_from_right",
+        "shape_from_left",
+        "shape_from_right",
         "cyclist_near_miss",
         "child_darting",
     }
@@ -72,6 +74,8 @@ THROUGH_CROSSERS = frozenset(
         "car_cross_critical",
         "cube_from_left",
         "cube_from_right",
+        "shape_from_left",
+        "shape_from_right",
         "child_darting",
     }
 )
@@ -111,6 +115,11 @@ SCENARIO_ALIASES: dict[str, str] = {
     "cyclist": "cyclist_same_way",
     "bike": "cyclist_same_way",
     "cube": "cube_near_miss",
+    "cubes": "cube_on_path",
+    "shape": "shape_near_miss",
+    "shapes": "shapes_on_path",
+    "sphere": "shape_head_on",
+    "pyramid": "shape_head_on",
     "parked": "parked_car_opposite",
     "cut_in": "car_cut_in",
     "cutin": "car_cut_in",
@@ -124,7 +133,16 @@ SCENARIO_ALIASES: dict[str, str] = {
 }
 
 _NOOP = frozenset({"safe_walk", "empty_street"})
-_STATIC_CLASSES = frozenset({"pothole"})
+_STATIC_CLASSES = frozenset({
+    "pothole", "crater", "broken_slab", "debris", "tree",
+    "threat_cube", "threat_sphere", "threat_cylinder", "threat_pyramid",
+    "threat_cone", "threat_capsule", "threat_lump",
+})
+
+
+def _is_static_class(class_name: str) -> bool:
+    cls = str(class_name or "")
+    return cls in _STATIC_CLASSES or cls.startswith("threat_")
 
 # Lower runs first. User order is preserved within a bucket (stable sort).
 _INJECT_PRIORITY: dict[str, int] = {
@@ -143,9 +161,13 @@ _INJECT_PRIORITY: dict[str, int] = {
     "cyclist_near_miss": 10,
     "car_near_miss_lane": 10,
     "cube_near_miss": 10,
+    "shape_near_miss": 10,
     "sudden_stop": 10,
     "swerve_vehicle": 10,
     "cube_head_on": 10,
+    "shape_head_on": 10,
+    "cube_on_path": 0,
+    "shapes_on_path": 0,
     "car_cut_in": 10,
     "cyclist_head_on": 10,
     "head_level_projectile": 10,
@@ -163,6 +185,8 @@ _INJECT_PRIORITY: dict[str, int] = {
     "car_cross_front": 20,
     "cube_from_left": 20,
     "cube_from_right": 20,
+    "shape_from_left": 20,
+    "shape_from_right": 20,
     "car_cross_critical": 20,
 }
 
@@ -265,7 +289,7 @@ def pick_scenarios(rng: random.Random, cfg: dict, requested: str) -> list[str]:
             extra = ", ".join(sorted(alias_keys))
             raise ValueError(
                 f"unknown scenario {tok!r} (resolved to {name!r}). "
-                f"Canonical names are the 36 injectors; short aliases: {extra}. "
+                f"Canonical names are the named injectors; short aliases: {extra}. "
                 f"Use --list-scenarios."
             )
         out.append(name)
@@ -315,6 +339,8 @@ def is_noop(name: str) -> bool:
 def extents_for(class_name: str, pad: float = 0.35) -> tuple[float, float]:
     """(half_s, half_lat) metres for a reservation capsule."""
     cls = str(class_name or "person")
+    if cls.startswith("threat_"):
+        cls = "threat_cube"
     hs = float(_EXTENT_S.get(cls, 0.70))
     hl = float(_EXTENT_LAT.get(cls, max(0.40, float(pad))))
     return hs, hl
@@ -525,8 +551,8 @@ class ComposeSession:
             if (
                 other.tag == "background"
                 or cap.tag == "background"
-                or other.class_name in _STATIC_CLASSES
-                or cap.class_name in _STATIC_CLASSES
+                or _is_static_class(other.class_name)
+                or _is_static_class(cap.class_name)
             ):
                 times = (0.0,)
             else:
@@ -705,6 +731,18 @@ def _self_test() -> None:
     d1, side1 = sess.take_cross_layout(True)
     assert d0 == 0.0 and side0 is True
     assert d1 == sess.cross_stride and side1 is False
+
+    from config import get_config
+
+    live = get_config()
+    catalog = all_scenario_names(live)
+    assert "shape_head_on" in catalog
+    assert "cube_on_path" in catalog
+    assert "shapes_on_path" in catalog
+    assert resolve_scenario_name("shapes", random.Random(1), live) == "shapes_on_path"
+    assert resolve_scenario_name("sphere", random.Random(1), live) == "shape_head_on"
+    assert extents_for("threat_lump") == extents_for("threat_cube")
+    assert extents_for("threat_pyramid")[0] > 0.0
 
     print("scenario_compose self-test ok")
 

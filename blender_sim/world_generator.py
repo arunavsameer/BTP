@@ -38,6 +38,120 @@ from mathutils import Vector
 
 
 # ===========================================================================
+# Shared wind + foliage sway (visual only; trunk threat is unchanged)
+# ===========================================================================
+#
+# Motion follows the GPU Gems 3 / Weber–Penn idea: a shared wind direction
+# and gust envelope, then per-joint periodic modes. Branches take the slow
+# cantilever bend; leaf sprigs add a 2–5 Hz flutter. The trunk never moves.
+
+WIND_LABELS: tuple[str, ...] = ("calm", "breeze", "windy")
+
+
+class WindField:
+    """Episode-wide wind, evaluated once per sim time.
+
+    ``strength`` is 0..1 (calm ≈ 0.05, breeze ≈ 0.4, windy ≈ 0.85).
+    ``direction`` is a world-XY yaw: 0 blows toward +X.
+    """
+
+    __slots__ = ("noise", "strength", "direction", "label", "_t", "_env", "_gust")
+
+    def __init__(
+        self,
+        seed: int,
+        strength: float = 0.40,
+        direction: float = 0.0,
+        label: str = "breeze",
+    ) -> None:
+        self.noise = Perlin1D(int(seed))
+        self.strength = max(0.0, float(strength))
+        self.direction = float(direction)
+        self.label = str(label)
+        self._t: Optional[float] = None
+        self._env = 0.0
+        self._gust = 0.0
+
+    def state(self, t: float) -> tuple[float, float, float, float]:
+        """``(envelope, gust, dir_x, dir_y)``. Envelope already includes strength."""
+        if self._t != t:
+            self._t = t
+            self._gust = self.noise.fbm(
+                t * 0.17, octaves=3, persistence=0.55, lacunarity=2.1,
+            )
+            # Calm still has a breath of motion; windy never quite dies.
+            self._env = self.strength * max(0.0, 0.52 + 0.48 * self._gust)
+        return (
+            self._env,
+            self._gust,
+            math.cos(self.direction),
+            math.sin(self.direction),
+        )
+
+
+class FoliagePart:
+    """One animated joint: a branch empty or a single triangle leaf."""
+
+    __slots__ = ("obj", "rest", "phase", "flutter", "kind", "flex")
+
+    def __init__(
+        self,
+        obj: Any,
+        rest: tuple[float, float, float],
+        phase: float,
+        flutter: float,
+        kind: str,
+        flex: float = 1.0,
+    ) -> None:
+        self.obj = obj
+        self.rest = rest
+        self.phase = float(phase)
+        self.flutter = float(flutter)
+        self.kind = kind
+        self.flex = float(flex)
+
+
+def foliage_wind_euler(
+    t: float,
+    phase: float,
+    flutter: float,
+    kind: str,
+    env: float,
+    gust: float,
+    dir_x: float,
+    dir_y: float,
+    flex: float = 1.0,
+) -> tuple[float, float, float]:
+    """Local Euler offset (radians) for one branch joint or leaf.
+
+    GPU Gems 3 sum of sines, weighted by the shared envelope. Parent
+    joints carry children, so a mid-limb bend moves the whole distal
+    crown. ``flex`` is small near the bole and ~1 on twigs / leaves.
+    """
+    w = 2.0 * math.pi
+    gain = max(0.0, float(flex))
+    bend = (
+        0.50 * math.sin(w * 0.31 * t + phase)
+        + 0.28 * math.sin(w * 0.17 * t + phase * 0.71)
+        + 0.22 * gust
+    )
+    if kind == "branch":
+        amp = 0.14 * env * gain
+        return (amp * bend * dir_y, amp * bend * dir_x, 0.0)
+    rustle = (
+        0.42 * math.sin(w * 2.05 * t + flutter)
+        + 0.28 * math.sin(w * 3.35 * t + flutter * 1.37)
+        + 0.16 * math.sin(w * 5.10 * t + flutter * 0.61)
+    )
+    amp = 0.48 * env * gain
+    return (
+        amp * (0.28 * bend * dir_y + 0.72 * rustle),
+        amp * (0.28 * bend * dir_x + 0.58 * rustle),
+        amp * 0.24 * rustle,
+    )
+
+
+# ===========================================================================
 # Arc-length spline
 # ===========================================================================
 
@@ -762,6 +876,9 @@ class Actor:
     post_lat_speed: float = 0.0
     post_lat_target: Optional[float] = None
     _prev_loc: Optional[Vector] = field(default=None, repr=False)
+    # Branch joints + leaf sprays. Trunk pose and Actor.velocity stay 0.
+    foliage: list = field(default_factory=list)
+    wind: Any = None
 
     def world_location(self) -> Vector:
         return self.obj.matrix_world.translation.copy()
@@ -774,6 +891,19 @@ class Actor:
             for wheel, radius in self.wheels:
                 # Bottom of a +X-axis wheel must move −Y (local) for +Y travel.
                 wheel.rotation_euler[0] -= dist / max(float(radius), 0.05)
+        if self.foliage:
+            env = gust = dx = 0.0
+            dy = 1.0
+            if self.wind is not None:
+                env, gust, dx, dy = self.wind.state(t)
+            if env > 1e-4:
+                for part in self.foliage:
+                    ax, ay, az = foliage_wind_euler(
+                        t, part.phase, part.flutter, part.kind, env, gust, dx, dy,
+                        getattr(part, "flex", 1.0),
+                    )
+                    rx, ry, rz = part.rest
+                    part.obj.rotation_euler = (rx + ax, ry + ay, rz + az)
 
     def _lat_vel(self, t: float) -> float:
         """Signed d(lateral)/dt this frame (0 once the target is reached)."""
@@ -1001,6 +1131,8 @@ def release_episode(state: Optional["WorldState"] = None) -> int:
             actor.wheels = []
             actor.follow_spline = None
             actor.threat_obj = None
+            actor.foliage = []
+            actor.wind = None
             actor._bounds = None
             actor.wander_noise = None
             actor.speed_noise = None
@@ -1061,6 +1193,13 @@ def choose_environment(cfg: dict, rng: random.Random) -> dict:
         lighting = _weighted_choice(rng, dr["lighting_weights"])
     weather = _weighted_choice(rng, dr["weather_weights"])
     c_lo, c_hi = dr.get("material_chaos", (0.0, 0.0))
+    wind_weights = dict(dr.get("wind_weights") or {"breeze": 1.0})
+    forced_wind = os.environ.get("BTP_WIND", "").strip().lower()
+    if forced_wind in wind_weights:
+        wind = forced_wind
+    else:
+        wind = _weighted_choice(rng, wind_weights)
+    w_lo, w_hi = (dr.get("wind_strength") or {}).get(wind, (0.28, 0.55))
     return {
         "lighting": lighting,
         "weather": weather,
@@ -1069,6 +1208,9 @@ def choose_environment(cfg: dict, rng: random.Random) -> dict:
         "energy": rng.uniform(*dr["sun_energy"][lighting]),
         "dappled": rng.random() < float(dr.get("dappled_prob", 0.0)),
         "chaos": float(rng.uniform(float(c_lo), float(c_hi))),
+        "wind": wind,
+        "wind_strength": float(rng.uniform(float(w_lo), float(w_hi))),
+        "wind_dir_deg": float(rng.uniform(0.0, 360.0)),
     }
 
 
@@ -1731,7 +1873,8 @@ def _extrude_buildings(
     objs: list[bpy.types.Object] = []
     gaps = list(gaps or [])
     s = 14.0
-    facade = road_half + sidewalk_w + 1.6
+    setback = float(cfg.get("building_setback", 3.6))
+    facade = road_half + sidewalk_w + setback
 
     def _skip_gap(s_now: float) -> float:
         for a, b in gaps:
@@ -1806,9 +1949,8 @@ def _extrude_buildings(
 # ===========================================================================
 #
 # Every builder below returns bare ``(verts, faces)`` so it can be handed to
-# MeshLibrary.mesh() and cached. Per-object variety comes from scale and yaw
-# on the instance, never from a fresh datablock: a park with 26 trees and 160
-# grass clumps costs ~10 meshes, not 186.
+# MeshLibrary.mesh() and cached. A recursive tree is hundreds of objects but
+# only a handful of datablocks (unit trunk, unit branch, a few leaf cards).
 
 TREE_SHAPES: tuple[str, ...] = ("round", "conical", "columnar", "spreading", "bare")
 
@@ -1918,6 +2060,62 @@ def _box_geom(sx: float, sy: float, sz: float) -> tuple[list, list]:
     return verts, faces
 
 
+def _shift_z(
+    geom: tuple[list, list], dz: float,
+) -> tuple[list, list]:
+    verts, faces = geom
+    return [(x, y, z + dz) for x, y, z in verts], faces
+
+
+def _pyramid_geom() -> tuple[list, list]:
+    """Unit square pyramid, origin at the geometric centre."""
+    verts = [
+        (-0.5, -0.5, -0.5), (0.5, -0.5, -0.5), (0.5, 0.5, -0.5), (-0.5, 0.5, -0.5),
+        (0.0, 0.0, 0.5),
+    ]
+    faces = [
+        (0, 1, 2, 3),
+        (0, 1, 4), (1, 2, 4), (2, 3, 4), (3, 0, 4),
+    ]
+    return verts, faces
+
+
+SHAPE_KINDS: tuple[str, ...] = (
+    "cube", "sphere", "cylinder", "pyramid", "cone", "capsule", "lump",
+)
+
+
+def _shape_unit_geom(kind: str) -> tuple[list, list]:
+    """Canonical 1 m threat-shape, origin at the centre, for MeshLibrary."""
+    if kind == "cube":
+        return _box_geom(1.0, 1.0, 1.0)
+    if kind == "sphere":
+        return _blob_geom(0.5, 0.5, 0.5, seed=0, rings=8, segs=12, jitter=0.0)
+    if kind == "cylinder":
+        return _shift_z(_tapered_tube_geom(0.5, 0.5, 1.0, segs=12, rings=2), -0.5)
+    if kind == "pyramid":
+        return _pyramid_geom()
+    if kind == "cone":
+        return _shift_z(_cone_geom(0.5, 1.0, segs=12), -0.5)
+    if kind == "capsule":
+        return _blob_geom(0.38, 0.38, 0.50, seed=1, rings=8, segs=12, jitter=0.0)
+    # lump: irregular rock / bag — still one cached datablock.
+    return _blob_geom(0.50, 0.42, 0.46, seed=2, rings=7, segs=10, jitter=0.28)
+
+
+def _bind_object_material(obj: bpy.types.Object, mat: bpy.types.Material) -> None:
+    """Per-object albedo on a linked mesh (does not rewrite the datablock slot)."""
+    if obj.data is None:
+        return
+    if not obj.data.materials:
+        obj.data.materials.append(mat)
+    if obj.material_slots:
+        obj.material_slots[0].link = "OBJECT"
+        obj.material_slots[0].material = mat
+    else:
+        assign_mat(obj, mat)
+
+
 def _crater_geom(
     radius: float, depth: float, rim: float = 0.06, segs: int = 18,
 ) -> tuple[list, list]:
@@ -1964,6 +2162,123 @@ def _grass_clump_geom(
     return verts, faces
 
 
+def _shape_ratio(shape: str, weber_ratio: float) -> float:
+    """Weber–Penn ``ShapeRatio``. ``weber_ratio`` is 1 at the bole, 0 at the tip."""
+    r = min(1.0, max(0.0, float(weber_ratio)))
+    if shape == "conical":
+        return 0.2 + 0.8 * r
+    if shape == "columnar":
+        return 0.50 + 0.50 * r
+    if shape == "spreading":
+        return 0.2 + 0.8 * math.sin(0.5 * math.pi * r)
+    return 0.2 + 0.8 * math.sin(math.pi * r)
+
+
+def _orient_y(
+    p: tuple[float, float, float], dx: float, dy: float, dz: float,
+) -> tuple[float, float, float]:
+    """Rotate ``p`` so local +Y points at ``(dx, dy, dz)``."""
+    target = Vector((float(dx), float(dy), float(dz)))
+    if target.length < 1e-8:
+        return p
+    target.normalize()
+    v = target.to_track_quat("Y", "Z") @ Vector(p)
+    return (float(v.x), float(v.y), float(v.z))
+
+
+def _leaf_spray_geom(
+    seed: int, n: int, span: float, needle: bool = False,
+) -> tuple[list, list]:
+    """Many small kite leaves spaced along +Z (one twig's worth).
+
+    Each leaf is two triangles plus back faces. They hang off the twig,
+    they are not a ball at the origin — that was the old sprig, and it
+    read as a green lump. Shared through MeshLibrary; per-twig variety
+    is yaw of the parent joint.
+    """
+    rnd = random.Random(int(seed))
+    verts: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, ...]] = []
+    count = max(5, int(n))
+    length = max(0.12, float(span))
+    for i in range(count):
+        # Bias toward the tip so the crown is a volume, not ivy on the bark.
+        t = ((i + 0.5) / count) ** 0.62 + rnd.uniform(-0.02, 0.02)
+        z = length * min(0.98, max(0.10, 0.12 + 0.86 * t))
+        azim = i * 2.399963 + rnd.uniform(-0.22, 0.22)
+        hang = rnd.uniform(0.22, 0.70)
+        if needle:
+            w = rnd.uniform(0.018, 0.034)
+            tip = rnd.uniform(0.09, 0.16)
+            mid = rnd.uniform(0.018, 0.034)
+            droop = rnd.uniform(0.006, 0.016)
+            outward = rnd.uniform(0.03, 0.08)
+        else:
+            w = rnd.uniform(0.060, 0.110)
+            tip = rnd.uniform(0.18, 0.30)
+            mid = rnd.uniform(0.050, 0.095)
+            droop = rnd.uniform(0.014, 0.036)
+            outward = rnd.uniform(0.07, 0.18)
+        raw = (
+            (0.0, 0.0, 0.0),
+            (-w, mid, 0.002),
+            (0.0, tip, -droop),
+            (w, mid, 0.002),
+        )
+        dx, dy, dz = math.cos(azim), math.sin(azim), -0.20 - hang
+        base = len(verts)
+        ox0 = math.cos(azim) * outward
+        oy0 = math.sin(azim) * outward
+        for p in raw:
+            ox, oy, oz = _orient_y(p, dx, dy, dz)
+            verts.append((ox + ox0, oy + oy0, oz + z))
+        faces.extend((
+            (base, base + 1, base + 2),
+            (base, base + 2, base + 3),
+            (base, base + 2, base + 1),
+            (base, base + 3, base + 2),
+        ))
+    return verts, faces
+
+
+def _euler_align_z(dx: float, dy: float, dz: float) -> tuple[float, float, float]:
+    """Euler XYZ that sends local +Z toward ``(dx, dy, dz)``."""
+    v = Vector((float(dx), float(dy), float(dz)))
+    if v.length < 1e-8:
+        return (0.0, 0.0, 0.0)
+    v.normalize()
+    e = v.to_track_quat("Z", "Y").to_euler("XYZ")
+    return (float(e.x), float(e.y), float(e.z))
+
+
+def _tilt_z(split: float, azim: float) -> tuple[float, float, float]:
+    """Rotate local +Z by ``split`` radians around an axis in the XY plane."""
+    s, c = math.sin(split), math.cos(split)
+    return _euler_align_z(s * math.sin(azim), -s * math.cos(azim), c)
+
+
+def _socket(
+    name: str,
+    collection: bpy.types.Collection,
+    parent: bpy.types.Object,
+    location: Vector,
+    scale: tuple[float, float, float],
+    rotation: tuple[float, float, float],
+) -> bpy.types.Object:
+    """Unscaled-in-world animation joint (empty). Hide from the render."""
+    obj = bpy.data.objects.new(name, None)
+    obj.empty_display_size = 0.03
+    obj.empty_display_type = "PLAIN_AXES"
+    obj.hide_render = True
+    obj.rotation_mode = "XYZ"
+    _link(obj, collection)
+    obj.parent = parent
+    obj.location = location
+    obj.scale = scale
+    obj.rotation_euler = rotation
+    return obj
+
+
 def spawn_tree(
     lib: MeshLibrary,
     rng: random.Random,
@@ -1973,15 +2288,26 @@ def spawn_tree(
     counters: "_Counters",
     chaos: float = 0.0,
     shape: Optional[str] = None,
+    max_canopy: Optional[float] = None,
+    heading: Optional[float] = None,
+    lean_to_road: bool = False,
+    lat_sign: float = 0.0,
+    wind: Any = None,
 ) -> Actor:
-    """Instanced street/park tree. The Actor's threat source is the trunk.
+    """Weber–Penn street/park tree: recursive forks + individual triangle leaves.
 
-    A tree's 2-D box must cover the canopy (that is what the camera sees),
-    but the collision hazard is the trunk. `threat_obj` splits those two so
-    a 3 m canopy overhanging the path does not report a hazard 1.5 m off the
-    walker's line — see `Actor.threat_obj`.
+    The trunk is a single unparented-to-foliage mesh (the TTC threat). Every
+    limb is an unscaled empty (so wind rotation does not shear) plus a
+    tapered tube. Children attach *along* the parent (monopodial) and the
+    tip splits in two or three (dichotomous) — Weber & Penn 1995, Honda
+    1971. Leaves are instanced twig sprays (many small triangles hung
+    along the limb) on the last two wood levels.
+
+    Shared datablocks: one trunk, one branch, a few leaf cards. Object
+    count is high on purpose; the silhouette has to read as a tree from
+    a 1.6 m camera.
     """
-    from materials import make_bark, make_foliage
+    from materials import make_bark, make_leaf
 
     tcfg = dict(cfg["world"].get("tree") or {})
     shapes = tuple(tcfg.get("shapes") or TREE_SHAPES)
@@ -1994,73 +2320,315 @@ def spawn_tree(
     trunk_h = float(rng.uniform(float(h_lo), float(h_hi)))
     trunk_r = float(rng.uniform(float(r_lo), float(r_hi)))
     canopy_r = float(rng.uniform(float(c_lo), float(c_hi)))
+    if max_canopy is not None:
+        canopy_r = min(canopy_r, max(0.45, float(max_canopy)))
     instance_id = counters.next_id("tree")
+    th = max(trunk_h, 1e-3)
+    tr = max(trunk_r, 1e-3)
+    bare = shape == "bare"
+    needle = shape == "conical"
+    small = canopy_r < 1.15
+    if needle:
+        max_depth = 2
+        max_stems = 36 if small else 70
+        n_length = 0.70
+        base_size = 0.18
+    elif shape == "columnar":
+        max_depth = 4 if not small else 3
+        max_stems = 48 if small else 110
+        n_length = 0.28
+        base_size = 0.30
+    elif shape == "spreading":
+        max_depth = 4 if not small else 3
+        max_stems = 56 if small else 150
+        n_length = 0.48
+        base_size = 0.30
+    else:
+        max_depth = 4 if not small else 3
+        max_stems = 48 if small else 140
+        n_length = 0.40
+        base_size = 0.34
 
-    # A handful of shape keys, reused across every tree in the episode.
     bark = lib.material("bark", lambda: make_bark("bark_shared"))
     leaf_key = rng.randrange(0, 3)
-    leaf = lib.material(
+    leaf_mat = lib.material(
         f"leaf_{leaf_key}",
-        lambda: make_foliage(f"foliage_{leaf_key}", rng, chaos),
+        lambda: make_leaf(f"leaf_{leaf_key}", rng, chaos),
     )
+    spray_prefix = f"spray_{'needle' if needle else 'broad'}_{leaf_key}"
 
+    root = bpy.data.objects.new(instance_id, None)
+    root.empty_display_size = 0.10
+    root.empty_display_type = "PLAIN_AXES"
+    root.rotation_mode = "XYZ"
+    _link(root, collection)
+    root.location = loc
+    lean = math.radians(rng.uniform(float(lean_lo), float(lean_hi)))
+    yaw = float(heading) if heading is not None else rng.uniform(0.0, 2.0 * math.pi)
+    if lean_to_road and abs(lat_sign) > 1e-6:
+        root.rotation_euler = (0.0, -math.copysign(lean, lat_sign), yaw)
+    else:
+        root.rotation_euler = (lean, 0.0, yaw)
+
+    # The visible trunk is only the bole. Above that the stem *splits* —
+    # a full-height pole with sticks glued on is what the last tree was.
+    # Firs keep a full leader (monopodial); everything else forks.
+    bole_h = th if needle else th * base_size
     trunk = lib.instance(
-        instance_id,
+        f"{instance_id}_trunk",
         "trunk",
-        lambda: _tapered_tube_geom(1.0, 0.66, 1.0, segs=8, rings=3),
+        lambda: _tapered_tube_geom(1.0, 0.72, 1.0, segs=10, rings=4),
         collection,
-        loc,
+        Vector((0.0, 0.0, 0.0)),
         mat=bark,
-        rotation_z=rng.uniform(0.0, 2.0 * math.pi),
-        scale=(trunk_r, trunk_r, trunk_h),
+        rotation_z=0.0,
+        scale=(tr, tr, bole_h),
         smooth=True,
     )
-    # Lean is applied on the instance, so a leaning tree is still the same mesh.
-    lean = math.radians(rng.uniform(float(lean_lo), float(lean_hi)))
-    trunk.rotation_euler = (lean, 0.0, trunk.rotation_euler[2])
+    trunk.parent = root
+    trunk.location = Vector((0.0, 0.0, 0.0))
+    trunk.scale = (tr, tr, bole_h)
+    trunk.rotation_euler = (0.0, 0.0, 0.0)
 
-    if shape != "bare":
-        if shape == "conical":
-            key = "canopy_cone"
-            builder = lambda: _cone_geom(1.0, 2.0, segs=10)  # noqa: E731
-            sx = sy = canopy_r
-            sz = canopy_r * rng.uniform(0.8, 1.5)
-            z_off = trunk_h * 0.55
-        else:
-            key = f"canopy_blob_{leaf_key}"
-            builder = lambda: _blob_geom(1.0, 1.0, 1.0, seed=1000 + leaf_key)  # noqa: E731
-            aspect = {
-                "round": (1.0, 1.0, 0.86),
-                "columnar": (0.55, 0.55, 1.75),
-                "spreading": (1.35, 1.35, 0.52),
-            }.get(shape, (1.0, 1.0, 0.9))
-            sx, sy, sz = (canopy_r * a for a in aspect)
-            z_off = trunk_h * 0.92 + sz * 0.35
-        canopy = lib.instance(
-            instance_id + "_canopy",
-            key,
-            builder,
+    foliage: list[FoliagePart] = []
+    stem_i = [0]
+    leaf_i = [0]
+    rotate = math.radians(137.5)
+
+    def _add_joint(obj: bpy.types.Object, kind: str, flex: float) -> None:
+        rest = (
+            float(obj.rotation_euler[0]),
+            float(obj.rotation_euler[1]),
+            float(obj.rotation_euler[2]),
+        )
+        foliage.append(FoliagePart(
+            obj, rest,
+            phase=rng.uniform(0.0, 2.0 * math.pi),
+            flutter=rng.uniform(0.0, 2.0 * math.pi),
+            kind=kind,
+            flex=flex,
+        ))
+
+    def _wood(joint: bpy.types.Object, radius: float, length: float, tag: str) -> None:
+        mesh = lib.instance(
+            f"{instance_id}_{tag}",
+            "branch",
+            lambda: _tapered_tube_geom(1.0, 0.40, 1.0, segs=8, rings=3),
             collection,
             Vector((0.0, 0.0, 0.0)),
-            mat=leaf,
-            rotation_z=rng.uniform(0.0, 2.0 * math.pi),
-            scale=(sx, sy, sz),
+            mat=bark,
+            rotation_z=0.0,
+            scale=(radius, radius, length),
             smooth=True,
         )
-        canopy.parent = trunk
-        # Parenting inherits the trunk's scale, so undo it in the child.
-        canopy.location = Vector((0.0, 0.0, z_off / max(trunk_h, 1e-3)))
-        canopy.scale = (sx / max(trunk_r, 1e-3), sy / max(trunk_r, 1e-3), sz / max(trunk_h, 1e-3))
+        mesh.parent = joint
+        mesh.location = Vector((0.0, 0.0, 0.0))
+        mesh.scale = (radius, radius, length)
+        mesh.rotation_euler = (0.0, 0.0, 0.0)
 
+    def _place_sprays(joint: bpy.types.Object, length: float, dense: bool) -> None:
+        if bare:
+            return
+        L = max(0.12, float(length))
+        # One or two shared sprays cover the twig. Each mesh is many small
+        # triangles already hung along +Z — not a pom-pom at the origin.
+        if L <= 0.48:
+            chunks = ((0.0, 0.36, 14, "s"),)
+        elif L <= 0.82:
+            chunks = ((0.0, 0.60, 20, "m"),)
+        elif L <= 1.15:
+            chunks = ((0.0, 0.92, 26, "l"),)
+        else:
+            chunks = ((0.0, 0.92, 24, "l"), (L - 0.88, 0.92, 22, "l"))
+        extra = 6 if dense else 2
+        for along, span, n, tag in chunks:
+            leaf_i[0] += 1
+            n_use = n + extra + (4 if needle else 0)
+            key = f"{spray_prefix}_{tag}"
+            yaw = rng.uniform(0.0, 2.0 * math.pi)
+            s = min(1.12, max(0.68, L / span if L < span else 1.0))
+            s *= rng.uniform(0.90, 1.10)
+            spray = lib.instance(
+                f"{instance_id}_f{leaf_i[0]}",
+                key,
+                lambda n_use=n_use, span=span: _leaf_spray_geom(
+                    4300 + leaf_key * 10 + n_use, n_use, span, needle,
+                ),
+                collection,
+                Vector((0.0, 0.0, 0.0)),
+                mat=leaf_mat,
+                rotation_z=0.0,
+                scale=(s, s, s),
+                smooth=False,
+            )
+            spray.parent = joint
+            spray.location = Vector((0.0, 0.0, max(0.0, along)))
+            spray.scale = (s, s, s)
+            spray.rotation_euler = (0.0, 0.0, yaw)
+            _add_joint(spray, "leaf", flex=1.0)
+
+    def _down_angle(weber_r: float, lateral: bool) -> float:
+        if needle:
+            base, tip = 1.30, 0.85
+        elif shape == "spreading":
+            base, tip = 1.36, 0.55
+        elif shape == "columnar":
+            base, tip = 0.62, 0.28
+        else:
+            base, tip = 1.08, 0.40
+        if not lateral:
+            base *= 0.42
+            tip *= 0.55
+        ang = tip + (base - tip) * weber_r
+        return max(0.12, ang + rng.uniform(-0.10, 0.10))
+
+    def _grow(
+        parent: bpy.types.Object,
+        attach_z: float,
+        eul: tuple[float, float, float],
+        length: float,
+        radius: float,
+        depth: int,
+    ) -> None:
+        if length < 0.11 or radius < 0.007:
+            return
+        if stem_i[0] >= max_stems:
+            if not bare and length > 0.14:
+                leaf_i[0] += 1
+                tip = _socket(
+                    f"{instance_id}_x{leaf_i[0]}",
+                    collection, parent,
+                    Vector((0.0, 0.0, attach_z)),
+                    (1.0, 1.0, 1.0), eul,
+                )
+                _place_sprays(tip, length, dense=True)
+            return
+        stem_i[0] += 1
+        sid = stem_i[0]
+        joint = _socket(
+            f"{instance_id}_j{sid}",
+            collection, parent,
+            Vector((0.0, 0.0, attach_z)),
+            (1.0, 1.0, 1.0), eul,
+        )
+        _wood(joint, radius, length, f"w{sid}")
+        flex = 0.22 + 0.90 * (depth / max(max_depth, 1))
+        _add_joint(joint, "branch", flex=flex)
+
+        terminal = depth >= max_depth
+        if not bare and (terminal or depth >= max_depth - 1):
+            _place_sprays(joint, length, dense=terminal)
+        if terminal:
+            return
+
+        remain = max_stems - stem_i[0]
+        if needle:
+            n_lat = 2 if depth == 1 and remain > 4 else 0
+            n_apical = 0
+        elif depth == 1:
+            n_lat = 2 if small else 3
+            n_apical = 2 if rng.random() < 0.62 else 3
+        elif depth == 2:
+            n_lat = 1 if small else 2
+            n_apical = 2
+        elif depth == 3:
+            n_lat = 0
+            n_apical = 2
+        else:
+            n_lat = 0
+            n_apical = 2 if remain > 4 else 0
+        n_lat = min(n_lat, max(0, remain - n_apical))
+        n_apical = min(n_apical, max(0, remain - n_lat))
+
+        rot0 = rng.uniform(0.0, 2.0 * math.pi)
+        for i in range(n_lat):
+            t = 0.32 + 0.52 * ((i + 0.5) / max(n_lat, 1))
+            t += rng.uniform(-0.04, 0.04)
+            t = min(0.88, max(0.24, t))
+            wr = 1.0 - t
+            child_len = (length - 0.45 * (t * length)) * rng.uniform(0.42, 0.62)
+            child_len = max(0.16, min(child_len, canopy_r * 0.75))
+            child_r = max(0.009, radius * rng.uniform(0.48, 0.64))
+            azim = rot0 + i * rotate + rng.uniform(-0.20, 0.20)
+            _grow(
+                joint, t * length,
+                _tilt_z(_down_angle(wr, True), azim),
+                child_len, child_r, depth + 1,
+            )
+
+        for k in range(n_apical):
+            azim = rot0 + (2.0 * math.pi * k) / max(n_apical, 1) + rng.uniform(-0.16, 0.16)
+            child_len = length * rng.uniform(0.58, 0.82)
+            child_len = max(0.16, min(child_len, canopy_r * 0.90))
+            child_r = max(0.009, radius * rng.uniform(0.58, 0.76))
+            # Wide enough crotch that the fork reads as a split, not a kink.
+            split = 0.32 + rng.uniform(-0.06, 0.10)
+            _grow(
+                joint, length * rng.uniform(0.92, 0.99),
+                _tilt_z(split, azim),
+                child_len, child_r, depth + 1,
+            )
+
+    # First-order limbs along the trunk (parent = unscaled root).
+    bole = base_size * th
+    if needle:
+        n_whorl = 4 if small else 6
+        per = 4 if small else 6
+        for w in range(n_whorl):
+            t = 0.20 + 0.74 * (w / max(n_whorl - 1, 1))
+            wr = (th - t * th) / max(th - bole, 1e-3)
+            lat_len = max(0.22, canopy_r * _shape_ratio("conical", wr) * rng.uniform(0.90, 1.18))
+            down = _down_angle(wr, True)
+            az0 = w * 0.42 + rng.uniform(-0.08, 0.08)
+            lat_r = max(0.010, tr * rng.uniform(0.22, 0.36))
+            for k in range(per):
+                _grow(
+                    root, t * th,
+                    _tilt_z(down, az0 + k * (2.0 * math.pi / per)),
+                    lat_len * rng.uniform(0.88, 1.08),
+                    lat_r, 1,
+                )
+    else:
+        # Main crotch at the top of the bole: 2 or 3 thick leaders.
+        n_tip = 2 if (small or rng.random() < 0.45) else 3
+        rot0 = rng.uniform(0.0, 2.0 * math.pi)
+        for k in range(n_tip):
+            azim = rot0 + (2.0 * math.pi * k) / n_tip + rng.uniform(-0.14, 0.14)
+            tip_len = max(0.45, th * n_length * rng.uniform(0.95, 1.25))
+            tip_len = min(tip_len, canopy_r * 1.05)
+            _grow(
+                root, bole_h * rng.uniform(0.94, 0.99),
+                _tilt_z(0.38 + rng.uniform(-0.06, 0.10), azim),
+                tip_len, max(0.018, tr * rng.uniform(0.60, 0.78)), 1,
+            )
+        # A few lower laterals off the upper bole so the fork is not a lone Y.
+        n_low = 2 if small else (3 if shape == "columnar" else 4)
+        for i in range(n_low):
+            t = 0.52 + 0.40 * ((i + 0.4) / max(n_low, 1))
+            wr = 1.0 - t
+            child_len = th * n_length * _shape_ratio(shape, wr) * rng.uniform(0.70, 1.00)
+            child_len = min(child_len, canopy_r * 0.85)
+            child_len = max(0.32, child_len)
+            azim = rot0 + 0.5 * rotate + i * rotate + rng.uniform(-0.16, 0.16)
+            _grow(
+                root, bole_h * min(0.96, max(0.40, t)),
+                _tilt_z(_down_angle(wr, True), azim),
+                child_len, max(0.014, tr * rng.uniform(0.40, 0.58)), 1,
+            )
+
+    _tag(root, instance_id, "tree")
     _tag(trunk, instance_id, "tree")
     return Actor(
-        obj=trunk,
+        obj=root,
         instance_id=instance_id,
         class_name="tree",
         category="static",
         origin_z=float(loc.z),
         threat_mode="volume",
         threat_obj=trunk,
+        foliage=foliage,
+        wind=wind,
+        corridor_pad=max(0.28, tr + 0.12),
     )
 
 
@@ -2075,11 +2643,26 @@ def scatter_grass(
     n: int,
     ground_z: float = 0.0,
     chaos: float = 0.0,
+    exclude_abs_lat: float = 0.0,
 ) -> int:
-    """Scatter instanced grass tufts. Pure decor — never annotated."""
+    """Scatter instanced grass tufts. Pure decor — never annotated.
+
+    ``exclude_abs_lat`` keeps clumps off the carriageway (and, on paved
+    biomes, off the sidewalk) so grass is not growing out of asphalt.
+    """
     from materials import make_grass
 
     if n <= 0:
+        return 0
+    lo, hi = float(lat_lo), float(lat_hi)
+    ex = max(0.0, float(exclude_abs_lat))
+    bands: list[tuple[float, float]] = []
+    if lo < -ex:
+        bands.append((lo, min(hi, -ex)))
+    if hi > ex:
+        bands.append((max(lo, ex), hi))
+    bands = [(a, b) for a, b in bands if b > a + 1e-3]
+    if not bands:
         return 0
     gcfg = dict(cfg["world"].get("grass") or {})
     blades = int(gcfg.get("blades", 26))
@@ -2089,7 +2672,8 @@ def scatter_grass(
     made = 0
     for i in range(int(n)):
         s = rng.uniform(1.0, max(2.0, road.length - 1.0))
-        lat = rng.uniform(float(lat_lo), float(lat_hi))
+        a, b = bands[i % len(bands)] if rng.random() < 0.5 else rng.choice(bands)
+        lat = rng.uniform(a, b)
         v = rng.randrange(variants)
         mat = lib.material(
             f"grass_{v}",
@@ -2149,6 +2733,10 @@ HEAD_CLASSES = (
     ("sign", "sign", (1.10, 0.08, 0.70)),
     ("truck_door", "truck_door", (0.12, 1.00, 1.10)),
 )
+
+# Default sidewalk clutter — furniture on the *shop-front* half of the
+# sidewalk, never floating boxes and never trip-holes (those stay injectors).
+FURNITURE_CLASSES: tuple[str, ...] = ("trash_can", "scooter", "barricade", "puddle")
 
 
 class _Counters:
@@ -2615,24 +3203,31 @@ def spawn_projectile(
     )
 
 
-def spawn_threat_cube(
+def spawn_threat_shape(
     loc: Vector,
     collection: bpy.types.Collection,
     counters: _Counters,
     rng: random.Random,
+    kind: str = "cube",
     size: float = 0.45,
     z: Optional[float] = None,
     chaos: float = 0.0,
+    lib: Optional[MeshLibrary] = None,
 ) -> Actor:
     """Generic approaching primitive — the detector should not overfit to cars.
 
-    This is the purest anti-overfitting actor in the pipeline: an object with
-    no semantic identity that nonetheless produces a textbook looming signal.
-    Its proportions and shading are therefore randomised hardest of all.
+    Cube / sphere / cylinder / pyramid / cone / capsule / lump, all unit
+    meshes from MeshLibrary. Colour and aspect are randomised; the class
+    name stays ``threat_<kind>`` so labels stay analysable.
     """
     from materials import make_chaos_surface
 
-    instance_id = counters.next_id("threat_cube")
+    if kind in ("shape", "random", "", "any"):
+        kind = rng.choice(SHAPE_KINDS)
+    if kind not in SHAPE_KINDS:
+        kind = "cube"
+    class_name = f"threat_{kind}"
+    instance_id = counters.next_id(class_name)
     loc = loc.copy()
     loc.z = float(size) * 0.5 if z is None else float(z)
     color = rng.choice(
@@ -2642,31 +3237,68 @@ def spawn_threat_cube(
             (0.78, 0.62, 0.12),
             (0.22, 0.22, 0.24),
             (0.45, 0.18, 0.48),
+            (0.12, 0.55, 0.28),
+            (0.62, 0.40, 0.18),
         )
     )
-    # Aspect jitter so "the threat" is not a recognisable cube silhouette.
-    ax = 1.0 + 0.7 * chaos * (rng.random() * 2.0 - 1.0)
-    ay = 1.0 + 0.7 * chaos * (rng.random() * 2.0 - 1.0)
-    az = 1.0 + 0.7 * chaos * (rng.random() * 2.0 - 1.0)
-    obj = create_box(
-        instance_id,
-        (size * max(0.35, ax), size * max(0.35, ay), size * max(0.35, az)),
-        loc,
-        collection,
-        make_chaos_surface(
-            instance_id, color, rng, chaos, base_roughness=rng.uniform(0.25, 0.7),
-        ),
+    ax = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
+    ay = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
+    az = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
+    sx = size * max(0.40, ax)
+    sy = size * max(0.40, ay)
+    sz = size * max(0.40, az)
+    if kind == "capsule":
+        sx = sy = size * max(0.40, 0.55 * ax)
+        sz = size * max(0.55, az)
+    mat = make_chaos_surface(
+        instance_id, color, rng, chaos, base_roughness=rng.uniform(0.22, 0.78),
     )
-    _tag(obj, instance_id, "threat_cube")
+    if lib is not None:
+        obj = lib.instance(
+            instance_id,
+            f"threat_{kind}",
+            lambda k=kind: _shape_unit_geom(k),
+            collection,
+            loc,
+            mat=None,
+            rotation_z=rng.uniform(0.0, 2.0 * math.pi),
+            scale=(sx, sy, sz),
+            smooth=kind != "cube",
+        )
+        _bind_object_material(obj, mat)
+    else:
+        verts, faces = _shape_unit_geom(kind)
+        verts = [(x * sx, y * sy, z_ * sz) for x, y, z_ in verts]
+        obj = create_mesh(instance_id, verts, faces, collection, loc, mat)
+        obj.rotation_mode = "XYZ"
+        obj.rotation_euler[2] = rng.uniform(0.0, 2.0 * math.pi)
+    _tag(obj, instance_id, class_name)
     return Actor(
         obj=obj,
         instance_id=instance_id,
-        class_name="threat_cube",
+        class_name=class_name,
         category="dynamic",
         origin_z=loc.z,
         threat_mode="volume",
         corridor_pad=max(0.18, size * 0.5 + 0.05),
         allow_sidewalk=True,
+    )
+
+
+def spawn_threat_cube(
+    loc: Vector,
+    collection: bpy.types.Collection,
+    counters: _Counters,
+    rng: random.Random,
+    size: float = 0.45,
+    z: Optional[float] = None,
+    chaos: float = 0.0,
+    lib: Optional[MeshLibrary] = None,
+) -> Actor:
+    """Cube-shaped looming primitive. Prefer :func:`spawn_threat_shape`."""
+    return spawn_threat_shape(
+        loc, collection, counters, rng,
+        kind="cube", size=size, z=z, chaos=chaos, lib=lib,
     )
 
 
@@ -2769,6 +3401,8 @@ class WorldGenerator:
         self.biome = "street"
         self.chaos = 0.0
         self.lib = MeshLibrary()
+        self._wind: Optional[WindField] = None
+        self._sites: list[tuple[float, float, float]] = []
         # Populated by freeze(); invalidated whenever an actor is appended.
         self._movers: Optional[list[Actor]] = None
         self._annotatable: Optional[list[Actor]] = None
@@ -2824,7 +3458,7 @@ class WorldGenerator:
             self.cfg["world"]["n_background_pedestrians"] = (0, 0)
             self.cfg["world"]["n_background_vehicles"] = (0, 0)
             self.cfg["world"]["poisson"]["n_ground_static"] = (0, 2)
-            self.cfg["world"]["poisson"]["n_head_hazards"] = (0, 1)
+            self.cfg["world"]["poisson"]["n_head_hazards"] = (0, 0)
 
     # -- build -------------------------------------------------------------
 
@@ -2839,6 +3473,8 @@ class WorldGenerator:
         # just freed by reset_blender_scene, so holding them would be a
         # use-after-free waiting to happen.
         self.lib = MeshLibrary()
+        self._wind = None
+        self._sites = []
 
         col_world = ensure_collection("WORLD", scene)
         col_haz = ensure_collection("HAZARDS", scene)
@@ -2874,6 +3510,12 @@ class WorldGenerator:
             env_choice["azim_deg"] = glare_azimuth_deg(road.tangent(3.0))
         self.chaos = float(env_choice.get("chaos", 0.0))
         chaos = self.chaos
+        self._wind = WindField(
+            self.rng.randrange(1, 2**31),
+            strength=float(env_choice.get("wind_strength", 0.40)),
+            direction=math.radians(float(env_choice.get("wind_dir_deg", 0.0))),
+            label=str(env_choice.get("wind", "breeze")),
+        )
         roughness_sw = rng.uniform(*dr["roughness"])
 
         curb_h = float(wcfg["curb_height"])
@@ -2966,18 +3608,21 @@ class WorldGenerator:
                     night=night, gaps=self._building_gaps,
                 )
 
-        lamp_objects = self._spawn_streetlamps(road, road_half, sw, col_world, col_lights)
-
         counters = _Counters()
-        # Procedural nature, all linked instances off a few shared meshes.
+        # Trees first so lamps / furniture / cars can keep clear of trunks.
         tree_actors = self._scatter_trees(road, road_half, sw, verge_w, col_haz, counters)
+        lamp_objects = self._spawn_streetlamps(road, road_half, sw, col_world, col_lights)
         n_grass = self.rng.randint(*[int(v) for v in wcfg.get("n_grass_clumps", (0, 0))])
         if n_grass > 0:
+            # Grass stays on the verge (and park fields), never the asphalt
+            # or the walking slab.
+            exclude = road_half + (0.12 if ground_kind == "grass" else sw + 0.08)
             scatter_grass(
                 self.lib, rng, self.cfg, col_world, road,
                 lat_lo=-(road_half + sw + verge_w * 0.95),
                 lat_hi=(road_half + sw + verge_w * 0.95),
                 n=n_grass, ground_z=0.02, chaos=chaos,
+                exclude_abs_lat=exclude,
             )
 
         if bool(env_choice.get("dappled", False)):
@@ -2988,6 +3633,9 @@ class WorldGenerator:
         env["biome"] = self.biome
         env["chaos"] = round(chaos, 4)
         env["dappled"] = bool(env_choice.get("dappled", False))
+        env["wind"] = str(env_choice.get("wind", "breeze"))
+        env["wind_strength"] = round(float(env_choice.get("wind_strength", 0.4)), 3)
+        env["wind_dir_deg"] = round(float(env_choice.get("wind_dir_deg", 0.0)), 1)
 
         actors: list[Actor] = []
         actors.extend(tree_actors)
@@ -3091,6 +3739,7 @@ class WorldGenerator:
             or a.stop_t is not None
             or a.gait is not None
             or a.wheels
+            or a.foliage
         ]
         self._annotatable = [a for a in actors if a.annotatable]
 
@@ -3174,6 +3823,11 @@ class WorldGenerator:
                 r, kind="cube", obj_speed=self.rng.uniform(*self.cfg["world"]["cube_speed"]),
                 tau=2.6, dlat=nm, cube_size=self.rng.uniform(0.35, 0.60),
             ),
+            "shape_near_miss": lambda r: self._inject_oncoming(
+                r, kind="shape",
+                obj_speed=self.rng.uniform(*self.cfg["world"].get("shape_speed", self.cfg["world"]["cube_speed"])),
+                tau=2.6, dlat=nm, cube_size=self.rng.uniform(0.35, 0.65),
+            ),
             "pothole_near": lambda r: self._inject_pothole(
                 r, lead=float(self.cfg["scenarios"].get("pothole_near_lead_m", 7.2)), dlat=0.85,
             ),
@@ -3210,6 +3864,23 @@ class WorldGenerator:
                 speed=self.rng.uniform(*self.cfg["world"]["cube_speed"]),
                 cube_size=self.rng.uniform(0.35, 0.65),
             ),
+            "cube_on_path": lambda r: self._inject_static_shapes(r, kind="cube", n=1),
+            "shape_head_on": lambda r: self._inject_oncoming(
+                r, kind="shape",
+                obj_speed=self.rng.uniform(*self.cfg["world"].get("shape_speed", self.cfg["world"]["cube_speed"])),
+                tau=2.4, dlat=cr, cube_size=self.rng.uniform(0.40, 0.75),
+            ),
+            "shape_from_left": lambda r: self._inject_through_cross(
+                r, kind="shape", cpa=cr, from_left=True,
+                speed=self.rng.uniform(*self.cfg["world"].get("shape_speed", self.cfg["world"]["cube_speed"])),
+                cube_size=self.rng.uniform(0.35, 0.70),
+            ),
+            "shape_from_right": lambda r: self._inject_through_cross(
+                r, kind="shape", cpa=cr, from_left=False,
+                speed=self.rng.uniform(*self.cfg["world"].get("shape_speed", self.cfg["world"]["cube_speed"])),
+                cube_size=self.rng.uniform(0.35, 0.70),
+            ),
+            "shapes_on_path": lambda r: self._inject_static_shapes(r, kind="shape", n=0),
             "car_cut_in": lambda r: self._inject_cut_in(
                 r,
                 t0=float(self.cfg["scenarios"]["cut_in_trigger_s"]),
@@ -3298,6 +3969,52 @@ class WorldGenerator:
 
     # -- internals: scatter / background ----------------------------------
 
+    def _occupy(self, s: float, lat: float, radius: float) -> None:
+        self._sites.append((float(s), float(lat), float(radius)))
+
+    def _site_free(self, s: float, lat: float, radius: float) -> bool:
+        for ps, pl, pr in self._sites:
+            ds = float(s) - ps
+            dl = float(lat) - pl
+            need = float(radius) + pr
+            if ds * ds + dl * dl < need * need:
+                return False
+        return True
+
+    def _carriage_free(
+        self,
+        s: float,
+        lat: float,
+        half_s: float,
+        half_lat: float,
+        road_half: float,
+    ) -> bool:
+        """True if (s, lat) on the carriageway is clear of in-road trunks."""
+        for ps, pl, _pr in self._sites:
+            if abs(pl) > float(road_half) + 0.35:
+                continue
+            if abs(float(s) - ps) < half_s and abs(float(lat) - pl) < half_lat:
+                return False
+        return True
+
+    def _tree_free(self, s: float, lat: float, along: float, xy: float = 3.8) -> bool:
+        """Keep crowns from overlapping; extra along-track gap in the same strip."""
+        for ps, pl, _pr in self._sites:
+            ds = abs(float(s) - ps)
+            dl = abs(float(lat) - pl)
+            if ds * ds + dl * dl < xy * xy:
+                return False
+            if dl < 2.2 and ds < along:
+                return False
+        return True
+
+    def _count_range(self, key: str, default: tuple[int, int] = (0, 0)) -> int:
+        lo, hi = [int(v) for v in self.cfg["world"].get(key, default)]
+        if hi <= 0:
+            return 0
+        lo = max(0, min(lo, hi))
+        return self.rng.randint(lo, hi)
+
     def _scatter_ground(
         self,
         road: PathSpline,
@@ -3307,12 +4024,15 @@ class WorldGenerator:
         counters: _Counters,
         roughness: float,
     ) -> list[Actor]:
+        """Shop-front furniture only. Trip holes stay scenario injectors."""
         wcfg = self.cfg["world"]
         n_lo, n_hi = wcfg["poisson"]["n_ground_static"]
         n = self.rng.randint(int(n_lo), int(n_hi))
+        if n <= 0:
+            return []
         samples = poisson_disk_strip(
             length=road.length,
-            half_width=sidewalk_w * 0.35,
+            half_width=sidewalk_w * 0.12,
             radius=float(wcfg["poisson"]["static_radius"]),
             rng=self.rng,
             n_max=n,
@@ -3323,18 +4043,24 @@ class WorldGenerator:
         actors: list[Actor] = []
         road_half = float(wcfg["road_width"]) * 0.5
         curb = float(wcfg["curb_height"])
+        # Outer half of the sidewalk (facade / shop-front), not the gait line.
+        furniture_lat = math.copysign(road_half + sidewalk_w * 0.78, sidewalk_lateral)
         for s, dlat in samples:
-            cls_name = self.rng.choice([c[0] for c in GROUND_CLASSES])
-            lat = sidewalk_lateral + dlat
+            lat = furniture_lat + dlat
+            if not self._site_free(s, lat, 1.1):
+                continue
+            cls_name = self.rng.choice(FURNITURE_CLASSES)
             gz = curb if abs(lat) >= road_half - 0.08 else 0.0
             loc = road.offset_point(s, lat, z=gz)
             heading = heading_from_tangent(road.tangent(s))
-            actors.append(
-                spawn_ground_hazard(
-                    cls_name, loc, heading, collection, self.rng, counters,
-                    roughness, self.chaos,
-                )
+            actor = spawn_ground_hazard(
+                cls_name, loc, heading, collection, self.rng, counters,
+                roughness, self.chaos,
             )
+            actor.s = s
+            actor.lateral = lat
+            self._occupy(s, lat, 1.0)
+            actors.append(actor)
         return actors
 
     def _scatter_head(
@@ -3384,49 +4110,101 @@ class WorldGenerator:
         collection: bpy.types.Collection,
         counters: _Counters,
     ) -> list[Actor]:
-        """Trees on the verge (street) or across the open ground (park).
+        """Planting-strip, curb, median, and (park) path trees.
 
-        Trees are annotated hazards: a trunk is a solid object a blind walker
-        can strike. Placement keeps the trunk outside the walking corridor in
-        street biomes, but a park deliberately puts some close to the path —
-        that is where a low branch or a trunk actually becomes a threat.
+        Trunks are annotated obstacles. Canopies are clamped so they do not
+        intersect a facade; street / median trunks stay off vehicle AABBs
+        by pairing a smaller crown with a pushed-out travel lane.
         """
         wcfg = self.cfg["world"]
-        lo, hi = [int(v) for v in wcfg.get("n_trees", (0, 0))]
-        n = self.rng.randint(lo, hi) if hi > 0 else 0
-        if n <= 0:
-            return []
         open_ground = str(wcfg.get("ground", "paved")) == "grass"
-        inner = road_half + sw * (0.55 if open_ground else 1.0)
-        outer = road_half + sw + max(0.5, verge_w * 0.92)
+        setback = float(wcfg.get("building_setback", 3.6))
+        facade = road_half + sw + setback
+        have_buildings = bool(wcfg.get("buildings", True)) and not open_ground
+        roles: list[str] = []
+        roles.extend("plant" for _ in range(self._count_range("n_trees")))
+        if open_ground:
+            roles.extend("path" for _ in range(self._count_range("n_path_trees")))
+        else:
+            roles.extend("curb" for _ in range(self._count_range("n_street_trees")))
+            roles.extend("median" for _ in range(self._count_range("n_median_trees")))
+        if not roles:
+            return []
+
         actors: list[Actor] = []
-        placed: list[tuple[float, float]] = []
-        for _ in range(n):
-            for _attempt in range(12):
-                s = self.rng.uniform(4.0, max(6.0, road.length - 4.0))
-                lat = self.rng.uniform(inner, outer) * self.rng.choice((-1.0, 1.0))
-                # Cheap Poisson-ish rejection so a copse is not one blob,
-                # plus the same corner-fold guard the buildings use.
-                if offset_folds(road, s, lat, lat, 0.6, road_half - 0.20):
+        curb = float(wcfg["curb_height"])
+        s_lo, s_hi = 4.0, max(6.0, road.length - 4.0)
+        for role in roles:
+            placed = False
+            for _attempt in range(16):
+                s = self.rng.uniform(s_lo, s_hi)
+                if role == "plant" and have_buildings:
+                    sides = tuple(wcfg.get("building_sides", (-1.0, 1.0)))
+                    sign = float(self.rng.choice(sides))
+                else:
+                    sign = self.rng.choice((-1.0, 1.0))
+                if role == "plant":
+                    if open_ground:
+                        inner = road_half + sw * 0.55
+                        outer = road_half + sw + max(0.5, verge_w * 0.92)
+                        lat = self.rng.uniform(inner, outer) * sign
+                        max_c = 2.8
+                    elif have_buildings:
+                        # Sit in the planting strip, crown just shy of the wall.
+                        canopy_guess = self.rng.uniform(1.0, 2.4)
+                        lat_abs = facade - canopy_guess - 0.40
+                        min_lat = road_half + sw + 0.50
+                        if lat_abs < min_lat:
+                            canopy_guess = max(0.55, facade - 0.40 - min_lat)
+                            lat_abs = min_lat
+                        lat = sign * (lat_abs + self.rng.uniform(-0.12, 0.12))
+                        max_c = canopy_guess
+                    else:
+                        lat = sign * (road_half + sw + self.rng.uniform(0.6, 1.8))
+                        max_c = 2.2
+                    if offset_folds(
+                        road, s, lat, lat, max(0.7, max_c * 0.55),
+                        road_half + (0.15 if open_ground else sw - 0.10),
+                    ):
+                        continue
+                    along = 7.5
+                elif role == "curb":
+                    # Tree pit just on the carriageway side of the kerb.
+                    lat = sign * (road_half - self.rng.uniform(0.18, 0.42))
+                    max_c = 1.15
+                    along = 8.0
+                elif role == "path":
+                    lat = self.rng.uniform(-0.22, 0.22)
+                    max_c = 1.35
+                    along = 6.0
+                else:
+                    # Median / mid-street. Small crown so cars in the outer
+                    # lane do not phase through foliage.
+                    lat = self.rng.uniform(-0.16, 0.16)
+                    max_c = 0.95 if road_half < 4.5 else 1.55
+                    along = 10.0
+                if not self._tree_free(s, lat, along=along):
                     continue
-                if all(
-                    (s - ps) ** 2 + (lat - pl) ** 2 > 9.0 for ps, pl in placed
-                ):
-                    break
-            else:
+                z = curb if abs(lat) >= road_half - 0.08 else 0.0
+                loc = road.offset_point(s, lat, z=z)
+                heading = heading_from_tangent(road.tangent(s))
+                actor = spawn_tree(
+                    self.lib, self.rng, self.cfg, collection, loc, counters,
+                    self.chaos,
+                    max_canopy=max_c,
+                    heading=heading,
+                    lean_to_road=(role in ("plant", "curb") and not open_ground),
+                    lat_sign=lat,
+                    wind=self._wind,
+                )
+                actor.s = s
+                actor.lateral = lat
+                self._occupy(s, lat, 2.2)
+                actors.append(actor)
+                placed = True
+                break
+            if not placed:
                 continue
-            placed.append((s, lat))
-            # `self.state` does not exist yet during build(), so resolve the
-            # kerb step from config rather than through the corridor.
-            curb = float(wcfg["curb_height"])
-            z = curb if abs(lat) >= road_half - 0.08 else 0.0
-            loc = road.offset_point(s, lat, z=z)
-            actor = spawn_tree(
-                self.lib, self.rng, self.cfg, collection, loc, counters, self.chaos,
-            )
-            actor.s = s
-            actor.lateral = lat
-            actors.append(actor)
         return actors
 
     def _spawn_canopy_gobo(
@@ -3480,9 +4258,13 @@ class WorldGenerator:
         for i in range(n):
             s = (i + 0.5) * road.length / n
             sign = -1.0 if i % 2 == 0 else 1.0
+            lat = sign * (road_half + sw * 0.88)
+            if not self._site_free(s, lat, 1.6):
+                continue
             tan = road.tangent(s)
             right = road.right(s)
-            base = road.offset_point(s, sign * (road_half + sw * 0.92), z=float(self.cfg["world"]["curb_height"]))
+            base = road.offset_point(s, lat, z=float(self.cfg["world"]["curb_height"]))
+            self._occupy(s, lat, 1.4)
             pole = create_box(
                 f"lamp_pole_{i:02d}", (0.10, 0.10, h), base + Vector((0, 0, h * 0.5)), world_col, mat
             )
@@ -3547,10 +4329,19 @@ class WorldGenerator:
         actors: list[Actor] = []
         used_s: list[float] = []
         # Opposite / far lane so D_cpa stays > 1.5 m versus the sidewalk walker.
-        lane = -math.copysign(float(wcfg["lane_offset"]), sidewalk_lateral)
+        # Median trees push the travel lane outward so hulls do not sit inside
+        # a crown.
+        road_half = float(wcfg["road_width"]) * 0.5
+        lane_abs = float(wcfg["lane_offset"])
+        if any(abs(lat) < road_half * 0.45 and rad >= 3.0 for _s, lat, rad in self._sites):
+            lane_abs = max(lane_abs, road_half * 0.62)
+            lane_abs = min(lane_abs, max(1.15, road_half - 1.15))
+        lane = -math.copysign(lane_abs, sidewalk_lateral)
         for _ in range(n):
             s = self.rng.uniform(4.0, max(5.0, road.length - 15.0))
             if any(abs(s - u) < 8.0 for u in used_s):
+                continue
+            if not self._carriage_free(s, lane, 3.4, 1.35, road_half):
                 continue
             used_s.append(s)
             speed = self.rng.uniform(*wcfg["vehicle_speed"])
@@ -3594,6 +4385,8 @@ class WorldGenerator:
             else:
                 lat = sidewalk_lateral + self.rng.choice((-0.55, 0.55))
             s = self.rng.uniform(10.0, max(12.0, road.length - 8.0))
+            if not self._site_free(s, lat, 1.6):
+                continue
             direction = self.rng.choice((-1.0, 1.0))
             speed = self.rng.uniform(*wcfg["pedestrian_speed"])
             loc = road.offset_point(s, lat, z=0.0)
@@ -3695,6 +4488,8 @@ class WorldGenerator:
         return self.state.corridor.confine(0.0, lat, pad, True)[1]
 
     def _kind_pad(self, kind: str) -> float:
+        if kind in SHAPE_KINDS or kind in ("shape", "random"):
+            return 0.28
         return {"person": 0.35, "vehicle": 1.05, "bicycle": 0.40, "cube": 0.25}.get(kind, 0.30)
 
     def _spawn_kind(
@@ -3736,9 +4531,15 @@ class WorldGenerator:
             actor.corridor_pad = 0.40
             actor.allow_sidewalk = True
             return actor
-        actor = spawn_threat_cube(
+        shape_kind = "cube"
+        if kind in SHAPE_KINDS:
+            shape_kind = kind
+        elif kind in ("shape", "random"):
+            shape_kind = "random"
+        actor = spawn_threat_shape(
             loc, col, self.state.counters, self.rng,
-            size=cube_size, z=cube_z, chaos=self.chaos,
+            kind=shape_kind, size=cube_size, z=cube_z, chaos=self.chaos,
+            lib=self.lib,
         )
         actor.allow_sidewalk = True
         return actor
@@ -4084,6 +4885,37 @@ class WorldGenerator:
             allow_sidewalk=True,
             pad=pad,
         )
+
+    def _inject_static_shapes(
+        self,
+        rig: Any,
+        *,
+        kind: str = "shape",
+        n: int = 0,
+    ) -> None:
+        """Stationary primitives on the gait line (cube-on-path, mixed shapes)."""
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        count = int(n) if int(n) > 0 else self.rng.randint(2, 4)
+        lead0 = 5.4
+        if self._compose is not None:
+            lead0 = lead0 + self._compose.take_group_offset("static")
+        for i in range(count):
+            s = s0 + lead0 + i * 2.55
+            lat = L + self.rng.uniform(-0.10, 0.10)
+            pad = self._kind_pad(kind)
+            actor = self._spawn_kind(
+                kind, s, lat, heading_sign=1.0,
+                cube_size=self.rng.uniform(0.38, 0.72),
+            )
+            actor.category = "static"
+            self._bind(
+                actor, s, lat,
+                speed=0.0,
+                behavior="static",
+                allow_sidewalk=True,
+                pad=pad,
+            )
 
     def _inject_pothole(self, rig: Any, lead: float, dlat: float) -> None:
         assert self.state is not None

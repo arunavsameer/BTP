@@ -136,6 +136,10 @@ CONFIG: dict[str, Any] = {
         "building_depth": (4.0, 10.0),
         "building_height": (6.0, 18.0),
         "building_gap": (0.4, 2.2),
+        # Metres of planting strip between sidewalk outer edge and facade.
+        # Trees sit in this strip (and on the carriageway); canopies must
+        # not reach the wall.
+        "building_setback": 3.6,
         "n_streetlamps": 6,
         "streetlamp_height": 5.6,
         "streetlamp_energy_night": 900.0,
@@ -144,8 +148,11 @@ CONFIG: dict[str, Any] = {
             "static_radius": 3.2,
             "head_hazard_radius": 7.5,
             "k_candidates": 20,
-            "n_ground_static": (6, 12),
-            "n_head_hazards": (3, 7),
+            "n_ground_static": (3, 7),
+            # Floating head-height boxes (branch / AC / sign) are off by
+            # default — they read as junk on the gait line. Re-enable via
+            # config if a pack specifically wants that clutter.
+            "n_head_hazards": (0, 0),
         },
         "n_background_pedestrians": (3, 6),
         "n_background_vehicles": (2, 5),
@@ -154,6 +161,7 @@ CONFIG: dict[str, Any] = {
         "pedestrian_speed": (0.90, 1.45),
         "bicycle_speed": (3.2, 5.5),
         "cube_speed": (1.15, 2.20),
+        "shape_speed": (1.15, 2.20),
         "cross_car_speed": (3.2, 4.8),
         "head_hazard_height": (1.2, 1.8),
         # Pavement outer edge minus this stays inside the facade setback.
@@ -170,15 +178,22 @@ CONFIG: dict[str, Any] = {
             "plaza": 0.16,
         },
         "biomes": {
-            "street": {},  # the historical defaults
+            "street": {
+                "n_trees": (6, 12),
+                "n_street_trees": (2, 5),
+                "n_median_trees": (1, 3),
+            },
             "avenue": {
                 "road_width": 13.0,
                 "lane_offset": 3.10,
                 "sidewalk_width": 3.4,
+                "building_setback": 4.2,
                 "building_height": (10.0, 30.0),
                 "n_background_vehicles": (4, 9),
                 "n_streetlamps": 9,
-                "n_trees": (2, 7),
+                "n_trees": (8, 14),
+                "n_street_trees": (3, 6),
+                "n_median_trees": (2, 5),
             },
             "park": {
                 # A 3 m gravel path through open grass: no kerb, no traffic.
@@ -193,6 +208,7 @@ CONFIG: dict[str, Any] = {
                 "n_background_pedestrians": (4, 9),
                 "n_streetlamps": 3,
                 "n_trees": (10, 26),
+                "n_path_trees": (1, 4),
                 "n_grass_clumps": (60, 160),
                 "ground": "grass",
                 "path_types": ("gentle_curve", "s_curve", "straight"),
@@ -205,24 +221,32 @@ CONFIG: dict[str, Any] = {
                 "curb_height": 0.02,
                 "lane_paint": False,
                 "building_sides": (1.0,),
+                "building_setback": 3.4,
                 "n_background_vehicles": (0, 1),
                 "n_background_pedestrians": (5, 11),
                 "n_streetlamps": 5,
-                "n_trees": (3, 9),
+                "n_trees": (4, 10),
+                "n_street_trees": (1, 3),
+                "n_median_trees": (1, 3),
                 "n_grass_clumps": (0, 30),
                 "ground": "paved",
             },
         },
         # Procedural nature. Counts are per episode; geometry is instanced
         # from a handful of shared datablocks (see MeshLibrary).
-        "n_trees": (0, 4),
-        "n_grass_clumps": (0, 24),
+        # n_trees = planting-strip / field trees. Street / median / path
+        # counts are extra and biome-specific.
+        "n_trees": (6, 12),
+        "n_street_trees": (2, 5),
+        "n_median_trees": (1, 3),
+        "n_path_trees": (0, 0),
+        "n_grass_clumps": (8, 28),
         "tree": {
             "trunk_height": (2.0, 4.8),
             "trunk_radius": (0.08, 0.28),
             "canopy_radius": (1.0, 3.0),
             "shapes": ("round", "conical", "columnar", "spreading", "bare"),
-            "lean_deg": (0.0, 9.0),
+            "lean_deg": (0.0, 6.0),
         },
         "grass": {
             "blades": 26,
@@ -254,7 +278,7 @@ CONFIG: dict[str, Any] = {
             "near_miss": 0.30,
             "critical": 0.30,
         },
-        # 36 named injectors. Motion is Frenet (s, lateral) on the road ribbon
+        # Named injectors. Motion is Frenet (s, lateral) on the road ribbon
         # so actors cannot chord through buildings on a curve.
         "safe_pool": (
             "safe_walk",
@@ -278,6 +302,7 @@ CONFIG: dict[str, Any] = {
             "car_near_miss_lane",
             "car_cross_front",
             "cube_near_miss",
+            "shape_near_miss",
             "pothole_near",
             "cyclist_weaving",
         ),
@@ -290,6 +315,11 @@ CONFIG: dict[str, Any] = {
             "cube_head_on",
             "cube_from_left",
             "cube_from_right",
+            "cube_on_path",
+            "shape_head_on",
+            "shape_from_left",
+            "shape_from_right",
+            "shapes_on_path",
             "car_cut_in",
             "cyclist_head_on",
             "head_level_projectile",
@@ -371,6 +401,17 @@ CONFIG: dict[str, Any] = {
             "clear": 0.50,
             "light_fog": 0.30,
             "heavy_smog": 0.20,
+        },
+        # Per-episode wind. Leaves rustle; the trunk stays still.
+        "wind_weights": {
+            "calm": 0.32,
+            "breeze": 0.48,
+            "windy": 0.20,
+        },
+        "wind_strength": {
+            "calm": (0.02, 0.08),
+            "breeze": (0.28, 0.55),
+            "windy": (0.70, 1.00),
         },
         "volume_density": {
             "clear": (0.0000, 0.0025),
