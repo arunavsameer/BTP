@@ -3959,14 +3959,8 @@ class WorldGenerator:
                 speed=self.rng.uniform(2.4, 4.2),
             ),
             "parked_car_door": self._inject_parked_car_door,
-            "crossing_car_side": lambda r: self._inject_through_cross(
-                r, kind="vehicle", cpa=cr, from_left=self.rng.random() < 0.5,
-                speed=self.rng.uniform(*self.cfg["world"]["cross_car_speed"]),
-            ),
-            "crossing_head_on": lambda r: self._inject_oncoming(
-                r, kind="vehicle", obj_speed=self.rng.uniform(4.6, 7.2),
-                tau=2.4, dlat="far_lane", pad=1.05,
-            ),
+            "crossing_car_side": lambda r: self._inject_crossing_car(r, far=False),
+            "crossing_head_on": lambda r: self._inject_crossing_car(r, far=True),
             "backing_vehicle": self._inject_backing_vehicle,
             "near_miss_pass": lambda r: self._inject_oncoming(
                 r, kind="person", obj_speed=self.rng.uniform(0.95, 1.30),
@@ -5155,6 +5149,33 @@ class WorldGenerator:
             behavior="cruise",
             allow_sidewalk=False,
             pad=0.40,
+        )
+
+    def _inject_crossing_car(self, rig: Any, *, far: bool) -> None:
+        """Traffic on the carriageway while the ego crosses.
+
+        The car stays in a driving lane and rolls along the road (oncoming).
+        It must not spawn on the sidewalk or slide laterally with the walker —
+        that was the through-cross path, which reads as a car on the footpath
+        turning with the camera.
+        """
+        assert self.state is not None
+        s0, _L = self._cam_sl(rig, 0.0)
+        if self._compose is not None:
+            far = self._compose.prefer_far_lane(far)
+        lat = self._far_lane() if far else self._near_lane()
+        v = float(self.rng.uniform(*self.cfg["world"]["cross_car_speed"]))
+        depth = self._visible_lead(8.4, near=6.6, far=11.5)
+        if self._compose is not None:
+            depth = depth + min(2.4, abs(self._compose.take_group_offset("along")))
+        s = min(max(2.0, s0 + depth), self.state.road.length - 6.0)
+        actor = self._spawn_kind("vehicle", s, lat, heading_sign=-1.0)
+        self._bind(
+            actor, s, lat,
+            speed=-v,
+            behavior="oncoming",
+            allow_sidewalk=False,
+            pad=1.05,
         )
 
     def _inject_car_lane(self, rig: Any, *, far: bool, obj_speed: float, tau: float) -> None:

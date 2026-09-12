@@ -1221,8 +1221,8 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `group_crossing` | near | 2–3 through-cross pedestrians; forces ego `crosswalk`. |
 | `scooter_from_sidewalk` | near | Through-cross bicycle from a FOV edge. |
 | `parked_car_door` | near | Parked car in the near gutter + a static door-height box on the gait. |
-| `crossing_car_side` | critical | Through-cross vehicle + ego `crosswalk`. |
-| `crossing_head_on` | critical | Oncoming car in the far lane while the ego crosses. |
+| `crossing_car_side` | critical | Oncoming car in the **near driving lane** + ego `crosswalk`. Stays on asphalt. |
+| `crossing_head_on` | critical | Oncoming car in the far driving lane while the ego crosses. |
 | `backing_vehicle` | critical | Car ahead, `look_flip`, slow reverse (`ds < 0`) toward the walker. |
 
 Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car, crossing, sidewalk_dyn.

@@ -196,7 +196,7 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 - `empty_street` — almost no background traffic or clutter. In a compound it still sparsifies the street; the other names still inject.
 - `cube_*` / `shape_*` — generic primitives (cube, sphere, cylinder, pyramid, cone, capsule, lump) so the model cannot overfit to cars. `*_on_path` is stationary on the gait; `*_head_on` comes at you; `*_from_left/right` crosses.
 - Street trees are **not** a named injector. They sit in the **planting strip** (and, on an avenue, a planted grass median that driving lanes do not use). They are never spawned on asphalt or the walking slab. Each tree is a recursive fork (trunk → limbs that split again) with individual triangle leaves. The **trunk** is the obstacle; rustling leaves are not. `--wind calm` almost still; `--wind windy` a real gust.
-- `crossing_street` / `crossing_car_side` / `group_crossing` / `crossing_head_on` force the ego into `crosswalk` mode: Frenet lateral change plus heading that turns onto the crossing. A side car or other pedestrians on that path are ordinary injectors.
+- `crossing_street` / `crossing_car_side` / `group_crossing` / `crossing_head_on` force the ego into `crosswalk` mode: Frenet lateral change plus heading that turns onto the crossing. Crossing cars stay in a driving lane and roll along the road; they do not slide in from the sidewalk.
 
 ## World and ego (not injectors)
 
