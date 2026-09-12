@@ -53,6 +53,18 @@ CONFIG: dict[str, Any] = {
         "clip_start": 0.05,
         "clip_end": 120.0,
         "eye_height_m": 1.6,
+        # Domain-randomized standing eye height. Seated uses ego.seated_*.
+        # short ≈ child/teen / stooped adult; tall ≈ 95th-percentile adult.
+        "stature_weights": {
+            "short": 0.22,
+            "typical": 0.56,
+            "tall": 0.22,
+        },
+        "eye_height_m_by_stature": {
+            "short": (1.35, 1.50),
+            "typical": (1.55, 1.72),
+            "tall": (1.75, 1.90),
+        },
         "randomize_hfov": True,
         # ~35 mm (50°) through ~18 mm (90°). Inclusive.
         "hfov_deg_range": (50.0, 90.0),
@@ -61,12 +73,23 @@ CONFIG: dict[str, Any] = {
     # Biomechanical locomotion (Part 2)
     # -------------------------------------------------------------------------
     "gait": {
-        "walk_speed_min": 1.0,  # m/s
-        "walk_speed_max": 1.4,  # m/s
+        "walk_speed_min": 0.70,  # m/s — slow stroll floor (seated is exactly 0)
+        "walk_speed_max": 2.05,  # m/s — hurry / late-for-the-bus
         "amplitude_m": 0.04,  # 4 cm vertical bounce
         "frequency_hz": 1.8,  # step frequency
         # Optional small pitch bob locked to the gait cycle (radians).
         "pitch_bob_amp_rad": 0.015,
+        # Per-episode pace band. Uniform draw inside the chosen band.
+        "pace_weights": {
+            "stroll": 0.22,
+            "walk": 0.50,
+            "hurry": 0.28,
+        },
+        "pace_speed": {
+            "stroll": (0.70, 1.00),
+            "walk": (1.00, 1.50),
+            "hurry": (1.50, 2.05),
+        },
     },
     # -------------------------------------------------------------------------
     # Ego trajectory modes (Part 2). The walker is not always a metronome on
@@ -76,11 +99,15 @@ CONFIG: dict[str, Any] = {
     # -------------------------------------------------------------------------
     "ego": {
         "mode_weights": {
-            "walk": 0.52,
-            "diagonal_cross": 0.14,
+            "walk": 0.44,
+            "diagonal_cross": 0.08,
+            "crosswalk": 0.12,
             "erratic": 0.22,
-            "seated": 0.12,
+            "seated": 0.14,
         },
+        # crosswalk: full kerb-to-kerb turn; heading follows Frenet motion.
+        "crosswalk_target_frac": (0.88, 1.00),
+        "crosswalk_span": (0.22, 0.78),
         # Bench / kerb height rather than standing eye height.
         "seated_eye_height_m": (0.95, 1.28),
         # Erratic: fBm lateral sidestep + speed modulation, plus a chance of
@@ -134,12 +161,17 @@ CONFIG: dict[str, Any] = {
         "curb_height": 0.12,
         "sample_ds": 0.40,
         "building_depth": (4.0, 10.0),
+        "building_width": (4.2, 14.0),
         "building_height": (6.0, 18.0),
         "building_gap": (0.4, 2.2),
         # Metres of planting strip between sidewalk outer edge and facade.
-        # Trees sit in this strip (and on the carriageway); canopies must
-        # not reach the wall.
+        # Trees sit in this strip only. Canopies must not reach the wall.
         "building_setback": 3.6,
+        # Planted centre strip (metres). 0 = no median, no in-road trees.
+        # Avenue sets this so median trees sit in grass, not on asphalt.
+        "median_width": 0.0,
+        # Chance the carriageway uses cobble tiles instead of asphalt.
+        "cobble_prob": 0.10,
         "n_streetlamps": 6,
         "streetlamp_height": 5.6,
         "streetlamp_energy_night": 900.0,
@@ -172,28 +204,36 @@ CONFIG: dict[str, Any] = {
         # and props, so injectors and annotation are unchanged.
         # ---------------------------------------------------------------
         "biome_weights": {
-            "street": 0.42,
-            "avenue": 0.18,
-            "park": 0.24,
-            "plaza": 0.16,
+            "street": 0.26,
+            "avenue": 0.12,
+            "park": 0.16,
+            "plaza": 0.12,
+            "alley": 0.12,
+            "residential": 0.14,
+            "market": 0.08,
         },
         "biomes": {
             "street": {
                 "n_trees": (6, 12),
-                "n_street_trees": (2, 5),
-                "n_median_trees": (1, 3),
+                "n_street_trees": (0, 0),
+                "n_median_trees": (0, 0),
+                "median_width": 0.0,
+                "cobble_prob": 0.08,
             },
             "avenue": {
                 "road_width": 13.0,
-                "lane_offset": 3.10,
+                "lane_offset": 3.40,
                 "sidewalk_width": 3.4,
                 "building_setback": 4.2,
                 "building_height": (10.0, 30.0),
+                "building_width": (6.0, 16.0),
                 "n_background_vehicles": (4, 9),
                 "n_streetlamps": 9,
-                "n_trees": (8, 14),
-                "n_street_trees": (3, 6),
-                "n_median_trees": (2, 5),
+                "n_trees": (10, 18),
+                "n_street_trees": (0, 0),
+                "n_median_trees": (2, 4),
+                "median_width": 2.6,
+                "cobble_prob": 0.04,
             },
             "park": {
                 # A 3 m gravel path through open grass: no kerb, no traffic.
@@ -226,19 +266,91 @@ CONFIG: dict[str, Any] = {
                 "n_background_pedestrians": (5, 11),
                 "n_streetlamps": 5,
                 "n_trees": (4, 10),
-                "n_street_trees": (1, 3),
-                "n_median_trees": (1, 3),
+                "n_street_trees": (0, 0),
+                "n_median_trees": (0, 0),
+                "median_width": 0.0,
                 "n_grass_clumps": (0, 30),
                 "ground": "paved",
+                "cobble_prob": 0.55,
+            },
+            "alley": {
+                # Tight service lane: narrow carriageway, close facades.
+                "road_width": 4.2,
+                "lane_offset": 1.05,
+                "sidewalk_width": 1.35,
+                "building_setback": 0.85,
+                "building_depth": (3.0, 6.5),
+                "building_width": (3.6, 8.5),
+                "building_height": (4.5, 14.0),
+                "building_gap": (0.15, 1.10),
+                "n_background_vehicles": (0, 2),
+                "n_background_pedestrians": (2, 6),
+                "n_streetlamps": 4,
+                "n_trees": (0, 3),
+                "n_street_trees": (0, 0),
+                "n_median_trees": (0, 0),
+                "median_width": 0.0,
+                "n_grass_clumps": (0, 6),
+                "path_types": ("straight", "gentle_curve", "corner_90"),
+                "cobble_prob": 0.70,
+            },
+            "residential": {
+                # Quieter street, deeper front gardens, lower houses.
+                "road_width": 6.4,
+                "lane_offset": 1.60,
+                "sidewalk_width": 2.0,
+                "building_setback": 5.2,
+                "building_depth": (5.0, 12.0),
+                "building_width": (5.0, 12.0),
+                "building_height": (4.5, 10.5),
+                "building_gap": (1.2, 4.5),
+                "n_background_vehicles": (1, 3),
+                "n_background_pedestrians": (1, 4),
+                "n_streetlamps": 5,
+                "n_trees": (8, 16),
+                "n_street_trees": (0, 0),
+                "n_median_trees": (0, 0),
+                "median_width": 0.0,
+                "n_grass_clumps": (16, 40),
+                "path_types": ("straight", "gentle_curve", "s_curve"),
+                "cobble_prob": 0.22,
+            },
+            "market": {
+                # Wide sidewalks, shop-front clutter, more people than cars.
+                "road_width": 8.0,
+                "lane_offset": 2.05,
+                "sidewalk_width": 4.8,
+                "building_setback": 2.2,
+                "building_depth": (4.0, 9.0),
+                "building_width": (4.0, 11.0),
+                "building_height": (5.0, 14.0),
+                "building_gap": (0.25, 1.40),
+                "n_background_vehicles": (1, 3),
+                "n_background_pedestrians": (8, 16),
+                "n_streetlamps": 6,
+                "n_trees": (2, 6),
+                "n_street_trees": (0, 0),
+                "n_median_trees": (0, 0),
+                "median_width": 0.0,
+                "poisson": {
+                    "static_radius": 2.4,
+                    "head_hazard_radius": 7.5,
+                    "k_candidates": 20,
+                    "n_ground_static": (6, 14),
+                    "n_head_hazards": (0, 0),
+                },
+                "path_types": ("straight", "gentle_curve"),
+                "cobble_prob": 0.60,
             },
         },
         # Procedural nature. Counts are per episode; geometry is instanced
         # from a handful of shared datablocks (see MeshLibrary).
-        # n_trees = planting-strip / field trees. Street / median / path
-        # counts are extra and biome-specific.
+        # n_trees = planting-strip / field trees. Street-tree / median /
+        # path counts are extra. Curb/median roles never sit on asphalt
+        # unless a planted median_width strip exists (avenue).
         "n_trees": (6, 12),
-        "n_street_trees": (2, 5),
-        "n_median_trees": (1, 3),
+        "n_street_trees": (0, 0),
+        "n_median_trees": (0, 0),
         "n_path_trees": (0, 0),
         "n_grass_clumps": (8, 28),
         "tree": {
@@ -291,6 +403,8 @@ CONFIG: dict[str, Any] = {
             "distant_jaywalk",
             "pothole_offset",
             "parked_car_opposite",
+            "crossing_street",
+            "cyclist_overtake",
         ),
         "near_miss_pool": (
             "near_miss_pass",
@@ -305,6 +419,9 @@ CONFIG: dict[str, Any] = {
             "shape_near_miss",
             "pothole_near",
             "cyclist_weaving",
+            "group_crossing",
+            "scooter_from_sidewalk",
+            "parked_car_door",
         ),
         "critical_pool": (
             "jaywalker",
@@ -327,6 +444,9 @@ CONFIG: dict[str, Any] = {
             "car_erratic_swerve",
             "car_runs_off_road",
             "child_darting",
+            "crossing_car_side",
+            "crossing_head_on",
+            "backing_vehicle",
         ),
         "swerve_trigger_s": 1.8,
         "cut_in_trigger_s": 1.2,
@@ -428,7 +548,16 @@ CONFIG: dict[str, Any] = {
             "overcast": ((0.60, 0.62, 0.66), (0.74, 0.76, 0.80)),
         },
         "road_color": ((0.05, 0.05, 0.06), (0.18, 0.18, 0.20)),
+        "cobble_color": ((0.28, 0.22, 0.18), (0.52, 0.42, 0.32)),
         "sidewalk_color": ((0.28, 0.28, 0.26), (0.55, 0.54, 0.50)),
+        # Per-episode ribbon jitter after biome fold-in (fraction of the value).
+        "layout_jitter": {
+            "road_width": 0.12,
+            "sidewalk_width": 0.14,
+            "building_setback": 0.16,
+            "lane_offset": 0.08,
+            "median_width": 0.10,
+        },
         "roughness": (0.35, 0.95),
         "vehicle_palette": (
             (0.12, 0.12, 0.13),

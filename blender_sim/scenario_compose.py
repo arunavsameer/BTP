@@ -57,6 +57,20 @@ CROSS_GAP_SCENARIOS = frozenset(
         "shape_from_right",
         "cyclist_near_miss",
         "child_darting",
+        "group_crossing",
+        "crossing_car_side",
+        "scooter_from_sidewalk",
+    }
+)
+
+# Ego turns onto a crosswalk (Frenet lateral + heading). Injectors still
+# run; prepare_scenario sets WorldGenerator.force_ego_mode = "crosswalk".
+CROSS_EGO_SCENARIOS = frozenset(
+    {
+        "crossing_street",
+        "crossing_car_side",
+        "group_crossing",
+        "crossing_head_on",
     }
 )
 
@@ -77,6 +91,9 @@ THROUGH_CROSSERS = frozenset(
         "shape_from_left",
         "shape_from_right",
         "child_darting",
+        "group_crossing",
+        "crossing_car_side",
+        "scooter_from_sidewalk",
     }
 )
 
@@ -130,6 +147,16 @@ SCENARIO_ALIASES: dict[str, str] = {
     "run_off_road": "car_runs_off_road",
     "child": "child_darting",
     "kid": "child_darting",
+    "cross": "crossing_street",
+    "crossing": "crossing_street",
+    "crosswalk": "crossing_street",
+    "side_car": "crossing_car_side",
+    "group": "group_crossing",
+    "scooter": "scooter_from_sidewalk",
+    "overtake": "cyclist_overtake",
+    "door": "parked_car_door",
+    "backing": "backing_vehicle",
+    "reverse": "backing_vehicle",
 }
 
 _NOOP = frozenset({"safe_walk", "empty_street"})
@@ -175,6 +202,14 @@ _INJECT_PRIORITY: dict[str, int] = {
     "car_erratic_swerve": 10,
     "car_runs_off_road": 10,
     "child_darting": 20,
+    "crossing_street": 2,
+    "cyclist_overtake": 10,
+    "group_crossing": 20,
+    "scooter_from_sidewalk": 20,
+    "parked_car_door": 1,
+    "crossing_car_side": 20,
+    "crossing_head_on": 10,
+    "backing_vehicle": 10,
     "distant_jaywalk": 20,
     "jaywalker_offset": 20,
     "jaywalker_from_left": 20,
@@ -739,6 +774,16 @@ def _self_test() -> None:
     assert "shape_head_on" in catalog
     assert "cube_on_path" in catalog
     assert "shapes_on_path" in catalog
+    assert "crossing_street" in catalog
+    assert "crossing_car_side" in catalog
+    assert "group_crossing" in catalog
+    assert "scooter_from_sidewalk" in catalog
+    assert "parked_car_door" in catalog
+    assert "cyclist_overtake" in catalog
+    assert "backing_vehicle" in catalog
+    assert "crossing_head_on" in catalog
+    assert resolve_scenario_name("cross", random.Random(1), live) == "crossing_street"
+    assert resolve_scenario_name("scooter", random.Random(1), live) == "scooter_from_sidewalk"
     assert resolve_scenario_name("shapes", random.Random(1), live) == "shapes_on_path"
     assert resolve_scenario_name("sphere", random.Random(1), live) == "shape_head_on"
     assert extents_for("threat_lump") == extents_for("threat_cube")

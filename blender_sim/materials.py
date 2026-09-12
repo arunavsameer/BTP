@@ -1022,10 +1022,14 @@ def make_foliage(
     not a reliable green blob for the detector to key on.
     """
     c = _clamp01(chaos)
-    if rng.random() < 0.30 * c:
+    # Seasonal / species variety is first-class, not only a high-chaos effect.
+    if rng.random() < 0.42 + 0.35 * c:
+        fam = rng.choice(("natural", "saturated", "dark"))
+        leaf = chaos_albedo(rng, base, max(0.35, c * 0.85), fam)
+    elif rng.random() < 0.22 * c:
         leaf = chaos_albedo(rng, base, c, rng.choice(("saturated", "neon", "dark")))
     else:
-        leaf = chaos_albedo(rng, base, c * 0.6, "natural")
+        leaf = chaos_albedo(rng, base, max(0.18, c * 0.55), "natural")
     mat, nt, bsdf, _out = _new_mat(name)
     maps = _object_coords(nt, (2.2, 2.2, 2.2))
     noise = nt.nodes.new("ShaderNodeTexNoise")

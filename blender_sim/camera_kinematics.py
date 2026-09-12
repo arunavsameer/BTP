@@ -27,6 +27,9 @@ break that assumption:
 ``diagonal_cross``  the walker cuts from one kerb to the other, so the
                     lateral coordinate ramps across the episode and the
                     flow field acquires a sustained sideways component.
+``crosswalk``       first-class street crossing: full kerb-to-kerb Frenet
+                    lateral change; gaze follows the motion vector so the
+                    walker visibly turns onto the crossing.
 ``erratic``         fBm sidesteps plus speed modulation, with a chance of a
                     complete stop partway through.
 ``seated``          on a bench: ``walk_speed = 0`` and a lower eye height.
@@ -152,7 +155,9 @@ class CameraState:
         return (self.pitch, self.yaw, self.roll)
 
 
-EGO_MODES: tuple[str, ...] = ("walk", "diagonal_cross", "erratic", "seated")
+EGO_MODES: tuple[str, ...] = (
+    "walk", "diagonal_cross", "crosswalk", "erratic", "seated",
+)
 
 
 @dataclass
@@ -165,6 +170,7 @@ class EgoProfile:
 
     mode: str = "walk"
     eye_height: float = 1.6
+    stature: str = "typical"
     # diagonal_cross: fraction of the way to the *opposite* kerb, traversed
     # over [t0, t1]. Stored as a fraction rather than metres because the
     # profile is drawn before the rig knows how wide this biome's corridor
@@ -210,22 +216,59 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
                 break
 
     eye = float(cfg["camera"]["eye_height_m"])
-    prof = EgoProfile(mode=mode, eye_height=eye)
+    stature = "typical"
+    locked_h = ecfg.get("eye_height_lock_m")
+    locked_band = str(ecfg.get("stature_lock") or "").strip().lower()
+    cam = dict(cfg.get("camera") or {})
+    bands = dict(cam.get("eye_height_m_by_stature") or {})
+    if locked_h is not None:
+        eye = max(0.85, min(2.15, float(locked_h)))
+        if eye < 1.52:
+            stature = "short"
+        elif eye > 1.74:
+            stature = "tall"
+    elif locked_band in bands:
+        stature = locked_band
+        lo, hi = bands[stature]
+        eye = float(rng.uniform(float(lo), float(hi)))
+    elif mode != "seated" and bands:
+        sw = dict(cam.get("stature_weights") or {"typical": 1.0})
+        keys = [k for k in sw if k in bands]
+        if keys:
+            total_s = sum(max(0.0, float(sw.get(k, 0.0))) for k in keys)
+            x_s = rng.uniform(0.0, total_s if total_s > 0.0 else 1.0)
+            acc_s = 0.0
+            stature = keys[-1]
+            for k in keys:
+                acc_s += max(0.0, float(sw.get(k, 0.0)))
+                if x_s <= acc_s:
+                    stature = k
+                    break
+            lo, hi = bands[stature]
+            eye = float(rng.uniform(float(lo), float(hi)))
+    prof = EgoProfile(mode=mode, eye_height=eye, stature=stature)
     span = max(0.5, float(episode_seconds))
 
     if mode == "seated":
         lo, hi = ecfg.get("seated_eye_height_m", (0.95, 1.28))
         prof.eye_height = float(rng.uniform(float(lo), float(hi)))
+        prof.stature = "seated"
         return prof
 
-    if mode == "diagonal_cross":
-        lo, hi = ecfg.get("diagonal_target_frac", (0.45, 1.00))
+    if mode in ("diagonal_cross", "crosswalk"):
+        if mode == "crosswalk":
+            lo, hi = ecfg.get("crosswalk_target_frac", (0.88, 1.00))
+            f0, f1 = ecfg.get("crosswalk_span", (0.22, 0.78))
+            min_start, min_dur = 0.45, 1.80
+        else:
+            lo, hi = ecfg.get("diagonal_target_frac", (0.45, 1.00))
+            f0, f1 = ecfg.get("diagonal_span", (0.12, 0.85))
+            min_start, min_dur = 0.20, 0.80
         prof.diag_frac = float(rng.uniform(float(lo), float(hi)))
-        f0, f1 = ecfg.get("diagonal_span", (0.12, 0.85))
-        prof.diag_t0 = span * float(f0)
-        prof.diag_t1 = span * float(f1)
-        if prof.diag_t1 <= prof.diag_t0 + 0.2:
-            prof.diag_t1 = prof.diag_t0 + 0.2
+        # Floor in seconds so a 6-frame QA clip does not compress the turn
+        # into a 90° snap at t=0 (injectors still see the same schedule).
+        prof.diag_t0 = max(min_start, span * float(f0))
+        prof.diag_t1 = max(prof.diag_t0 + min_dur, span * float(f1))
         return prof
 
     if mode == "erratic":
@@ -244,6 +287,26 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
         return prof
 
     return prof
+
+
+def apply_ego_height(cfg: dict, spec: str | None) -> None:
+    """Lock standing eye height from CLI: short|typical|tall|auto|metres."""
+    raw = str(spec or "auto").strip().lower()
+    ego = cfg.setdefault("ego", {})
+    ego.pop("stature_lock", None)
+    ego.pop("eye_height_lock_m", None)
+    if raw in ("", "auto", "random"):
+        return
+    if raw in ("short", "typical", "tall"):
+        ego["stature_lock"] = raw
+        return
+    try:
+        height = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"unknown --ego-height {spec!r}. Use short|typical|tall|auto or metres."
+        ) from exc
+    ego["eye_height_lock_m"] = max(0.85, min(2.15, height))
 
 
 @dataclass
@@ -380,7 +443,7 @@ class CameraRig:
         """
         prof = self.profile
         lat = float(self.lateral)
-        if prof.mode == "diagonal_cross" and abs(prof.diag_frac) > 1e-6:
+        if prof.mode in ("diagonal_cross", "crosswalk") and abs(prof.diag_frac) > 1e-6:
             t0, t1 = prof.diag_t0, prof.diag_t1
             u = 0.0 if t <= t0 else (1.0 if t >= t1 else (t - t0) / max(t1 - t0, 1e-3))
             u = u * u * (3.0 - 2.0 * u)
@@ -486,10 +549,15 @@ class CameraRig:
         s = self.arc_length_at(t)
         lat = self.lateral_at(t)
 
-        origin, tangent, right = self._frenet(s, lat)
+        origin, path_tan, _path_right = self._frenet(s, lat)
+        look = self._look_direction(t, path_tan)
         world_up = Vector((0.0, 0.0, 1.0))
-        # Re-orthogonalize up against the (possibly banked) right/tangent pair.
-        up = right.cross(tangent)
+        right = look.cross(world_up)
+        if right.length < 1e-6:
+            right = Vector((1.0, 0.0, 0.0))
+        else:
+            right.normalize()
+        up = right.cross(look)
         if up.length < 1e-6:
             up = world_up.copy()
         else:
@@ -501,7 +569,7 @@ class CameraRig:
         pitch, yaw, roll = self.sample_angles(t)
         pitch = pitch + self.gait_pitch_bob(t)
 
-        matrix = self._compose_matrix(position, tangent, up, right, pitch, yaw, roll)
+        matrix = self._compose_matrix(position, look, up, right, pitch, yaw, roll)
         self._apply_camera_matrix(self.cam_obj, matrix)
 
         if self._prev_position is None or dt <= 1e-8:
@@ -520,7 +588,7 @@ class CameraRig:
             t=t,
             position=position,
             velocity=velocity,
-            tangent=tangent,
+            tangent=look,
             right=right,
             up=up,
             pitch=pitch,
@@ -559,6 +627,42 @@ class CameraRig:
         origin = p + right * lat
         origin.z = float(self.curb_height)
         return origin, tangent, right
+
+    def _look_direction(self, t: float, path_tan: Vector) -> Vector:
+        """Gaze along Frenet motion so a crossing walker turns onto the road.
+
+        Walk / seated / halt keep the road tangent. Crosswalk and diagonal
+        modes blend in the lateral rate so heading is not a world teleport.
+        """
+        tan = Vector(path_tan)
+        if tan.length > 1e-8:
+            tan.normalize()
+        else:
+            tan = Vector((0.0, 1.0, 0.0))
+        if self.profile.stationary:
+            return tan
+        ds = float(self.speed_at(t))
+        h = 0.06
+        dlat = (self.lateral_at(t + h) - self.lateral_at(max(0.0, t - h))) / (2.0 * h)
+        if abs(dlat) < 1e-4:
+            return tan
+        _o, _t, right = self._frenet(self.arc_length_at(t), self.lateral_at(t))
+        look = tan * max(ds, 0.45) + right * float(dlat)
+        if look.length < 1e-5:
+            return tan
+        look.normalize()
+        # A pedestrian turns onto a crossing; they do not spin to face a wall.
+        max_off = math.radians(50.0)
+        min_fwd = math.cos(max_off)
+        fwd = look.dot(tan)
+        if fwd < min_fwd:
+            side = look - tan * fwd
+            if side.length < 1e-6:
+                return tan
+            side.normalize()
+            look = tan * min_fwd + side * math.sin(max_off)
+            look.normalize()
+        return look
 
     @staticmethod
     def _compose_matrix(

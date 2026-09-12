@@ -18,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
 from scenario_compose import (
+    CROSS_EGO_SCENARIOS,
     CROSS_GAP_SCENARIOS,
     SPARSE_SCENARIOS,
     ComposeSession,
@@ -879,6 +880,8 @@ class Actor:
     # Branch joints + leaf sprays. Trunk pose and Actor.velocity stay 0.
     foliage: list = field(default_factory=list)
     wind: Any = None
+    # Backing vehicle: mesh faces −velocity so the boot, not the bumper, leads.
+    look_flip: bool = False
 
     def world_location(self) -> Vector:
         return self.obj.matrix_world.translation.copy()
@@ -1040,6 +1043,8 @@ class Actor:
             heading = self.velocity if self.velocity.length > 1e-4 else (
                 tan if ds >= 0.0 else -tan
             )
+            if self.look_flip:
+                heading = Vector((-heading.x, -heading.y, -heading.z))
             look_along(self.obj, Vector((heading.x, heading.y, 0.0)))
             self._tick_visuals(t, dt)
             return
@@ -1888,8 +1893,12 @@ def _extrude_buildings(
             break
         depth = rng.uniform(*cfg["building_depth"])
         height = rng.uniform(*cfg["building_height"])
-        width = rng.uniform(5.0, 11.0)
+        w_lo, w_hi = cfg.get("building_width", (5.0, 11.0))
+        width = rng.uniform(float(w_lo), float(w_hi))
         gap = rng.uniform(*cfg["building_gap"])
+        # Per-lot setback so the street wall is not a cloned plane.
+        setback_j = rng.uniform(-0.55, 0.85)
+        lot_facade = max(road_half + sidewalk_w + 0.35, facade + setback_j)
         mid = s + width * 0.5
         jumped = _skip_gap(mid)
         if jumped != mid:
@@ -1900,15 +1909,15 @@ def _extrude_buildings(
         if offset_folds(
             spline,
             mid,
-            lateral_sign * facade,
-            lateral_sign * (facade + depth),
+            lateral_sign * lot_facade,
+            lateral_sign * (lot_facade + depth),
             width * 0.5,
             road_half + sidewalk_w - 0.10,
         ):
             s += width + gap
             continue
         p, tan, right = spline.frame(mid)
-        center = p + right * (lateral_sign * (facade + depth * 0.5))
+        center = p + right * (lateral_sign * (lot_facade + depth * 0.5))
         center.z = height * 0.5
         color = (
             rng.uniform(0.16, 0.38),
@@ -1930,15 +1939,71 @@ def _extrude_buildings(
             rng.uniform(0.08, 0.16),
             rng.uniform(0.08, 0.16),
         )
-        roof = create_box(
-            f"building_{len(objs):03d}_roof",
-            (depth + 0.28, width + 0.28, 0.32),
-            Vector((0.0, 0.0, 0.0)),
-            collection,
-            make_roof(f"roof_{len(objs):03d}", roof_c),
-        )
-        roof.parent = obj
-        roof.location = Vector((0.0, 0.0, height * 0.5 + 0.12))
+        roof_mat = make_roof(f"roof_{len(objs):03d}", roof_c)
+        massing = rng.choice(("box", "box", "stepped", "l_plan", "arcade", "sloped"))
+        if massing == "sloped":
+            pitch = rng.uniform(0.22, 0.42)
+            roof = create_box(
+                f"building_{len(objs):03d}_roof",
+                (depth + 0.20, width + 0.20, 0.55),
+                Vector((0.0, 0.0, 0.0)),
+                collection,
+                roof_mat,
+            )
+            roof.parent = obj
+            roof.location = Vector((0.0, 0.0, height * 0.5 + 0.10))
+            roof.rotation_euler[0] = math.copysign(pitch, rng.choice((-1.0, 1.0)))
+        else:
+            roof = create_box(
+                f"building_{len(objs):03d}_roof",
+                (depth + 0.28, width + 0.28, 0.32),
+                Vector((0.0, 0.0, 0.0)),
+                collection,
+                roof_mat,
+            )
+            roof.parent = obj
+            roof.location = Vector((0.0, 0.0, height * 0.5 + 0.12))
+        if massing == "stepped" and height > 7.0:
+            cap_h = height * rng.uniform(0.22, 0.38)
+            cap = create_box(
+                f"building_{len(objs):03d}_step",
+                (depth * 0.62, width * 0.70, cap_h),
+                Vector((0.0, 0.0, 0.0)),
+                collection,
+                mat,
+            )
+            cap.parent = obj
+            cap.location = Vector((depth * 0.08, 0.0, height * 0.5 + cap_h * 0.5))
+        elif massing == "l_plan":
+            wing_w = width * rng.uniform(0.32, 0.48)
+            wing = create_box(
+                f"building_{len(objs):03d}_wing",
+                (depth * rng.uniform(0.45, 0.75), wing_w, height * rng.uniform(0.55, 0.90)),
+                Vector((0.0, 0.0, 0.0)),
+                collection,
+                mat,
+            )
+            wing.parent = obj
+            wing.location = Vector(
+                (depth * 0.22, math.copysign(width * 0.38, rng.choice((-1.0, 1.0))), 0.0)
+            )
+        elif massing == "arcade" and height > 6.5:
+            # Recessed ground-floor void (darker slab), not a new mesh family.
+            dark = (
+                color[0] * 0.35,
+                color[1] * 0.35,
+                color[2] * 0.32,
+            )
+            from materials import make_simple
+            arch = create_box(
+                f"building_{len(objs):03d}_arcade",
+                (0.55, width * 0.92, min(3.2, height * 0.38)),
+                Vector((0.0, 0.0, 0.0)),
+                collection,
+                make_simple(f"arcade_{len(objs):03d}", dark, 0.72),
+            )
+            arch.parent = obj
+            arch.location = Vector((-depth * 0.5 + 0.18, 0.0, -height * 0.5 + 1.35))
         objs.append(obj)
         s += width + gap
     return objs
@@ -2350,10 +2415,25 @@ def spawn_tree(
         base_size = 0.34
 
     bark = lib.material("bark", lambda: make_bark("bark_shared"))
-    leaf_key = rng.randrange(0, 3)
+    leaf_palettes = (
+        (0.10, 0.26, 0.07),  # spring
+        (0.07, 0.18, 0.05),  # summer deep
+        (0.16, 0.30, 0.08),  # lime
+        (0.22, 0.20, 0.05),  # olive
+        (0.40, 0.22, 0.05),  # autumn gold
+        (0.48, 0.16, 0.04),  # autumn orange
+        (0.36, 0.07, 0.05),  # autumn red
+        (0.18, 0.14, 0.08),  # bronze
+        (0.12, 0.16, 0.10),  # dusty evergreen
+        (0.06, 0.12, 0.08),  # blue spruce
+    )
+    leaf_key = rng.randrange(0, len(leaf_palettes))
+    leaf_base = leaf_palettes[leaf_key]
     leaf_mat = lib.material(
         f"leaf_{leaf_key}",
-        lambda: make_leaf(f"leaf_{leaf_key}", rng, chaos),
+        lambda leaf_base=leaf_base, leaf_key=leaf_key: make_leaf(
+            f"leaf_{leaf_key}", rng, chaos, base=leaf_base,
+        ),
     )
     spray_prefix = f"spray_{'needle' if needle else 'broad'}_{leaf_key}"
 
@@ -3399,6 +3479,7 @@ class WorldGenerator:
         self._s_cross = 11.0
         self._compose: Optional[ComposeSession] = None
         self.biome = "street"
+        self.force_ego_mode = ""
         self.chaos = 0.0
         self.lib = MeshLibrary()
         self._wind: Optional[WindField] = None
@@ -3434,7 +3515,66 @@ class WorldGenerator:
         self.biome = name
         for key, val in (table.get(name) or {}).items():
             wcfg[key] = val
+        self._jitter_layout()
         return name
+
+    def _jitter_layout(self) -> None:
+        """Per-episode width / setback jitter so biomes are not cloned streets."""
+        wcfg = self.cfg["world"]
+        j = dict((self.cfg.get("domain_randomization") or {}).get("layout_jitter") or {})
+        if not j:
+            return
+
+        def _scale(key: str, frac: float, lo: float = 0.35) -> None:
+            if key not in wcfg:
+                return
+            raw = wcfg[key]
+            if isinstance(raw, (int, float)):
+                wcfg[key] = max(lo, float(raw) * (1.0 + self.rng.uniform(-frac, frac)))
+
+        _scale("road_width", float(j.get("road_width", 0.0)), 2.4)
+        _scale("sidewalk_width", float(j.get("sidewalk_width", 0.0)), 0.85)
+        _scale("building_setback", float(j.get("building_setback", 0.0)), 0.35)
+        _scale("lane_offset", float(j.get("lane_offset", 0.0)), 0.55)
+        med0 = float(wcfg.get("median_width", 0.0) or 0.0)
+        if med0 >= 1.4:
+            _scale("median_width", float(j.get("median_width", 0.0)), 1.4)
+        # Keep the travel lane outside a planted median.
+        med = float(wcfg.get("median_width", 0.0) or 0.0)
+        if med >= 1.4:
+            wcfg["lane_offset"] = max(float(wcfg.get("lane_offset", 1.75)), 0.5 * med + 1.55)
+
+    def _apply_chaos_crowd(self) -> None:
+        """High appearance chaos also means a busier street (counts, not meshes)."""
+        c = max(0.0, min(1.0, float(self.chaos)))
+        k = 0.55 + 1.30 * c
+        wcfg = self.cfg["world"]
+        for key in ("n_background_pedestrians", "n_background_vehicles"):
+            pair = wcfg.get(key)
+            if not pair:
+                continue
+            lo, hi = int(pair[0]), int(pair[1])
+            wcfg[key] = (max(0, int(round(lo * k))), max(0, int(round(hi * k))))
+        poisson = wcfg.get("poisson")
+        if isinstance(poisson, dict) and "n_ground_static" in poisson:
+            lo, hi = [int(v) for v in poisson["n_ground_static"]]
+            poisson["n_ground_static"] = (
+                max(0, int(round(lo * k))),
+                max(0, int(round(hi * k))),
+            )
+
+    def _draw_walk_speed(self) -> float:
+        """Stroll / walk / hurry. Seated still pins the rig to 0 downstream."""
+        g = self.cfg.get("gait") or {}
+        weights = dict(g.get("pace_weights") or {})
+        bands = dict(g.get("pace_speed") or {})
+        if weights and bands:
+            keys = [k for k in weights if k in bands]
+            if keys:
+                pace = _weighted_choice(self.rng, {k: weights[k] for k in keys})
+                lo, hi = bands[pace]
+                return float(self.rng.uniform(float(lo), float(hi)))
+        return float(self.rng.uniform(float(g.get("walk_speed_min", 0.70)), float(g.get("walk_speed_max", 2.05))))
 
     def prepare_scenario(self, scenario: str | Sequence[str]) -> None:
         """Call before `build()` so intersections / sparse streets exist in mesh.
@@ -3448,6 +3588,9 @@ class WorldGenerator:
         self._scenario = compose_slug(names) if names else "safe_walk"
         self._s_cross = 11.0
         self._building_gaps = []
+        self.force_ego_mode = (
+            "crosswalk" if any(n in CROSS_EGO_SCENARIOS for n in names) else ""
+        )
         n_cross = sum(1 for n in names if n in CROSS_GAP_SCENARIOS)
         if n_cross:
             # One crosser: original 5–20 m window. Compounds stagger extra
@@ -3510,6 +3653,7 @@ class WorldGenerator:
             env_choice["azim_deg"] = glare_azimuth_deg(road.tangent(3.0))
         self.chaos = float(env_choice.get("chaos", 0.0))
         chaos = self.chaos
+        self._apply_chaos_crowd()
         self._wind = WindField(
             self.rng.randrange(1, 2**31),
             strength=float(env_choice.get("wind_strength", 0.40)),
@@ -3521,11 +3665,22 @@ class WorldGenerator:
         curb_h = float(wcfg["curb_height"])
         verge_w = float(wcfg.get("verge_width", 4.5))
 
+        cobble = (
+            ground_kind != "grass"
+            and rng.random() < float(wcfg.get("cobble_prob", 0.0) or 0.0)
+        )
         if ground_kind == "grass":
             # Park: a gravel/dirt path on open ground, no asphalt.
             mat_road = make_concrete_tiles(
                 "path", chaos_albedo(rng, (0.42, 0.37, 0.30), chaos * 0.5, "matte"),
                 tile_m=rng.uniform(0.22, 0.55),
+            )
+        elif cobble:
+            cobble_box = dr.get("cobble_color", ((0.28, 0.22, 0.18), (0.52, 0.42, 0.32)))
+            mat_road = make_concrete_tiles(
+                "road_cobble",
+                chaos_albedo(rng, _rand_color(rng, cobble_box), chaos * 0.45, "matte"),
+                tile_m=rng.uniform(0.16, 0.34),
             )
         else:
             mat_road = make_asphalt(
@@ -3582,6 +3737,13 @@ class WorldGenerator:
                     col_world, mat_grass,
                 )
 
+        median_w = float(wcfg.get("median_width", 0.0) or 0.0)
+        if median_w >= 1.4 and ground_kind != "grass":
+            mh = 0.5 * median_w
+            _ribbon_mesh(
+                "median_plant", road, -mh, mh, 0.03, col_world, mat_grass,
+            )
+
         # Painted dashes: 3 m mark, 3 m gap, 0.12 m wide, sampled on the spline
         # so they follow a corner instead of a 3 m chord across the lane.
         if bool(wcfg.get("lane_paint", True)):
@@ -3632,6 +3794,8 @@ class WorldGenerator:
         env = dict(env)
         env["biome"] = self.biome
         env["chaos"] = round(chaos, 4)
+        env["cobble"] = bool(cobble)
+        env["median_width"] = round(float(wcfg.get("median_width", 0.0) or 0.0), 3)
         env["dappled"] = bool(env_choice.get("dappled", False))
         env["wind"] = str(env_choice.get("wind", "breeze"))
         env["wind_strength"] = round(float(env_choice.get("wind_strength", 0.4)), 3)
@@ -3644,7 +3808,7 @@ class WorldGenerator:
         actors.extend(self._spawn_background_vehicles(road, sidewalk_lateral, col_act, counters))
         actors.extend(self._spawn_background_pedestrians(road, sidewalk_lateral, col_act, counters))
 
-        walk_speed = rng.uniform(self.cfg["gait"]["walk_speed_min"], self.cfg["gait"]["walk_speed_max"])
+        walk_speed = self._draw_walk_speed()
         reveal_view_layer(scene)
         # reveal_view_layer un-hides every object; put daytime lamps back to sleep.
         apply_streetlamp_state(lamp_objects, self.cfg, night)
@@ -3787,6 +3951,23 @@ class WorldGenerator:
                 r, lead=float(self.cfg["scenarios"].get("pothole_offset_lead_m", 8.0)), dlat=1.80,
             ),
             "parked_car_opposite": lambda r: self._inject_parked_car(r),
+            "crossing_street": self._inject_none,
+            "cyclist_overtake": self._inject_cyclist_overtake,
+            "group_crossing": self._inject_group_crossing,
+            "scooter_from_sidewalk": lambda r: self._inject_through_cross(
+                r, kind="bicycle", cpa=nm, from_left=self.rng.random() < 0.5,
+                speed=self.rng.uniform(2.4, 4.2),
+            ),
+            "parked_car_door": self._inject_parked_car_door,
+            "crossing_car_side": lambda r: self._inject_through_cross(
+                r, kind="vehicle", cpa=cr, from_left=self.rng.random() < 0.5,
+                speed=self.rng.uniform(*self.cfg["world"]["cross_car_speed"]),
+            ),
+            "crossing_head_on": lambda r: self._inject_oncoming(
+                r, kind="vehicle", obj_speed=self.rng.uniform(4.6, 7.2),
+                tau=2.4, dlat="far_lane", pad=1.05,
+            ),
+            "backing_vehicle": self._inject_backing_vehicle,
             "near_miss_pass": lambda r: self._inject_oncoming(
                 r, kind="person", obj_speed=self.rng.uniform(0.95, 1.30),
                 tau=float(self.cfg["scenarios"]["oncoming_tau"]), dlat=nm,
@@ -4110,30 +4291,48 @@ class WorldGenerator:
         collection: bpy.types.Collection,
         counters: _Counters,
     ) -> list[Actor]:
-        """Planting-strip, curb, median, and (park) path trees.
+        """Planting-strip and (optional) planted-median trees.
 
-        Trunks are annotated obstacles. Canopies are clamped so they do not
-        intersect a facade; street / median trunks stay off vehicle AABBs
-        by pairing a smaller crown with a pushed-out travel lane.
+        Trunks never sit on the carriageway or the walking slab. The old
+        curb/median roles planted just inside the kerb / on the centreline;
+        those laterals are rejected. A median tree is allowed only inside a
+        planted ``median_width`` strip that driving lanes do not use.
         """
         wcfg = self.cfg["world"]
         open_ground = str(wcfg.get("ground", "paved")) == "grass"
         setback = float(wcfg.get("building_setback", 3.6))
         facade = road_half + sw + setback
         have_buildings = bool(wcfg.get("buildings", True)) and not open_ground
+        median_w = float(wcfg.get("median_width", 0.0) or 0.0)
+        have_median = (not open_ground) and median_w >= 1.4
         roles: list[str] = []
         roles.extend("plant" for _ in range(self._count_range("n_trees")))
         if open_ground:
             roles.extend("path" for _ in range(self._count_range("n_path_trees")))
         else:
+            # "curb" is now a second planting-strip band (sidewalk-adjacent),
+            # never a pit on the asphalt.
             roles.extend("curb" for _ in range(self._count_range("n_street_trees")))
-            roles.extend("median" for _ in range(self._count_range("n_median_trees")))
+            if have_median:
+                roles.extend("median" for _ in range(self._count_range("n_median_trees")))
         if not roles:
             return []
 
         actors: list[Actor] = []
         curb = float(wcfg["curb_height"])
         s_lo, s_hi = 4.0, max(6.0, road.length - 4.0)
+        walk_edge = road_half + (0.20 if open_ground else sw * 0.55)
+
+        def _on_drive_or_walk(lat_v: float, role_name: str) -> bool:
+            a = abs(float(lat_v))
+            if role_name == "median":
+                return a > 0.5 * median_w - 0.22
+            if a < road_half + 0.08:
+                return True
+            if not open_ground and a < walk_edge:
+                return True
+            return False
+
         for role in roles:
             placed = False
             for _attempt in range(16):
@@ -4145,7 +4344,7 @@ class WorldGenerator:
                     sign = self.rng.choice((-1.0, 1.0))
                 if role == "plant":
                     if open_ground:
-                        inner = road_half + sw * 0.55
+                        inner = road_half + max(0.45, sw * 0.55)
                         outer = road_half + sw + max(0.5, verge_w * 0.92)
                         lat = self.rng.uniform(inner, outer) * sign
                         max_c = 2.8
@@ -4169,23 +4368,34 @@ class WorldGenerator:
                         continue
                     along = 7.5
                 elif role == "curb":
-                    # Tree pit just on the carriageway side of the kerb.
-                    lat = sign * (road_half - self.rng.uniform(0.18, 0.42))
-                    max_c = 1.15
-                    along = 8.0
-                elif role == "path":
-                    lat = self.rng.uniform(-0.22, 0.22)
+                    # Planting strip, sidewalk-adjacent — not the carriageway.
+                    if setback < 1.05 and have_buildings:
+                        continue
+                    lat = sign * (road_half + sw + self.rng.uniform(0.35, min(1.15, max(0.45, setback * 0.45))))
                     max_c = 1.35
+                    along = 8.0
+                    if offset_folds(
+                        road, s, lat, lat, 0.80,
+                        road_half + sw - 0.10,
+                    ):
+                        continue
+                elif role == "path":
+                    # Park: off the gravel gait, in the verge.
+                    lat = sign * (road_half + self.rng.uniform(0.70, max(1.4, verge_w * 0.55)))
+                    max_c = 1.55
                     along = 6.0
                 else:
-                    # Median / mid-street. Small crown so cars in the outer
-                    # lane do not phase through foliage.
-                    lat = self.rng.uniform(-0.16, 0.16)
-                    max_c = 0.95 if road_half < 4.5 else 1.55
+                    if not have_median:
+                        continue
+                    half = 0.5 * median_w
+                    lat = self.rng.uniform(-max(0.08, half - 0.35), max(0.08, half - 0.35))
+                    max_c = min(1.35, half - 0.15)
                     along = 10.0
+                if _on_drive_or_walk(lat, role):
+                    continue
                 if not self._tree_free(s, lat, along=along):
                     continue
-                z = curb if abs(lat) >= road_half - 0.08 else 0.0
+                z = curb if abs(lat) >= road_half - 0.08 else 0.03
                 loc = road.offset_point(s, lat, z=z)
                 heading = heading_from_tangent(road.tangent(s))
                 actor = spawn_tree(
@@ -4332,7 +4542,7 @@ class WorldGenerator:
         # Median trees push the travel lane outward so hulls do not sit inside
         # a crown.
         road_half = float(wcfg["road_width"]) * 0.5
-        lane_abs = float(wcfg["lane_offset"])
+        lane_abs = self._drive_lane_abs()
         if any(abs(lat) < road_half * 0.45 and rad >= 3.0 for _s, lat, rad in self._sites):
             lane_abs = max(lane_abs, road_half * 0.62)
             lane_abs = min(lane_abs, max(1.15, road_half - 1.15))
@@ -4462,9 +4672,19 @@ class WorldGenerator:
             lat = float(getattr(rig, "lateral", self.state.sidewalk_lateral))
         return self._cam_s(rig, t), lat
 
+    def _drive_lane_abs(self) -> float:
+        """Travel-lane |lateral|, always outside a planted median."""
+        wcfg = self.cfg["world"]
+        road_half = float(wcfg["road_width"]) * 0.5
+        lane = float(wcfg["lane_offset"])
+        med = float(wcfg.get("median_width", 0.0) or 0.0)
+        if med >= 1.4:
+            lane = max(lane, 0.5 * med + 1.55)
+        return min(lane, max(1.05, road_half - 1.05))
+
     def _near_lane(self) -> float:
         assert self.state is not None
-        return math.copysign(float(self.cfg["world"]["lane_offset"]), self.state.sidewalk_lateral)
+        return math.copysign(self._drive_lane_abs(), self.state.sidewalk_lateral)
 
     def _far_lane(self) -> float:
         return -self._near_lane()
@@ -4563,6 +4783,7 @@ class WorldGenerator:
         post_speed: Optional[float] = None,
         post_lat_speed: float = 0.0,
         post_lat_target: Optional[float] = None,
+        look_flip: bool = False,
     ) -> Actor:
         assert self.state is not None
         if pad is not None:
@@ -4612,6 +4833,8 @@ class WorldGenerator:
         actor.post_speed = post_speed
         actor.post_lat_speed = abs(float(post_lat_speed))
         actor.post_lat_target = post_lat_target
+        if look_flip:
+            actor.look_flip = True
         loc = self.state.road.offset_point(
             actor.s, actor.lateral, actor.origin_z + self.state.corridor.ground_z(actor.lateral)
         )
@@ -4626,6 +4849,8 @@ class WorldGenerator:
         heading = tan * actor.speed + right * vlat
         if heading.length < 1e-4:
             heading = tan if actor.speed >= 0.0 else -tan
+        if actor.look_flip:
+            heading = -heading
         look_along(actor.obj, heading)
         return self._append(actor)
 
@@ -4668,6 +4893,12 @@ class WorldGenerator:
         half = math.radians(max(28.0, hfov) * 0.5)
         return max(1.20, float(depth_m) * math.tan(half * float(frac)))
 
+    def _visible_lead(self, preferred: float, *, near: float = 3.6, far: float = 9.2) -> float:
+        """Clamp along-track spawn so the actor stays in the walking VFOV."""
+        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 32.0))
+        hi = min(float(far), max(float(near) + 1.0, look * 0.42))
+        return min(max(float(preferred), float(near)), hi)
+
     def _inject_through_cross(
         self,
         rig: Any,
@@ -4698,7 +4929,10 @@ class WorldGenerator:
         depth = depth + 1.1 * max(0.0, float(cpa) - 0.25)
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
-            depth = min(depth + extra, 16.0)
+            depth = depth + extra
+        near = 6.6 if kind == "vehicle" else 3.8
+        far = 10.5 if kind == "vehicle" else 9.0
+        depth = self._visible_lead(depth, near=near, far=far)
         hw = self._frustum_half_width(depth, 0.92)
         left = max(-lim, L - hw)
         right = min(lim, L + hw)
@@ -4743,7 +4977,8 @@ class WorldGenerator:
         depth = 5.4
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
-            depth = min(depth + extra, 16.0)
+            depth = depth + extra
+        depth = self._visible_lead(depth, near=4.0, far=8.8)
         hw = min(self._frustum_half_width(depth, 0.88), lim * 0.95)
         lat_start = max(-lim, L - hw) if from_left else min(lim, L + hw)
         # Merge onto the gait line, with a small CPA offset.
@@ -4811,6 +5046,84 @@ class WorldGenerator:
             behavior="oncoming",
             allow_sidewalk=allow_sidewalk,
             pad=use_pad,
+        )
+
+    def _inject_cyclist_overtake(self, rig: Any) -> None:
+        s0, L = self._cam_sl(rig, 0.0)
+        lat = self._resolve_lat(0.85, L, 0.40)
+        s = self._visible_lead(s0 + 2.2 - s0, near=1.6, far=4.2) + s0
+        if self._compose is not None:
+            s = s + self._compose.take_group_offset("along")
+        speed = max(float(rig.walk_speed) + 2.4, 3.6)
+        actor = self._spawn_kind("bicycle", s, lat, heading_sign=1.0)
+        self._bind(
+            actor, s, lat,
+            speed=speed,
+            behavior="overtake",
+            allow_sidewalk=True,
+            pad=0.40,
+        )
+
+    def _inject_group_crossing(self, rig: Any) -> None:
+        n = self.rng.randint(2, 3)
+        cpa0 = float(self.cfg["scenarios"]["near_miss_cpa_target"])
+        for i in range(n):
+            self._inject_through_cross(
+                rig,
+                kind="person",
+                cpa=cpa0 + 0.28 * i,
+                from_left=(i % 2 == 0),
+                speed=self.rng.uniform(*self.cfg["scenarios"]["cross_person_speed"]),
+            )
+
+    def _inject_parked_car_door(self, rig: Any) -> None:
+        """Parked car on the near gutter; an open door occupies the gait."""
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        s = s0 + self._visible_lead(6.4, near=4.8, far=8.5)
+        if self._compose is not None:
+            s = s + self._compose.take_group_offset("static")
+        lat_car = self._resolve_lat(1.25, L, 1.05)
+        actor = self._spawn_kind("vehicle", s, lat_car, heading_sign=1.0)
+        actor.category = "static"
+        self._bind(
+            actor, s, lat_car,
+            speed=0.0,
+            behavior="parked",
+            allow_sidewalk=False,
+            pad=1.05,
+        )
+        door_lat = L + math.copysign(0.12, L if L else 1.0)
+        door = self._spawn_kind(
+            "cube", s + 0.35, door_lat, heading_sign=1.0,
+            cube_size=0.42, cube_z=0.85,
+        )
+        door.category = "static"
+        self._bind(
+            door, s + 0.35, door_lat,
+            speed=0.0,
+            behavior="static",
+            allow_sidewalk=True,
+            pad=0.22,
+        )
+
+    def _inject_backing_vehicle(self, rig: Any) -> None:
+        """Car ahead, facing away, rolling back toward the walker."""
+        s0, _L = self._cam_sl(rig, 0.0)
+        lat = self._near_lane()
+        v = self.rng.uniform(1.6, 2.8)
+        s = s0 + self._visible_lead(6.8, near=5.0, far=8.8)
+        if self._compose is not None:
+            s = s + self._compose.take_group_offset("along")
+        actor = self._spawn_kind("vehicle", s, lat, heading_sign=1.0)
+        actor.look_flip = True
+        self._bind(
+            actor, s, lat,
+            speed=-v,
+            behavior="backing",
+            allow_sidewalk=False,
+            pad=1.05,
+            look_flip=True,
         )
 
     def _inject_parallel_person(self, rig: Any) -> None:
@@ -5140,7 +5453,8 @@ class WorldGenerator:
         depth = self.rng.uniform(3.6, 6.2)
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
-            depth = min(depth + extra, 15.0)
+            depth = depth + extra
+        depth = self._visible_lead(depth, near=3.4, far=8.5)
         hw = self._frustum_half_width(depth, 0.92)
         lat_start = max(-lim, L - hw) if from_left else min(lim, L + hw)
         lat_end = min(lim, L + hw + 0.6) if from_left else max(-lim, L - hw - 0.6)

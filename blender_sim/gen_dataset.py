@@ -74,6 +74,18 @@ _FAMILIES: dict[str, tuple[str, ...]] = {
     ),
     "ped": ("oncoming_pedestrian", "parallel_pedestrian", "sudden_stop", "child_darting"),
     "erratic_car": ("car_erratic_swerve", "car_runs_off_road"),
+    "crossing": (
+        "crossing_street",
+        "crossing_car_side",
+        "group_crossing",
+        "crossing_head_on",
+    ),
+    "sidewalk_dyn": (
+        "scooter_from_sidewalk",
+        "cyclist_overtake",
+        "parked_car_door",
+        "backing_vehicle",
+    ),
 }
 
 # Pack mix. The leftover after compounds is split 40 / 30 / 30 like ``--scenario auto``.
@@ -156,6 +168,10 @@ def draw_compound(rng: random.Random, cfg: dict) -> str:
         prefer.append("cyclist")
     if rng.random() < 0.18:
         prefer.append("cube")
+    if rng.random() < 0.28:
+        prefer.append("crossing")
+    if rng.random() < 0.16:
+        prefer.append("sidewalk_dyn")
 
     picked: list[str] = []
     used: set[str] = set()
@@ -289,9 +305,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--spatial-overlay", action="store_true",
                    help="Also write spatial_overlay.mp4 on each episode.")
     p.add_argument("--biome", type=str, default="auto",
-                   help="street | avenue | park | plaza | auto. Default: auto.")
+                   help="street | avenue | park | plaza | alley | residential | market | auto.")
     p.add_argument("--ego-mode", "--ego", type=str, default="auto", dest="ego_mode",
-                   help="walk | diagonal_cross | erratic | seated | auto. Default: auto.")
+                   help="walk | diagonal_cross | crosswalk | erratic | seated | auto.")
+    p.add_argument("--ego-height", type=str, default="auto", dest="ego_height",
+                   help="short | typical | tall | auto | metres.")
     p.add_argument("--chaos", type=float, default=None,
                    help="Lock appearance chaos in [0,1] for every episode.")
     p.add_argument("--no-trees", action="store_true",
@@ -353,6 +371,8 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
         cmd += ["--biome", str(args.biome)]
     if str(getattr(args, "ego_mode", "auto")) not in ("", "auto"):
         cmd += ["--ego-mode", str(args.ego_mode)]
+    if str(getattr(args, "ego_height", "auto")) not in ("", "auto"):
+        cmd += ["--ego-height", str(args.ego_height)]
     if args.chaos is not None:
         cmd += ["--chaos", str(float(args.chaos))]
     if args.no_trees:
@@ -418,6 +438,7 @@ def main(argv: list[str] | None = None) -> int:
         "no_rgb": bool(args.no_rgb),
         "biome": str(args.biome),
         "ego_mode": str(args.ego_mode),
+        "ego_height": str(getattr(args, "ego_height", "auto")),
         "chaos": args.chaos,
         "no_trees": bool(args.no_trees),
         "note": (

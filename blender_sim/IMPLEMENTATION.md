@@ -134,8 +134,9 @@ Every flag `parse_args` accepts:
 | `--no-render` | | Skip EEVEE. JSON only. Overlay skipped. |
 | `--no-annotations` | | Skip `annotations/annotations.json`. Spatial JSON still written. |
 | `--no-occlusion` | | Skip the centre-ray occlusion flag (faster; boxes still computed). |
-| `--biome street\|avenue\|park\|plaza\|auto` | auto | Weighted draw if auto. |
-| `--ego-mode walk\|diagonal_cross\|erratic\|seated\|auto` | auto | Locks `choose_ego_profile` weights to one mode. |
+| `--biome street\|avenue\|park\|plaza\|alley\|residential\|market\|auto` | auto | Weighted draw if auto. |
+| `--ego-mode walk\|diagonal_cross\|crosswalk\|erratic\|seated\|auto` | auto | Locks `choose_ego_profile` weights to one mode. Crossing injectors force `crosswalk` when this is `auto`. |
+| `--ego-height short\|typical\|tall\|auto\|metres` | auto | Standing eye-height band or explicit metres. |
 | `--chaos FLOAT` | unset | Locks `material_chaos` to `[c, c]`. `0` is the pre-chaos pipeline. |
 | `--no-trees` | | Zeroes `n_trees`, `n_grass_clumps`, `n_street_trees`, `n_median_trees`, `n_path_trees` on world **and** every biome override. |
 | `--wind calm\|breeze\|windy\|auto` | auto | Locks `wind_weights` to one label. `auto` draws from config (calm 0.32 / breeze 0.48 / windy 0.20). Also overridable by `BTP_WIND`. |
@@ -383,15 +384,15 @@ Priority:
 
 **`camera`.** Name, lens, sensor 36 mm, `HORIZONTAL` fit, clip 0.05–120 m, eye 1.6 m, HFOV range.
 
-**`gait`.** Walk speed \(U(1.0,1.4)\) m/s, bounce 0.04 m @ 1.8 Hz, optional pitch bob 0.015 rad.
+**`gait`.** Walk speed bands stroll \(U(0.70,1.00)\) / walk \(U(1.00,1.50)\) / hurry \(U(1.50,2.05)\) m/s, bounce 0.04 m @ 1.8 Hz, optional pitch bob 0.015 rad. Seated is exactly 0.
 
-**`ego`.** Mode weights (walk 0.52, diagonal 0.14, erratic 0.22, seated 0.12), seated eye \(U(0.95,1.28)\), sidestep / wobble / hesitate windows, diagonal target fraction and span.
+**`ego`.** Mode weights (walk 0.44, erratic 0.22, seated 0.14, crosswalk 0.12, diagonal 0.08), seated eye \(U(0.95,1.28)\), sidestep / wobble / hesitate windows, diagonal / crosswalk target fraction and span. Standing eye height is drawn from short / typical / tall bands unless `--ego-height` locks it.
 
 **`jitter`.** Per-axis amplitude, frequency, octaves, persistence, lacunarity for camera-local Perlin.
 
-**`world`.** Path length \(U(48,78)\) m, path types, road 7.0 m, sidewalk 2.4 m, curb 0.12 m, `sample_ds=0.40`, building depth/height/gap, **`building_setback=3.6`** (planting strip; trees sit here; canopies must not reach the wall), lamps, Poisson clutter, background counts, speed ranges (`vehicle`, `pedestrian`, `bicycle`, `cube`, `shape`, `cross_car`), `corridor_margin=0.22`, biome table, tree / grass knobs.
+**`world`.** Path length \(U(48,78)\) m, path types, road 7.0 m, sidewalk 2.4 m, curb 0.12 m, `sample_ds=0.40`, building depth/width/height/gap, **`building_setback=3.6`** (planting strip; trees sit here only; canopies must not reach the wall), `median_width` (0 except avenue), `cobble_prob`, lamps, Poisson clutter, background counts, speed ranges (`vehicle`, `pedestrian`, `bicycle`, `cube`, `shape`, `cross_car`), `corridor_margin=0.22`, biome table, tree / grass knobs.
 
-Biome overrides **replace** matching keys on `cfg['world']` for that episode. They do not deep-merge nested dicts except by overwriting the key. Park sets `ground="grass"`, `buildings=False`, `curb_height=0`, `lane_paint=False`, `n_background_vehicles=(0,0)`, wide verge, path types without `corner_90`. Avenue widens the road to 13 m and raises the setback to 4.2 m. Plaza paints a wide paved room with buildings on **one** side only (`building_sides=(1.0,)`).
+Biome overrides **replace** matching keys on `cfg['world']` for that episode. They do not deep-merge nested dicts except by overwriting the key. Park sets `ground="grass"`, `buildings=False`, `curb_height=0`, `lane_paint=False`, `n_background_vehicles=(0,0)`, wide verge, path types without `corner_90`. Avenue widens the road to 13 m, plants a grass median (`median_width≈2.6`), and raises the setback to 4.2 m. Plaza paints a wide paved room with buildings on **one** side only (`building_sides=(1.0,)`). Alley / residential / market change widths, setback, cobble chance, and crowd counts. `prepare_biome` then jitters widths from `domain_randomization.layout_jitter`.
 
 **`threat`.** Taxonomy thresholds (see §8). `user_hitbox_radius=0.30` is the injector / spatial ego half-width, not a visual mesh.
 
@@ -799,7 +800,7 @@ TAA 16 + reprojection. Raytracing method **`SCREEN`** (not `'SCREEN_TRACE'`, a s
 
 `_centerline_dash` — 3 m mark, 3 m gap, 0.12 m wide, Frenet quads. World-axis boxes would chord across a corner.
 
-`_extrude_buildings` — from `s=14` m (a 24 mm lens at `s0=3` m must not be filled by one wall) to near the end. Facade lateral = `sign * (road_half + sw + building_setback)`. Depth \(U(4,10)\), height \(U(6,18)\) street / taller avenue. Gap \(U(0.4,2.2)\) plus explicit `gaps` from `prepare_scenario` (crossers open `[4,20]` or `[4,28]`). Roof is a child slab. `offset_folds` skip. Night: `make_facade(..., night=True)` so windows emit.
+`_extrude_buildings` — from `s=14` m (a 24 mm lens at `s0=3` m must not be filled by one wall) to near the end. Facade lateral = `sign * (road_half + sw + building_setback)` plus per-lot setback jitter. Depth / width / height from config ranges. Gap \(U(0.4,2.2)\) plus explicit `gaps` from `prepare_scenario` (crossers open `[4,20]` or `[4,28]`). Massing is cheap extra boxes: box, stepped, L-plan, arcade recess, sloped roof. `offset_folds` skip. Night: `make_facade(..., night=True)` so windows emit.
 
 ### 11.13 Trees (`spawn_tree` + `_scatter_trees`)
 
@@ -816,9 +817,11 @@ Roles in `_scatter_trees`:
 | Role | Config key | Where | Crown cap | Along-track spacing |
 | --- | --- | --- | --- | --- |
 | `plant` | `n_trees` | Planting strip (facade − crown − 0.40), or park field | 2.8 / computed | 7.5 m |
-| `curb` | `n_street_trees` | Just inside the carriageway (`road_half − U(0.18,0.42)`) | 1.15 m | 8.0 m |
-| `median` | `n_median_trees` | `|lat| < 0.16` | 0.95 m (narrow road) / 1.55 m (avenue) | 10.0 m |
-| `path` | `n_path_trees` | Park gait, `|lat|<0.22` | 1.35 m | 6.0 m |
+| `curb` | `n_street_trees` | Planting strip, sidewalk-adjacent (`road_half + sw + U(0.35,1.15)`). Never on asphalt. Default counts are `(0,0)`. | 1.35 m | 8.0 m |
+| `median` | `n_median_trees` | Only if `median_width ≥ 1.4` (avenue grass strip). Rejected if the trunk would sit on a driving lane. | ≤ half-median | 10.0 m |
+| `path` | `n_path_trees` | Park **verge**, off the gravel gait (`|lat| ≥ road_half + 0.70`) | 1.55 m | 6.0 m |
+
+A hard reject (`_on_drive_or_walk`) drops any candidate whose `|lat|` is on the carriageway or the walking slab.
 
 `_tree_free(s, lat, along, xy=3.8)` — along-track spacing in the **same strip** (`|Δlat|` small) uses `along`; Euclidean XY uses 3.8 m. A planting tree at lat 7.5 must **not** ban a median trunk at lat 0. Early versions used one Euclidean radius and rejected every median tree.
 
@@ -920,7 +923,7 @@ See the field table in §11.19. `update(t, dt, corridor)`:
 
 **`prepare_biome`.** Weighted or requested name. Copies biome dict onto `cfg['world']`. One substrate: a park “lane” is a lateral band of a 3 m gravel path. Injectors do not branch on biome except where `ground_z` / planar TTC already handle it.
 
-**`prepare_scenario`.** Records slug, opens building gaps if any name is in `CROSS_GAP_SCENARIOS`, sparsifies if `empty_street` is in the mix.
+**`prepare_scenario`.** Records slug, opens building gaps if any name is in `CROSS_GAP_SCENARIOS`, sparsifies if `empty_street` is in the mix, sets `force_ego_mode="crosswalk"` for `CROSS_EGO_SCENARIOS`.
 
 **`build`.** Reset scene, configure EEVEE, new `MeshLibrary`, `_wind = None`. Draw path and sidewalk lateral. `choose_environment`, then construct `WindField` from that draw (not before — an early field would ignore `--wind`). Ribbons, buildings, trees (which receive `_wind`), lamps, grass, lighting, furniture, background traffic. Fold `wind` / `wind_strength` onto the environment dict stored in `WorldState`. Returns `WorldState`.
 
@@ -979,7 +982,9 @@ CLI parse + Frenet occupancy. Injector **bodies** stay in `world_generator.py` s
 
 ### 12.1 Catalogs
 
-**`CROSS_GAP_SCENARIOS`.** Lateral travellers that need a building gap so they are not born in a facade. Includes all jaywalk variants, crossing cars, cube/shape from left/right, `child_darting`, `distant_jaywalk`. `prepare_scenario` opens `[4,20]` m, or `[4,28]` if two or more.
+**`CROSS_GAP_SCENARIOS`.** Lateral travellers that need a building gap so they are not born in a facade. Includes all jaywalk variants, crossing cars, cube/shape from left/right, `child_darting`, `distant_jaywalk`, `group_crossing`, `crossing_car_side`, `scooter_from_sidewalk`. `prepare_scenario` opens `[4,20]` m, or `[4,28]` if two or more.
+
+**`CROSS_EGO_SCENARIOS`.** `crossing_street`, `crossing_car_side`, `group_crossing`, `crossing_head_on`. `prepare_scenario` sets `force_ego_mode="crosswalk"` so the walker turns onto the ribbon in Frenet `(s, lateral)` (heading follows the motion vector).
 
 **`THROUGH_CROSSERS`.** Occupies every lane at a fixed `s` over a few seconds. Used to send a generic `car_approaching` to the far lane (`prefer_far_lane`).
 
@@ -1211,8 +1216,16 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `car_erratic_swerve` | critical | Near-lane car, weave 1.0–2.2 m @ 0.18–0.40 Hz. |
 | `car_runs_off_road` | critical | Car in the near lane, then `turn_t` mounts the walker’s sidewalk (`_inject_run_off_road`). |
 | `child_darting` | critical | `spawn_humanoid(child=True)`, 1.9–3.1 m/s lateral dart through the gait. |
+| `crossing_street` | safe | No extra injector. Forces ego `crosswalk` (Frenet lateral + heading). |
+| `cyclist_overtake` | safe | Bike same way, ~0.85 m toward the road, faster than ego, lead ~2 m. |
+| `group_crossing` | near | 2–3 through-cross pedestrians; forces ego `crosswalk`. |
+| `scooter_from_sidewalk` | near | Through-cross bicycle from a FOV edge. |
+| `parked_car_door` | near | Parked car in the near gutter + a static door-height box on the gait. |
+| `crossing_car_side` | critical | Through-cross vehicle + ego `crosswalk`. |
+| `crossing_head_on` | critical | Oncoming car in the far lane while the ego crosses. |
+| `backing_vehicle` | critical | Car ahead, `look_flip`, slow reverse (`ds < 0`) toward the walker. |
 
-Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car.
+Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car, crossing, sidewalk_dyn.
 
 ### 15.3 Worked inject: `jaywalker` + `car_approaching` + `pothole`
 
@@ -1563,11 +1576,11 @@ Same trunk, seated. \(V_{\mathrm{rel}}=0\), TTC = 9999, **SAFE_STATIC**. Spatial
 | --- | --- | --- |
 | Resolution / fps / length | 1920×1080 / 30 / 150 frames | Vest training clip; 5.0 s |
 | HFOV | \(U(50^\circ,90^\circ)\) unless CLI locks | 35 mm → 18 mm full-frame |
-| Walk speed / bounce | \(U(1.0,1.4)\) m/s, 0.04 m @ 1.8 Hz | Adult sidewalk gait |
+| Walk speed / bounce | stroll / walk / hurry \(U(0.70,2.05)\), 0.04 m @ 1.8 Hz | Adult sidewalk gait; seated is 0 |
 | Path | \(U(48,78)\) m; straight / gentle / S / 90° | 5 s at 1.4 m/s is 7 m; the rest is look-ahead + buildings |
 | `sidewalk_s0` | 3.0 m (code, not config) | First frame is not inside a facade |
 | Street ribbon | road 7.0 m, sidewalk 2.4 m, curb 0.12 m, setback 3.6 m | Two lanes + planting strip |
-| Trees | plant \(U(6,12)\), curb \(U(2,5)\), median \(U(1,3)\) | Real street, not a forest |
+| Trees | plant \(U(6,12)\); curb/median counts 0 unless avenue planted strip | No trunks on asphalt |
 | Furniture Poisson | \(U(3,7)\), radius 3.2 m, shop-front band | Walking line stays clear |
 | Head hazards | `(0, 0)` | Floating boxes read as junk |
 | Background peds / cars | \(U(3,6)\) / \(U(2,5)\) | Occupancy still has room for injectors |

@@ -36,7 +36,13 @@ if str(_ROOT) not in sys.path:
 
 import bpy
 
-from camera_kinematics import EGO_MODES, CameraRig, CameraState, choose_ego_profile
+from camera_kinematics import (
+    EGO_MODES,
+    CameraRig,
+    CameraState,
+    apply_ego_height,
+    choose_ego_profile,
+)
 from config import apply_camera_fov, get_config
 from projection import (
     bound_cache_for,
@@ -165,8 +171,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default="auto",
         help=(
-            "World type: street | avenue | park | plaza | auto. "
-            "Default: auto (weighted draw per episode)."
+            "World type: street | avenue | park | plaza | alley | "
+            "residential | market | auto. Default: auto (weighted draw)."
         ),
     )
     p.add_argument(
@@ -176,8 +182,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="auto",
         dest="ego_mode",
         help=(
-            "Ego trajectory: walk | diagonal_cross | erratic | seated | auto. "
-            "'seated' pins walk_speed to 0. Default: auto."
+            "Ego trajectory: walk | diagonal_cross | crosswalk | erratic | "
+            "seated | auto. 'seated' pins walk_speed to 0. Crossing scenarios "
+            "force crosswalk unless this flag locks another mode. Default: auto."
+        ),
+    )
+    p.add_argument(
+        "--ego-height",
+        type=str,
+        default="auto",
+        dest="ego_height",
+        help=(
+            "Standing eye height: short (1.35–1.50) | typical | tall (1.75–1.90) "
+            "| auto | metres (e.g. 1.45). Seated still uses the bench range."
         ),
     )
     p.add_argument(
@@ -971,6 +988,7 @@ def run_episode(
     drop_rgb: bool = False,
     biome: str = "auto",
     ego_mode: str = "auto",
+    ego_height: str = "auto",
     chaos: float | None = None,
     no_trees: bool = False,
     wind: str = "auto",
@@ -1008,6 +1026,7 @@ def run_episode(
     if requested_wind in WIND_LABELS:
         cfg["domain_randomization"]["wind_weights"] = {requested_wind: 1.0}
 
+    apply_ego_height(cfg, ego_height)
     gen = WorldGenerator(cfg, ep_rng)
     # Biome first: a sparse scenario must be able to override the biome's
     # traffic counts, not the other way round.
@@ -1021,8 +1040,9 @@ def run_episode(
     n_frames = int(frames_override) if frames_override > 0 else int(cfg["render"]["frames_per_episode"])
     # The ego profile needs the episode length up front so a hesitation
     # window lands inside the episode rather than after the last frame.
-    profile = choose_ego_profile(cfg, ep_rng, episode_seconds=n_frames / float(fps))
     requested_mode = str(ego_mode or "auto").strip().lower()
+    if requested_mode in ("", "auto", "random") and getattr(gen, "force_ego_mode", ""):
+        requested_mode = str(gen.force_ego_mode)
     if requested_mode not in ("", "auto", "random"):
         if requested_mode not in EGO_MODES:
             raise ValueError(
@@ -1033,6 +1053,8 @@ def run_episode(
             ep_rng,
             episode_seconds=n_frames / float(fps),
         )
+    else:
+        profile = choose_ego_profile(cfg, ep_rng, episode_seconds=n_frames / float(fps))
 
     rig = CameraRig(
         cam_obj=cam_obj,
@@ -1054,6 +1076,7 @@ def run_episode(
     print(
         f"  dir={ep_dir.name}\n"
         f"  biome={chosen_biome}  ego={profile.mode}  "
+        f"eye={profile.eye_height:.2f}m({getattr(profile, 'stature', '?')})  "
         f"chaos={gen.chaos:.2f}  wind={state.environment.get('wind', 'breeze')}"
         f"({float(state.environment.get('wind_strength', 0)):.2f})  "
         f"light={state.environment.get('lighting')}"
@@ -1211,6 +1234,7 @@ def run_episode(
         "ego": {
             "mode": profile.mode,
             "eye_height_m": round(float(profile.eye_height), 3),
+            "stature": str(getattr(profile, "stature", "typical")),
             "stationary": bool(profile.stationary),
             "sidestep_amp_m": round(float(profile.sidestep_amp), 3),
             "halt_s": (
@@ -1351,6 +1375,7 @@ def main() -> int:
                 drop_rgb=bool(args.no_rgb),
                 biome=str(args.biome),
                 ego_mode=str(args.ego_mode),
+                ego_height=str(getattr(args, "ego_height", "auto")),
                 chaos=args.chaos,
                 no_trees=bool(args.no_trees),
                 wind=str(args.wind),

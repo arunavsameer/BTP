@@ -48,6 +48,12 @@ cd /storage/BTP/blender_sim
 # Park path, seated ego, locked appearance chaos, JSON only
 ./run.sh --episodes 1 --biome park --ego seated --chaos 1 --no-render --output ./output
 
+# Ego turns onto a crosswalk; a car comes from the side
+./run.sh --episodes 1 --scenario crossing_car_side --biome street --no-render --output ./output
+
+# Short walker on a cobbled alley
+./run.sh --episodes 1 --biome alley --ego-height short --scenario safe_walk --no-render --output ./output
+
 # Print every injector name and alias, then exit
 ./run.sh --list-scenarios
 ```
@@ -85,8 +91,9 @@ Force time of day (QA; not a CLI flag): `BTP_LIGHTING=dusk ./run.sh …`
 | `--no-occlusion` | off | Skip the centre-ray occlusion flag |
 | `--threat-grid K` | `3` | `K×K` spatial threat matrix, always written |
 | `--spatial-overlay` | off | Also write `spatial_overlay.mp4` (needs a render) |
-| `--biome` | `auto` | `street` \| `avenue` \| `park` \| `plaza` \| `auto` |
-| `--ego-mode` / `--ego` | `auto` | `walk` \| `diagonal_cross` \| `erratic` \| `seated` \| `auto` |
+| `--biome` | `auto` | `street` \| `avenue` \| `park` \| `plaza` \| `alley` \| `residential` \| `market` \| `auto` |
+| `--ego-mode` / `--ego` | `auto` | `walk` \| `diagonal_cross` \| `crosswalk` \| `erratic` \| `seated` \| `auto` |
+| `--ego-height` | `auto` | `short` (1.35–1.50 m) \| `typical` \| `tall` (1.75–1.90 m) \| metres |
 | `--chaos X` | per-episode | Lock appearance chaos in `[0,1]` |
 | `--wind` | `auto` | `calm` \| `breeze` \| `windy` \| `auto` — leaf rustle; trunk stays still |
 | `--no-trees` | off | No procedural trees or grass |
@@ -129,13 +136,13 @@ JSON 3-D vectors are **Y-up** `(X right, Y height, Z forward)`. The sim itself i
 
 ## Scenarios
 
-`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **42** named injectors. `--list-scenarios` is the live catalog.
+`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **50** named injectors. `--list-scenarios` is the live catalog.
 
 | Bucket | Names |
 | --- | --- |
-| Safe | `safe_walk`, `empty_street`, `oncoming_pedestrian`, `parallel_pedestrian`, `cyclist_same_way`, `car_pass_far`, `car_approaching`, `distant_jaywalk`, `pothole_offset`, `parked_car_opposite` |
-| Near miss | `near_miss_pass`, `jaywalker_offset`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_away`, `cyclist_near_miss`, `car_near_miss_lane`, `car_cross_front`, `cube_near_miss`, `shape_near_miss`, `pothole_near`, `cyclist_weaving` |
-| Critical | `jaywalker`, `jaywalker_turn_toward`, `sudden_stop`, `swerve_vehicle`, `pothole_on_path`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `shapes_on_path`, `car_cut_in`, `cyclist_head_on`, `head_level_projectile`, `car_cross_critical`, `car_erratic_swerve`, `car_runs_off_road`, `child_darting` |
+| Safe | `safe_walk`, `empty_street`, `oncoming_pedestrian`, `parallel_pedestrian`, `cyclist_same_way`, `car_pass_far`, `car_approaching`, `distant_jaywalk`, `pothole_offset`, `parked_car_opposite`, `crossing_street`, `cyclist_overtake` |
+| Near miss | `near_miss_pass`, `jaywalker_offset`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_away`, `cyclist_near_miss`, `car_near_miss_lane`, `car_cross_front`, `cube_near_miss`, `shape_near_miss`, `pothole_near`, `cyclist_weaving`, `group_crossing`, `scooter_from_sidewalk`, `parked_car_door` |
+| Critical | `jaywalker`, `jaywalker_turn_toward`, `sudden_stop`, `swerve_vehicle`, `pothole_on_path`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `shapes_on_path`, `car_cut_in`, `cyclist_head_on`, `head_level_projectile`, `car_cross_critical`, `car_erratic_swerve`, `car_runs_off_road`, `child_darting`, `crossing_car_side`, `crossing_head_on`, `backing_vehicle` |
 
 **Compounds.** Several injectors in one street. Tokens split on `,`, `+`, or spaces. A lone `auto` inside a list is itself a random draw (`pothole,auto` = pothole plus one extra event).
 
@@ -173,6 +180,13 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `child` / `kid` | `child_darting` |
 | `projectile` | `head_level_projectile` |
 | `swerve` | `swerve_vehicle` |
+| `cross` / `crossing` / `crosswalk` | `crossing_street` |
+| `side_car` | `crossing_car_side` |
+| `group` | `group_crossing` |
+| `scooter` | `scooter_from_sidewalk` |
+| `overtake` | `cyclist_overtake` |
+| `door` | `parked_car_door` |
+| `backing` / `reverse` | `backing_vehicle` |
 
 **What the interesting ones do**
 
@@ -181,25 +195,30 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 - `jaywalker_turn_away` — turns onto the road and walks **with** you, ahead.
 - `empty_street` — almost no background traffic or clutter. In a compound it still sparsifies the street; the other names still inject.
 - `cube_*` / `shape_*` — generic primitives (cube, sphere, cylinder, pyramid, cone, capsule, lump) so the model cannot overfit to cars. `*_on_path` is stationary on the gait; `*_head_on` comes at you; `*_from_left/right` crosses.
-- Street trees are **not** a named injector. They are part of the world: planting strip, curb pits, and sometimes the median. Each tree is a recursive fork (trunk → limbs that split again) with individual triangle leaves. The **trunk** is the obstacle; rustling leaves are not. `--wind calm` almost still; `--wind windy` a real gust.
+- Street trees are **not** a named injector. They sit in the **planting strip** (and, on an avenue, a planted grass median that driving lanes do not use). They are never spawned on asphalt or the walking slab. Each tree is a recursive fork (trunk → limbs that split again) with individual triangle leaves. The **trunk** is the obstacle; rustling leaves are not. `--wind calm` almost still; `--wind windy` a real gust.
+- `crossing_street` / `crossing_car_side` / `group_crossing` / `crossing_head_on` force the ego into `crosswalk` mode: Frenet lateral change plus heading that turns onto the crossing. A side car or other pedestrians on that path are ordinary injectors.
 
 ## World and ego (not injectors)
 
 | `--biome` | What you see |
 | --- | --- |
-| `street` | Asphalt, kerb, buildings both sides, planting-strip + curb + median trees |
-| `avenue` | Wider carriageway, taller facades, more traffic, more median trees |
-| `park` | 3 m gravel path on grass, no buildings / kerb / lane paint. Ego walks **on the path**. TTC is planar. |
+| `street` | Asphalt, kerb, buildings both sides, planting-strip trees only |
+| `avenue` | Wider carriageway, planted grass median, taller facades, more traffic |
+| `park` | 3 m gravel path on grass, no buildings / kerb / lane paint. Ego walks **on the path**. TTC is planar. Trees stay off the gravel. |
 | `plaza` | Wide paving, buildings on one side. TTC planar. |
-| `auto` | Weighted draw per episode (`street` 0.42, `park` 0.24, `avenue` 0.18, `plaza` 0.16) |
+| `alley` | Narrow cobbled lane, close facades, little or no planting |
+| `residential` | Quieter street, deeper front gardens, lower houses |
+| `market` | Wide sidewalks, shop-front clutter, more people than cars |
+| `auto` | Weighted draw per episode (street / park / residential / avenue / plaza / alley / market) |
 
 | `--ego` | What the camera does |
 | --- | --- |
-| `walk` | Constant-speed sidewalk traverse |
+| `walk` | Constant-speed sidewalk traverse (stroll / walk / hurry pace) |
 | `diagonal_cross` | Cuts from one kerb toward the other |
+| `crosswalk` | Full kerb-to-kerb turn; gaze follows Frenet motion |
 | `erratic` | Sidesteps + speed wobble; may stop |
 | `seated` | `walk_speed = 0`, lower eye, bench behind the HMD |
-| `auto` | Weighted draw (`walk` 0.52, `erratic` 0.22, `diagonal_cross` 0.14, `seated` 0.12) |
+| `auto` | Weighted draw (`walk` 0.44, `erratic` 0.22, `seated` 0.14, `crosswalk` 0.12, `diagonal_cross` 0.08) |
 
 Default sidewalk clutter is shop-front furniture (trash, scooter, barricade, puddle), not floating boxes. Potholes and debris come from scenario injectors.
 
@@ -239,7 +258,7 @@ datasets/pack_YYYYMMDD_HHMMSS_s7_n24/
   …
 ```
 
-`gen_dataset.py` flags that pass through to Blender: `--media`, `--no-rgb`, `--frames`, `--threat-grid`, `--spatial-overlay`, `--biome`, `--ego-mode`, `--chaos`, `--wind`, `--no-trees`, `--no-render`, `--no-annotations`.
+`gen_dataset.py` flags that pass through to Blender: `--media`, `--no-rgb`, `--frames`, `--threat-grid`, `--spatial-overlay`, `--biome`, `--ego-mode`, `--ego-height`, `--chaos`, `--wind`, `--no-trees`, `--no-render`, `--no-annotations`.
 
 ## Checks (no Blender)
 
