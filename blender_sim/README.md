@@ -136,7 +136,7 @@ JSON 3-D vectors are **Y-up** `(X right, Y height, Z forward)`. The sim itself i
 
 ## Scenarios
 
-`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **50** named injectors. `--list-scenarios` is the live catalog.
+`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **58** named injectors (50 in the auto mix, plus 8 empty-center / side-threat names). `--list-scenarios` is the live catalog.
 
 | Bucket | Names |
 | --- | --- |
@@ -187,6 +187,14 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `overtake` | `cyclist_overtake` |
 | `door` | `parked_car_door` |
 | `backing` / `reverse` | `backing_vehicle` |
+| `periph` / `clear_center` / `side_empty` | `periph_empty` |
+| `side_pass` | `periph_car_side` |
+| `side_parked` | `periph_parked` |
+| `side_ped` | `periph_ped_side` |
+| `side_turn` | `periph_car_turn` |
+| `side_cut` | `periph_ped_cut` |
+| `side_runoff` | `periph_car_runoff` |
+| `side_child` | `periph_child_cut` |
 
 **What the interesting ones do**
 
@@ -194,6 +202,10 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 - `jaywalker_turn_toward` — comes in from the side, then turns onto the sidewalk **toward** you.
 - `jaywalker_turn_away` — turns onto the road and walks **with** you, ahead.
 - `empty_street` — almost no background traffic or clutter. In a compound it still sparsifies the street; the other names still inject.
+- `periph_empty` / `periph_car_side` / `periph_parked` / `periph_ped_side` — **empty sidewalk ahead**. No one walks toward you in the image centre. A car or person may sit on the far lane / opposite kerb (low centre spatial threat).
+- `periph_car_turn` / `periph_car_runoff` — same empty street, car stays in the **near driving lane** for about a second (off to the road side of the frame), then cuts toward you or mounts the pavement.
+- `periph_ped_cut` / `periph_child_cut` — empty street, then a person (or child) enters a FOV edge and cuts through the gait. Centre heat appears only after they step in.
+- Peripheral names are **not** in `--scenario auto`. Use `--scenario periph_ped_cut` or `gen_dataset.py --theme peripheral`. Ego is forced to `walk`; auto-biome skips park / plaza.
 - `cube_*` / `shape_*` — generic primitives (cube, sphere, cylinder, pyramid, cone, capsule, lump) so the model cannot overfit to cars. `*_on_path` is stationary on the gait; `*_head_on` comes at you; `*_from_left/right` crosses.
 - Street trees are **not** a named injector. They sit in the **planting strip** (and, on an avenue, a planted grass median that driving lanes do not use). They are never spawned on asphalt or the walking slab. Each tree is a recursive fork (trunk → limbs that split again) with individual triangle leaves. The **trunk** is the obstacle; rustling leaves are not. `--wind calm` almost still; `--wind windy` a real gust.
 - `crossing_street` / `crossing_car_side` / `group_crossing` / `crossing_head_on` force the ego into `crosswalk` mode: Frenet lateral change plus heading that turns onto the crossing. Crossing cars stay in a driving lane and roll along the road; they do not slide in from the sidewalk.
@@ -246,6 +258,8 @@ Writes a **new** folder under `datasets/` and fills it with N balanced episodes 
 ./gen_dataset.py --n 8 --seed 1 --dry-run
 ./gen_dataset.py --n 16 --seed 3 --spatial-overlay --media both --no-rgb
 ./gen_dataset.py --n 4 --seed 9 --no-render --name smoke
+./gen_dataset.py --n 40 --seed 11 --theme peripheral --name side40 --dry-run
+./gen_dataset.py --n 40 --seed 11 --theme peripheral --name side40 --media both --no-rgb --spatial-overlay --ego walk
 ./gen_dataset.py --self-test
 ```
 
@@ -259,6 +273,8 @@ datasets/pack_YYYYMMDD_HHMMSS_s7_n24/
 ```
 
 `gen_dataset.py` flags that pass through to Blender: `--media`, `--no-rgb`, `--frames`, `--threat-grid`, `--spatial-overlay`, `--biome`, `--ego-mode`, `--ego-height`, `--chaos`, `--wind`, `--no-trees`, `--no-render`, `--no-annotations`.
+
+`--theme peripheral` (aliases `side`, `clear_center`) builds only the empty-center / side-threat catalog: ~18 % empty street, ~37 % side-stay (car / parked / opposite ped), ~45 % side-cut (car turns in, person or child cuts through). Mixed packs are unchanged.
 
 ## Checks (no Blender)
 

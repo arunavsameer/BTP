@@ -1030,7 +1030,7 @@ def run_episode(
     gen = WorldGenerator(cfg, ep_rng)
     # Biome first: a sparse scenario must be able to override the biome's
     # traffic counts, not the other way round.
-    chosen_biome = gen.prepare_biome(biome)
+    chosen_biome = gen.prepare_biome(biome, names=names)
     gen.prepare_scenario(names)
     clear_bound_caches()
     state = gen.build()
@@ -1292,6 +1292,12 @@ def main() -> int:
         print("critical_pool:")
         for name in sc["critical_pool"]:
             print(f"  {name}")
+        print("peripheral_safe (empty-center pack; not in --scenario auto):")
+        for name in sc.get("peripheral_safe") or ():
+            print(f"  {name}")
+        print("peripheral_critical:")
+        for name in sc.get("peripheral_critical") or ():
+            print(f"  {name}")
         print(f"total={len(all_scenario_names(cfg))}")
         print()
         print("short aliases (for compounds):")
@@ -1303,6 +1309,8 @@ def main() -> int:
         print("  --scenarios jaywalker+car_approaching+pothole_on_path")
         print("  --scenario jaywalker --scenario car --scenario pothole")
         print("  --scenario empty_street,jaywalker")
+        print("  --scenario periph_ped_cut")
+        print("  gen_dataset.py --theme peripheral --n 40")
         return 0
     request = scenario_request_from_tokens(args.scenario, args.scenarios)
     args.scenario_request = request

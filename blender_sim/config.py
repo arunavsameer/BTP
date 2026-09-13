@@ -448,6 +448,21 @@ CONFIG: dict[str, Any] = {
             "crossing_head_on",
             "backing_vehicle",
         ),
+        # Empty-center / side-threat pack (``gen_dataset.py --theme peripheral``).
+        # Not drawn by ``--scenario auto`` so mixed packs stay unchanged.
+        "peripheral_safe": (
+            "periph_empty",
+            "periph_car_side",
+            "periph_parked",
+            "periph_ped_side",
+        ),
+        "peripheral_near": (),
+        "peripheral_critical": (
+            "periph_car_turn",
+            "periph_car_runoff",
+            "periph_ped_cut",
+            "periph_child_cut",
+        ),
         "swerve_trigger_s": 1.8,
         "cut_in_trigger_s": 1.2,
         "sudden_stop_lead_m": 3.0,

@@ -921,9 +921,9 @@ See the field table in §11.19. `update(t, dt, corridor)`:
 
 **`__init__`.** Holds cfg, rng, empty lib, `_sites`, `_wind`, compose session, mover caches.
 
-**`prepare_biome`.** Weighted or requested name. Copies biome dict onto `cfg['world']`. One substrate: a park “lane” is a lateral band of a 3 m gravel path. Injectors do not branch on biome except where `ground_z` / planar TTC already handle it.
+**`prepare_biome`.** Weighted or requested name. Copies biome dict onto `cfg['world']`. One substrate: a park “lane” is a lateral band of a 3 m gravel path. Injectors do not branch on biome except where `ground_z` / planar TTC already handle it. If `names` contains a `CLEAR_CENTER` scenario and biome is `auto`, park / plaza / market are dropped so the frame still has a carriageway beside a sidewalk.
 
-**`prepare_scenario`.** Records slug, opens building gaps if any name is in `CROSS_GAP_SCENARIOS`, sparsifies if `empty_street` is in the mix, sets `force_ego_mode="crosswalk"` for `CROSS_EGO_SCENARIOS`.
+**`prepare_scenario`.** Records slug, opens building gaps if any name is in `CROSS_GAP_SCENARIOS`, sparsifies if `empty_street` or a `CLEAR_CENTER` name is in the mix, sets `force_ego_mode="crosswalk"` for `CROSS_EGO_SCENARIOS` or `"walk"` for `CLEAR_CENTER_SCENARIOS`. Clear-center also zeroes sidewalk furniture / median trees and keeps `path_types` to `straight` / `gentle_curve`.
 
 **`build`.** Reset scene, configure EEVEE, new `MeshLibrary`, `_wind = None`. Draw path and sidewalk lateral. `choose_environment`, then construct `WindField` from that draw (not before — an early field would ignore `--wind`). Ribbons, buildings, trees (which receive `_wind`), lamps, grass, lighting, furniture, background traffic. Fold `wind` / `wind_strength` onto the environment dict stored in `WorldState`. Returns `WorldState`.
 
@@ -988,7 +988,9 @@ CLI parse + Frenet occupancy. Injector **bodies** stay in `world_generator.py` s
 
 **`THROUGH_CROSSERS`.** Occupies every lane at a fixed `s` over a few seconds. Used to send a generic `car_approaching` to the far lane (`prefer_far_lane`).
 
-**`SPARSE_SCENARIOS`.** `{empty_street}` — zeroes background peds/cars and most clutter.
+**`SPARSE_SCENARIOS`.** `{empty_street}` plus every `CLEAR_CENTER` name — zeroes background peds/cars and most clutter.
+
+**`CLEAR_CENTER_SCENARIOS`.** `periph_empty`, `periph_car_side`, `periph_parked`, `periph_ped_side`, `periph_car_turn`, `periph_car_runoff`, `periph_ped_cut`, `periph_child_cut`. Empty sidewalk ahead; injected actors stay in a side lane or enter from a FOV edge. Not in `--scenario auto`. `gen_dataset.py --theme peripheral` is the pack.
 
 **`NEAR_LANE_LOCKED`.** Cut-in / graze / swerve / weave / run-off **must** keep the near lane. Occupancy staggers `s` instead of flipping the lane.
 
@@ -1182,6 +1184,16 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | --- | --- | --- |
 | `safe_walk` | safe | Background only. Injector is a no-op. |
 | `empty_street` | safe | `prepare_scenario` zeroes background peds/cars and most clutter. Injector no-op. |
+| `periph_empty` | safe* | Clear-center empty street. Ego `walk`, no clutter, no gait traffic. |
+| `periph_car_side` | safe* | Far-lane car, close spawn so it sits on a FOV edge. Stays in lane. |
+| `periph_parked` | safe* | Parked car in a gutter (near or far). |
+| `periph_ped_side` | safe* | Person on the opposite sidewalk only. |
+| `periph_car_turn` | crit* | Near-lane car ~12 m out for ~0.9 s, then cut-in onto the gait. |
+| `periph_car_runoff` | crit* | Same start, then mounts the pavement. |
+| `periph_ped_cut` | crit* | Through-cross person from a FOV edge. |
+| `periph_child_cut` | crit* | Child dart from a FOV edge. |
+
+\*Peripheral names live in `peripheral_safe` / `peripheral_critical`, not the auto mix.
 | `oncoming_pedestrian` | safe | Opposite sidewalk (`dlat="opposite"`), 0.95–1.30 m/s, \(\tau=3.0\). CPA stays large. |
 | `parallel_pedestrian` | safe | Same way, +0.80 m toward the curb, 4 m ahead, ego speed. |
 | `cyclist_same_way` | safe | Far lane, same way, bike speed, 7 m ahead. |
@@ -1344,6 +1356,8 @@ Each episode already randomizes lighting, weather, path, FOV, body, colours, clu
 1. Quotas: leftover after compounds is split **40 / 30 / 30** like `--scenario auto`.
 2. Compounds: `_COMPOUND_FRAC=0.22` of \(N\). `draw_compound` picks **at most one name per family** (jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car) so occupancy stays sane. `jaywalker+jaywalker_from_left` is refused by construction.
 3. Singles: cycle-draw from each pool so a small \(N\) still sees several names, not 8 copies of the first.
+
+`--theme peripheral` (aliases `side`, `clear_center`) uses `build_plan_peripheral` instead: ~18 % `periph_empty`, ~37 % side-stay, ~45 % side-cut. No compounds. Those names are not in the mixed catalog.
 
 `--dry-run` writes the JSON and prints the mix, does not launch Blender. `--self-test` checks determinism (same seed → same plan) and family uniqueness inside compounds.
 

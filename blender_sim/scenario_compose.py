@@ -60,6 +60,8 @@ CROSS_GAP_SCENARIOS = frozenset(
         "group_crossing",
         "crossing_car_side",
         "scooter_from_sidewalk",
+        "periph_ped_cut",
+        "periph_child_cut",
     }
 )
 
@@ -94,10 +96,32 @@ THROUGH_CROSSERS = frozenset(
         "group_crossing",
         "crossing_car_side",
         "scooter_from_sidewalk",
+        "periph_ped_cut",
+        "periph_child_cut",
     }
 )
 
-SPARSE_SCENARIOS = frozenset({"empty_street"})
+# Empty sidewalk ahead: no oncoming gait traffic, threats stay in the
+# periphery until they cut in. prepare_scenario zeroes crowd/clutter,
+# locks ego to walk, and keeps the path mostly straight.
+CLEAR_CENTER_SCENARIOS = frozenset(
+    {
+        "periph_empty",
+        "periph_car_side",
+        "periph_parked",
+        "periph_ped_side",
+        "periph_car_turn",
+        "periph_car_runoff",
+        "periph_ped_cut",
+        "periph_child_cut",
+    }
+)
+
+# Biomes that still have a carriageway next to a sidewalk. Park / plaza
+# fill the frame with path or paving, so auto-biome skips them here.
+CLEAR_CENTER_BIOMES = frozenset({"street", "residential", "alley", "avenue"})
+
+SPARSE_SCENARIOS = frozenset({"empty_street"}) | CLEAR_CENTER_SCENARIOS
 
 # These injectors *must* keep the near lane (cut-in / graze / swerve).
 NEAR_LANE_LOCKED = frozenset(
@@ -108,6 +132,8 @@ NEAR_LANE_LOCKED = frozenset(
         "car_erratic_swerve",
         "car_runs_off_road",
         "cyclist_weaving",
+        "periph_car_turn",
+        "periph_car_runoff",
     }
 )
 
@@ -157,9 +183,19 @@ SCENARIO_ALIASES: dict[str, str] = {
     "door": "parked_car_door",
     "backing": "backing_vehicle",
     "reverse": "backing_vehicle",
+    "periph": "periph_empty",
+    "clear_center": "periph_empty",
+    "side_empty": "periph_empty",
+    "side_pass": "periph_car_side",
+    "side_parked": "periph_parked",
+    "side_ped": "periph_ped_side",
+    "side_turn": "periph_car_turn",
+    "side_cut": "periph_ped_cut",
+    "side_runoff": "periph_car_runoff",
+    "side_child": "periph_child_cut",
 }
 
-_NOOP = frozenset({"safe_walk", "empty_street"})
+_NOOP = frozenset({"safe_walk", "empty_street", "periph_empty"})
 _STATIC_CLASSES = frozenset({
     "pothole", "crater", "broken_slab", "debris", "tree",
     "threat_cube", "threat_sphere", "threat_cylinder", "threat_pyramid",
@@ -223,6 +259,14 @@ _INJECT_PRIORITY: dict[str, int] = {
     "shape_from_left": 20,
     "shape_from_right": 20,
     "car_cross_critical": 20,
+    "periph_empty": 2,
+    "periph_parked": 1,
+    "periph_car_side": 10,
+    "periph_ped_side": 10,
+    "periph_car_turn": 10,
+    "periph_car_runoff": 10,
+    "periph_ped_cut": 20,
+    "periph_child_cut": 20,
 }
 
 _TOKEN_SPLIT = re.compile(r"[,+\s]+")
@@ -269,9 +313,26 @@ def split_scenario_tokens(text: str) -> list[str]:
 def all_scenario_names(cfg: dict) -> tuple[str, ...]:
     sc = cfg["scenarios"]
     names: list[str] = []
-    for key in ("safe_pool", "near_miss_pool", "critical_pool"):
-        names.extend(list(sc[key]))
-    return tuple(names)
+    for key in (
+        "safe_pool",
+        "near_miss_pool",
+        "critical_pool",
+        "peripheral_safe",
+        "peripheral_near",
+        "peripheral_critical",
+    ):
+        names.extend(list(sc.get(key) or ()))
+    return tuple(dict.fromkeys(names))
+
+
+def peripheral_pools(cfg: dict) -> tuple[list[str], list[str], list[str]]:
+    """Dedicated empty-center / side-threat catalog (not in ``--scenario auto``)."""
+    sc = cfg["scenarios"]
+    return (
+        list(sc.get("peripheral_safe") or ()),
+        list(sc.get("peripheral_near") or ()),
+        list(sc.get("peripheral_critical") or ()),
+    )
 
 
 def canonical_name_set(cfg: dict) -> set[str]:
@@ -782,6 +843,12 @@ def _self_test() -> None:
     assert "cyclist_overtake" in catalog
     assert "backing_vehicle" in catalog
     assert "crossing_head_on" in catalog
+    assert "periph_empty" in catalog
+    assert "periph_car_turn" in catalog
+    assert "periph_ped_cut" in catalog
+    assert set(CLEAR_CENTER_SCENARIOS).issubset(set(catalog))
+    assert resolve_scenario_name("side_cut", random.Random(1), live) == "periph_ped_cut"
+    assert resolve_scenario_name("side_turn", random.Random(1), live) == "periph_car_turn"
     assert resolve_scenario_name("cross", random.Random(1), live) == "crossing_street"
     assert resolve_scenario_name("scooter", random.Random(1), live) == "scooter_from_sidewalk"
     assert resolve_scenario_name("shapes", random.Random(1), live) == "shapes_on_path"

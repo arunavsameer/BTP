@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
 from scenario_compose import (
+    CLEAR_CENTER_BIOMES,
+    CLEAR_CENTER_SCENARIOS,
     CROSS_EGO_SCENARIOS,
     CROSS_GAP_SCENARIOS,
     SPARSE_SCENARIOS,
@@ -3490,7 +3492,11 @@ class WorldGenerator:
 
     # -- biome -------------------------------------------------------------
 
-    def prepare_biome(self, requested: str = "auto") -> str:
+    def prepare_biome(
+        self,
+        requested: str = "auto",
+        names: Sequence[str] | None = None,
+    ) -> str:
         """Pick the biome and fold its overrides into ``cfg['world']``.
 
         Every biome is the *same* Frenet corridor with different widths,
@@ -3508,6 +3514,10 @@ class WorldGenerator:
         if name in ("", "auto", "random"):
             weights = dict(wcfg.get("biome_weights") or {"street": 1.0})
             weights = {k: v for k, v in weights.items() if k in table} or {"street": 1.0}
+            if names and any(n in CLEAR_CENTER_SCENARIOS for n in names):
+                keep = {k: v for k, v in weights.items() if k in CLEAR_CENTER_BIOMES}
+                if keep:
+                    weights = keep
             name = _weighted_choice(self.rng, weights)
         if name not in table:
             known = ", ".join(sorted(table)) or "street"
@@ -3588,9 +3598,14 @@ class WorldGenerator:
         self._scenario = compose_slug(names) if names else "safe_walk"
         self._s_cross = 11.0
         self._building_gaps = []
-        self.force_ego_mode = (
-            "crosswalk" if any(n in CROSS_EGO_SCENARIOS for n in names) else ""
-        )
+        if any(n in CROSS_EGO_SCENARIOS for n in names):
+            self.force_ego_mode = "crosswalk"
+        elif any(n in CLEAR_CENTER_SCENARIOS for n in names):
+            # Look down the empty sidewalk so the image centre stays cold
+            # until a side actor actually cuts in.
+            self.force_ego_mode = "walk"
+        else:
+            self.force_ego_mode = ""
         n_cross = sum(1 for n in names if n in CROSS_GAP_SCENARIOS)
         if n_cross:
             # One crosser: original 5–20 m window. Compounds stagger extra
@@ -3602,6 +3617,28 @@ class WorldGenerator:
             self.cfg["world"]["n_background_vehicles"] = (0, 0)
             self.cfg["world"]["poisson"]["n_ground_static"] = (0, 2)
             self.cfg["world"]["poisson"]["n_head_hazards"] = (0, 0)
+        if any(n in CLEAR_CENTER_SCENARIOS for n in names):
+            self._prepare_clear_center()
+
+    def _prepare_clear_center(self) -> None:
+        """Empty sidewalk ahead: no clutter in the gaze, cars stay on asphalt."""
+        wcfg = self.cfg["world"]
+        poisson = wcfg.setdefault("poisson", {})
+        poisson["n_ground_static"] = (0, 0)
+        poisson["n_head_hazards"] = (0, 0)
+        wcfg["n_median_trees"] = (0, 0)
+        wcfg["n_path_trees"] = (0, 0)
+        wcfg["median_width"] = 0.0
+        if float(wcfg.get("road_width", 7.0) or 0.0) < 5.2:
+            wcfg["road_width"] = 7.0
+            wcfg["lane_offset"] = 1.75
+            wcfg["curb_height"] = 0.12
+            wcfg["lane_paint"] = True
+            wcfg["buildings"] = True
+            wcfg.pop("ground", None)
+        types = tuple(wcfg.get("path_types") or ("straight", "gentle_curve"))
+        kept = tuple(t for t in types if t in ("straight", "gentle_curve"))
+        wcfg["path_types"] = kept or ("straight",)
 
     # -- build -------------------------------------------------------------
 
@@ -3934,6 +3971,17 @@ class WorldGenerator:
         return {
             "safe_walk": self._inject_none,
             "empty_street": self._inject_none,
+            "periph_empty": self._inject_none,
+            "periph_car_side": self._inject_periph_car_side,
+            "periph_parked": self._inject_periph_parked,
+            "periph_ped_side": self._inject_periph_ped_side,
+            "periph_car_turn": lambda r: self._inject_periph_car_swerve(r, runoff=False),
+            "periph_car_runoff": lambda r: self._inject_periph_car_swerve(r, runoff=True),
+            "periph_ped_cut": lambda r: self._inject_through_cross(
+                r, kind="person", cpa=cr, from_left=self.rng.random() < 0.5,
+                speed=self.rng.uniform(*self.cfg["scenarios"]["cross_person_speed"]),
+            ),
+            "periph_child_cut": self._inject_child_dart,
             "oncoming_pedestrian": lambda r: self._inject_oncoming(
                 r, kind="person", obj_speed=self.rng.uniform(0.95, 1.30),
                 tau=3.0, dlat="opposite",
@@ -5149,6 +5197,115 @@ class WorldGenerator:
             behavior="cruise",
             allow_sidewalk=False,
             pad=0.40,
+        )
+
+    def _inject_periph_car_side(self, rig: Any) -> None:
+        """Oncoming (or same-way) car that stays in the far driving lane.
+
+        Spawn is close enough that the hull sits on a FOV edge, not a speck
+        at the vanishing point — that is what keeps the image centre cold.
+        """
+        assert self.state is not None
+        s0, _L = self._cam_sl(rig, 0.0)
+        lat = self._far_lane()
+        v = float(self.rng.uniform(*self.cfg["world"]["vehicle_speed"]))
+        oncoming = self.rng.random() < 0.75
+        if oncoming:
+            # Far enough to stay in frame for a few seconds, close enough
+            # that the hull sits on a FOV side — not a vanishing-point speck.
+            depth = self._visible_lead(13.4, near=10.5, far=16.5)
+            sign = -1.0
+        else:
+            depth = self._visible_lead(7.6, near=5.6, far=10.5)
+            sign = 1.0
+        if self._compose is not None:
+            depth = depth + min(2.2, abs(self._compose.take_group_offset("along")))
+        s = min(max(2.0, s0 + depth), self.state.road.length - 6.0)
+        actor = self._spawn_kind("vehicle", s, lat, heading_sign=sign)
+        self._bind(
+            actor, s, lat,
+            speed=sign * v,
+            behavior="cruise",
+            allow_sidewalk=False,
+            pad=1.05,
+        )
+
+    def _inject_periph_parked(self, rig: Any) -> None:
+        """Parked car in a gutter — visible beside the empty sidewalk."""
+        s0, _L = self._cam_sl(rig, 0.0)
+        depth = self._visible_lead(7.4, near=5.6, far=10.0)
+        if self._compose is not None:
+            depth = depth + self._compose.take_group_offset("along")
+        s = s0 + depth
+        lat = self._far_lane() if self.rng.random() < 0.55 else self._near_lane()
+        actor = self._spawn_kind("vehicle", s, lat, heading_sign=1.0)
+        actor.category = "static"
+        self._bind(
+            actor, s, lat,
+            speed=0.0,
+            behavior="parked",
+            allow_sidewalk=False,
+            pad=1.05,
+        )
+
+    def _inject_periph_ped_side(self, rig: Any) -> None:
+        """Person on the opposite sidewalk — never on the gait line."""
+        s0, L = self._cam_sl(rig, 0.0)
+        lat = self._resolve_lat("opposite", L, 0.35)
+        depth = self._visible_lead(6.8, near=4.8, far=9.6)
+        if self._compose is not None:
+            depth = depth + self._compose.take_group_offset("along")
+        s = s0 + depth
+        sign = -1.0 if self.rng.random() < 0.40 else 1.0
+        speed = float(self.rng.uniform(*self.cfg["world"]["pedestrian_speed"]))
+        actor = self._spawn_kind("person", s, lat, heading_sign=sign)
+        self._bind(
+            actor, s, lat,
+            speed=sign * speed,
+            behavior="cruise",
+            allow_sidewalk=True,
+            pad=0.35,
+        )
+
+    def _inject_periph_car_swerve(self, rig: Any, *, runoff: bool) -> None:
+        """Car visible in the near driving lane, then turns onto the gait.
+
+        A far-lane start walks out of the HFOV before the turn is visible.
+        Near-lane + ~12 m lead keeps the hull on the road side of the frame
+        for a beat, then the swerve brings it into the image centre.
+        """
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        lane = self._near_lane()
+        v_car = (
+            self.rng.uniform(5.8, 7.6) if runoff else self.rng.uniform(5.0, 6.6)
+        )
+        depth = self._visible_lead(12.2, near=10.0, far=14.5)
+        if self._compose is not None:
+            depth = depth + min(2.2, abs(self._compose.take_group_offset("along")))
+        s = min(max(2.0, s0 + depth), self.state.road.length - 5.0)
+        t0 = self.rng.uniform(0.70, 1.10)
+        closing = float(v_car) + float(self._ego_speed(rig))
+        t_hit = max(t0 + 1.15, min(2.85, depth / max(closing, 1.0)))
+        if runoff:
+            lim = self.state.corridor.lateral_limit(1.05, True)
+            lat_target = math.copysign(lim, L if L else 1.0)
+            behavior = "run_off_road"
+        else:
+            cpa = float(self.cfg["scenarios"]["critical_cpa_target"])
+            lat_target = L + math.copysign(cpa, 1.0 if L >= 0.0 else -1.0)
+            behavior = "cut_in"
+        rate = abs(lat_target - lane) / max(0.35, t_hit - t0)
+        actor = self._spawn_kind("vehicle", s, lane, heading_sign=-1.0)
+        self._bind(
+            actor, s, lane,
+            speed=-float(v_car),
+            lat_speed=rate,
+            lat_target=lat_target,
+            swerve_t=t0,
+            behavior=behavior,
+            allow_sidewalk=True,
+            pad=1.05,
         )
 
     def _inject_crossing_car(self, rig: Any, *, far: bool) -> None:

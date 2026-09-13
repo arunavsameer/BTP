@@ -12,6 +12,7 @@ Usage (system Python; launches Blender via ``run.sh``)::
     ./gen_dataset.py --n 24 --seed 7
     python gen_dataset.py --n 8 --seed 1 --dry-run
     python gen_dataset.py --n 16 --seed 3 --spatial-overlay --media both
+    python gen_dataset.py --n 40 --theme peripheral --name side40 --dry-run
 
 ``python gen_dataset.py`` with no args that need Blender still runs the
 planner self-test when you pass ``--self-test``.
@@ -35,7 +36,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 from config import get_config
-from scenario_compose import pick_scenarios
+from scenario_compose import CLEAR_CENTER_SCENARIOS, pick_scenarios, peripheral_pools
 
 
 # Families: at most one member per compound so occupancy stays sane.
@@ -195,23 +196,75 @@ def draw_compound(rng: random.Random, cfg: dict) -> str:
     return ",".join(dict.fromkeys(picked))
 
 
-def build_plan(n: int, seed: int, cfg: dict | None = None) -> dict:
-    """Deterministic pack recipe. Same ``(n, seed)`` ⇒ same scenario list."""
+_THEME_ALIASES = {
+    "mixed": "mixed",
+    "peripheral": "peripheral",
+    "periph": "peripheral",
+    "side": "peripheral",
+    "clear_center": "peripheral",
+    "clear-center": "peripheral",
+}
+
+
+def normalize_theme(raw: str) -> str:
+    key = str(raw or "mixed").strip().lower().replace("-", "_")
+    if key not in _THEME_ALIASES:
+        known = ", ".join(sorted(set(_THEME_ALIASES.values())))
+        raise ValueError(f"unknown --theme {raw!r}. Known: {known}, side, clear_center")
+    return _THEME_ALIASES[key]
+
+
+def _periph_quotas(n: int) -> dict[str, int]:
+    """Empty sidewalk / side-stay / side-cut mix. No compounds."""
+    n = max(0, int(n))
+    if n == 0:
+        return {"empty": 0, "side": 0, "issue": 0, "compound": 0}
+    if n == 1:
+        return {"empty": 0, "side": 0, "issue": 1, "compound": 0}
+    if n == 2:
+        return {"empty": 1, "side": 0, "issue": 1, "compound": 0}
+    n_empty = max(1, int(round(n * 0.18)))
+    n_issue = max(1, int(round(n * 0.45)))
+    n_side = n - n_empty - n_issue
+    if n_side < 0:
+        n_issue += n_side
+        n_side = 0
+    return {
+        "empty": n_empty,
+        "side": max(0, n_side),
+        "issue": max(0, n_issue),
+        "compound": 0,
+    }
+
+
+def build_plan_peripheral(n: int, seed: int, cfg: dict | None = None) -> dict:
+    """Empty-center pack: nothing on the gait, events enter from the side."""
     cfg = cfg or get_config()
     rng = random.Random(int(seed))
-    safe, near, crit = _pools(cfg)
-    q = _quotas(n)
+    safe, _near, crit = peripheral_pools(cfg)
+    empty = [x for x in safe if x == "periph_empty"] or ["periph_empty"]
+    side = [x for x in safe if x != "periph_empty"]
+    issue = list(crit)
+    q = _periph_quotas(n)
     recipes: list[str] = []
-    recipes.extend(_cycle_draw(rng, safe, q["safe"]))
-    recipes.extend(_cycle_draw(rng, near, q["near_miss"]))
-    recipes.extend(_cycle_draw(rng, crit, q["critical"]))
-    recipes.extend(draw_compound(rng, cfg) for _ in range(q["compound"]))
-    # One leftover slot (rounding) — draw from the critical pool.
+    recipes.extend(_cycle_draw(rng, empty, q["empty"]))
+    recipes.extend(_cycle_draw(rng, side or empty, q["side"]))
+    recipes.extend(_cycle_draw(rng, issue or empty, q["issue"]))
     while len(recipes) < n:
-        recipes.append(rng.choice(crit or safe))
+        recipes.append(rng.choice(issue or empty))
     recipes = recipes[:n]
     rng.shuffle(recipes)
+    return _episodes_from_recipes(recipes, seed, n, q, cfg, rng)
 
+
+def _episodes_from_recipes(
+    recipes: list[str],
+    seed: int,
+    n: int,
+    q: dict[str, int],
+    cfg: dict,
+    rng: random.Random,
+) -> dict:
     episodes = []
     for i, raw in enumerate(recipes):
         names = pick_scenarios(rng, cfg, raw)
@@ -231,12 +284,40 @@ def build_plan(n: int, seed: int, cfg: dict | None = None) -> dict:
     }
 
 
+def build_plan(
+    n: int,
+    seed: int,
+    cfg: dict | None = None,
+    theme: str = "mixed",
+) -> dict:
+    """Deterministic pack recipe. Same ``(n, seed, theme)`` ⇒ same scenario list."""
+    cfg = cfg or get_config()
+    theme = normalize_theme(theme)
+    if theme == "peripheral":
+        return build_plan_peripheral(n, seed, cfg)
+    rng = random.Random(int(seed))
+    safe, near, crit = _pools(cfg)
+    q = _quotas(n)
+    recipes: list[str] = []
+    recipes.extend(_cycle_draw(rng, safe, q["safe"]))
+    recipes.extend(_cycle_draw(rng, near, q["near_miss"]))
+    recipes.extend(_cycle_draw(rng, crit, q["critical"]))
+    recipes.extend(draw_compound(rng, cfg) for _ in range(q["compound"]))
+    # One leftover slot (rounding) — draw from the critical pool.
+    while len(recipes) < n:
+        recipes.append(rng.choice(crit or safe))
+    recipes = recipes[:n]
+    rng.shuffle(recipes)
+    return _episodes_from_recipes(recipes, seed, n, q, cfg, rng)
+
+
 def _bucket_of(name: str, cfg: dict) -> str:
-    if name in cfg["scenarios"]["safe_pool"]:
+    sc = cfg["scenarios"]
+    if name in sc["safe_pool"] or name in (sc.get("peripheral_safe") or ()):
         return "safe"
-    if name in cfg["scenarios"]["near_miss_pool"]:
+    if name in sc["near_miss_pool"] or name in (sc.get("peripheral_near") or ()):
         return "near_miss"
-    if name in cfg["scenarios"]["critical_pool"]:
+    if name in sc["critical_pool"] or name in (sc.get("peripheral_critical") or ()):
         return "critical"
     return "other"
 
@@ -322,6 +403,16 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         action="store_true",
         help="Skip object-box annotations/annotations.json. Spatial matrices are still written.",
     )
+    p.add_argument(
+        "--theme",
+        type=str,
+        default="mixed",
+        help=(
+            "mixed = balanced catalog (default). "
+            "peripheral | side | clear_center = empty sidewalk ahead, "
+            "threats enter from the side only."
+        ),
+    )
     p.add_argument("--dry-run", action="store_true",
                    help="Write pack.json + plan.json and print the mix; do not launch Blender.")
     p.add_argument("--self-test", action="store_true", help="Run the planner unit test and exit.")
@@ -332,10 +423,16 @@ def _print_mix(plan: dict) -> None:
     q = plan["quotas"]
     kinds = Counter(ep["kind"] for ep in plan["episodes"])
     buckets = Counter(ep["bucket"] for ep in plan["episodes"])
-    print(
-        f"  quotas  safe={q['safe']}  near_miss={q['near_miss']}  "
-        f"critical={q['critical']}  compound={q['compound']}"
-    )
+    if "empty" in q and "side" in q:
+        print(
+            f"  quotas  empty={q['empty']}  side={q['side']}  "
+            f"issue={q['issue']}  compound={q.get('compound', 0)}"
+        )
+    else:
+        print(
+            f"  quotas  safe={q.get('safe', 0)}  near_miss={q.get('near_miss', 0)}  "
+            f"critical={q.get('critical', 0)}  compound={q.get('compound', 0)}"
+        )
     print(f"  kinds   {dict(kinds)}   buckets {dict(buckets)}")
     for ep in plan["episodes"]:
         mark = "+" if ep["kind"] == "compound" else " "
@@ -407,6 +504,19 @@ def _self_test() -> None:
         fams = [_family_of(n) for n in names]
         if len(names) > 1:
             assert len(fams) == len(set(fams)), (names, fams)
+
+    assert normalize_theme("side") == "peripheral"
+    side = build_plan(16, 5, cfg, theme="peripheral")
+    side2 = build_plan(16, 5, cfg, theme="side")
+    assert [e["scenario"] for e in side["episodes"]] == [e["scenario"] for e in side2["episodes"]]
+    assert len(side["episodes"]) == 16
+    assert side["quotas"]["compound"] == 0
+    for ep in side["episodes"]:
+        names = ep["scenario"].split(",")
+        assert names and set(names).issubset(CLEAR_CENTER_SCENARIOS), ep
+        assert ep["kind"] == "single"
+    mixed_names = {e["scenario"] for e in build_plan(16, 5, cfg)["episodes"]}
+    assert not mixed_names.issubset(CLEAR_CENTER_SCENARIOS)
     print("gen_dataset self-test: OK")
 
 
@@ -423,7 +533,12 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     cfg = get_config()
-    plan = build_plan(int(args.n), int(args.seed), cfg)
+    try:
+        theme = normalize_theme(args.theme)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    plan = build_plan(int(args.n), int(args.seed), cfg, theme=theme)
     parent = Path(args.datasets) if args.datasets else (_ROOT / "datasets")
     parent.mkdir(parents=True, exist_ok=True)
     dirname = pack_dirname(seed=int(args.seed), n=int(args.n), name=str(args.name or ""))
@@ -441,10 +556,17 @@ def main(argv: list[str] | None = None) -> int:
         "ego_height": str(getattr(args, "ego_height", "auto")),
         "chaos": args.chaos,
         "no_trees": bool(args.no_trees),
+        "theme": theme,
         "note": (
             "Scenario tokens are chosen here. Lighting, weather, path type, "
             "walk speed, FOV, body proportions, colours, and clutter are "
             "drawn per episode from the pipeline RNG (same --seed)."
+            + (
+                " Theme 'peripheral': empty sidewalk ahead; cars/people stay "
+                "on the side until they cut in."
+                if theme == "peripheral"
+                else ""
+            )
         ),
     }
     plan_path = write_pack(pack_dir, plan, extra)
@@ -459,7 +581,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.ego_mode != "auto":
         extra_flags.append(f"ego={args.ego_mode}")
     flag_s = ("  " + " ".join(extra_flags)) if extra_flags else ""
-    print(f"  seed={args.seed}  n={args.n}  media={args.media}{flag_s}", flush=True)
+    print(
+        f"  seed={args.seed}  n={args.n}  theme={theme}  media={args.media}{flag_s}",
+        flush=True,
+    )
     _print_mix(plan)
     sys.stdout.flush()
     if args.dry_run:
