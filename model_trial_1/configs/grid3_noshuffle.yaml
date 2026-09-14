@@ -1,0 +1,94 @@
+seed: 1337
+
+data:
+  sources:
+    - name: mixed
+      path: /storage/BTP/blender_sim/datasets/mixed250_s67_n250
+      take: all
+    - name: side
+      path: /storage/BTP/blender_sim/datasets/side40_s11_n50
+      take: all
+  cache_dir: /storage/BTP/model_trial_1/cache_grid3
+  split_file: /storage/BTP/model_trial_1/cache_grid3/split.json
+  catalog_file: /storage/BTP/model_trial_1/cache_grid3/catalog.json
+  n_frames: 150
+  fps: 30
+  val_fraction: 0.2
+  test_fraction: 0.0
+  cache_all_frames: true
+  target_grid: 3
+  heatmap_upsample: nearest
+
+student:
+  img_size: 160
+  cnn_width: 32
+  feature_grid: 3
+  z_channels: 24
+  use_loom: true
+  frame_offsets: [-20, -10, -5, 0]
+
+horizon:
+  tau_seconds: 1.0
+  tau_frames: 30
+  mid_tau_frames: 15
+
+heatmap:
+  recall_threshold: 0.5
+
+shuffle:
+  # Ablation: same 3×3 mixed+side data, real layout only (eval/deploy path).
+  prob: 0.0
+  prob_start: 0.0
+  curriculum: false
+  rotate_opposite: true
+
+jepa:
+  ema_momentum: 0.996
+  lambda: 0.12
+  now_weight: 0.20
+  mid_weight: 0.35
+  dir_weight: 0.45
+  fp_weight: 0.12
+  fp_safe_threshold: 0.20
+
+train:
+  device: auto
+  batch_size: 32
+  num_workers: 2
+  prefetch_factor: 4
+  lr: 0.001
+  weight_decay: 0.0001
+  epochs: 40
+  cosine: true
+  amp: true
+  focal_weight: 1.25
+  focal_gamma: 2.0
+  change_weight: 2.5
+  fn_weight: 2.0
+  hot_mult: 5.0
+  rare_mult: 2.5
+  change_mult: 3.0
+  grad_clip: 1.0
+
+warning:
+  row_weights: [0.55, 0.80, 1.0]
+  left_cols: [0]
+  center_cols: [1]
+  right_cols: [2]
+  caution_threshold: 0.42
+  stop_threshold: 0.70
+  confirm_frames: 3
+  release_frames: 5
+
+selection:
+  nuisance_weight: 0.5
+  miss_weight: 0.5
+  max_nuisance: 0.20
+  max_miss: 0.25
+  use_latch: true
+
+paths:
+  ckpt_dir: /storage/BTP/model_trial_1/checkpoints_grid3_noshuffle
+  export_dir: /storage/BTP/model_trial_1/export_grid3_noshuffle
+  log_dir: /storage/BTP/model_trial_1/logs_grid3_noshuffle
+  overlay_dir: /storage/BTP/model_trial_1/overlays_grid3_noshuffle

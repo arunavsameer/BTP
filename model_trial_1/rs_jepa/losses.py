@@ -1,0 +1,103 @@
+"""Loss functions."""
+
+from __future__ import annotations
+
+import torch
+import torch.nn.functional as F
+
+
+def weighted_focal_mse(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    focal_weight: float = 1.0,
+    gamma: float = 2.0,
+    change: torch.Tensor | None = None,
+    change_weight: float = 0.0,
+    fn_weight: float = 0.0,
+) -> torch.Tensor:
+    """Cell MSE with extra weight on hot cells, changing cells, and under-prediction."""
+    pred = pred.float()
+    target = target.float()
+    se = (pred - target) ** 2
+    tgt = torch.clamp(target, 0.0, 1.0)
+    weight = 1.0 + focal_weight * tgt.pow(gamma)
+    if change is not None and change_weight > 0:
+        weight = weight + change_weight * torch.clamp(change, 0.0, 1.0)
+    if fn_weight > 0:
+        under = torch.relu(target - pred)
+        weight = weight + fn_weight * under * (tgt > 0.3).float()
+    return (se * weight).mean()
+
+
+def false_positive_penalty(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    safe_threshold: float = 0.20,
+) -> torch.Tensor:
+    """Push predictions down on cells that are truly safe (adjacent lane, empty)."""
+    pred = pred.float()
+    target = target.float()
+    safe = (target < safe_threshold).float()
+    return (pred.clamp(min=0.0).pow(2) * safe).mean()
+
+
+def jepa_distance(z_hat: torch.Tensor, z: torch.Tensor, cos_weight: float = 1.0) -> torch.Tensor:
+    """Distance between predicted and EMA-target future states.
+
+    Z is LayerNormed per cell, so raw MSE is on a stable scale.
+    """
+    mse = F.mse_loss(z_hat.float(), z.float())
+    cos = F.cosine_similarity(z_hat.float(), z.float(), dim=1)
+    return mse + cos_weight * (1.0 - cos).mean()
+
+
+def _group_max(weighted: torch.Tensor, cols: torch.Tensor) -> torch.Tensor:
+    if cols.numel() == 0:
+        return weighted.new_zeros(weighted.shape[0])
+    return weighted.index_select(2, cols).amax(dim=(1, 2))
+
+
+def warning_scores(
+    heatmap: torch.Tensor,
+    row_weights: torch.Tensor,
+    left_cols: torch.Tensor,
+    center_cols: torch.Tensor,
+    right_cols: torch.Tensor,
+) -> torch.Tensor:
+    """LEFT/CENTER/RIGHT scores [B, 3] matching ``warning.direction_scores``."""
+    weighted = heatmap * row_weights.view(1, -1, 1)
+    left = _group_max(weighted, left_cols)
+    center = _group_max(weighted, center_cols)
+    right = _group_max(weighted, right_cols)
+    return torch.stack([left, center, right], dim=1)
+
+
+def warning_alignment_loss(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    row_weights: torch.Tensor,
+    left_cols: torch.Tensor,
+    center_cols: torch.Tensor,
+    right_cols: torch.Tensor,
+    caution_threshold: float = 0.45,
+) -> torch.Tensor:
+    """Match wearable direction scores; extra penalty for a shy peak on real threats."""
+    pred = pred.float()
+    target = target.float()
+    ps = warning_scores(pred, row_weights, left_cols, center_cols, right_cols)
+    ts = warning_scores(target, row_weights, left_cols, center_cols, right_cols)
+    mse = F.mse_loss(ps, ts)
+    peak_fn = torch.relu(ts.amax(dim=1) - ps.amax(dim=1)).pow(2)
+    threat = (ts.amax(dim=1) >= caution_threshold).float()
+    if float(threat.sum()) > 0:
+        peak = (peak_fn * threat).sum() / threat.sum().clamp(min=1.0)
+    else:
+        peak = peak_fn.mean()
+    logits = ps / 0.08
+    labels = ts.argmax(dim=1)
+    if float(threat.sum()) > 0:
+        ce = F.cross_entropy(logits, labels, reduction="none")
+        ce = (ce * threat).sum() / threat.sum().clamp(min=1.0)
+    else:
+        ce = logits.new_zeros(())
+    return mse + peak + 0.25 * ce

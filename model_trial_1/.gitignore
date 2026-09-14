@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Data + generated artifacts (keep weights/caches/videos local)
+cache/
+cache_grid3/
+checkpoints/
+checkpoints_*/
+logs/
+logs_*/
+export/
+export_*/
+overlays/
+overlays_*/
+*.pt
+*.onnx
+*.npy
+*.mp4

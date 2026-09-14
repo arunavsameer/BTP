@@ -1,0 +1,8 @@
+numpy>=1.26
+pyyaml>=6.0
+tqdm>=4.66
+opencv-python>=4.10
+torch>=2.5
+torchvision>=0.20
+onnx>=1.16
+onnxruntime>=1.18
