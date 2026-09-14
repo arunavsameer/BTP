@@ -94,6 +94,20 @@ def test_latch_needs_confirm() -> None:
     assert abs(s["miss"] - 2.0 / 3.0) < 1e-6  # third frame latches, not a miss
 
 
+def test_center_fp_heavier() -> None:
+    import torch
+
+    from rs_jepa.losses import false_positive_penalty
+
+    pred = torch.zeros(1, 3, 3)
+    pred[0, 1, 1] = 0.8
+    tgt = torch.zeros(1, 3, 3)
+    cols = torch.tensor([1])
+    mild = false_positive_penalty(pred, tgt, 0.2, cols, 1.0)
+    heavy = false_positive_penalty(pred, tgt, 0.2, cols, 4.0)
+    assert float(heavy) > float(mild)
+
+
 if __name__ == "__main__":
     test_perfect_balance()
     test_false_beeps_fail_gate()
@@ -102,4 +116,5 @@ if __name__ == "__main__":
     test_caution_on_stop_is_not_a_miss()
     test_prefer_eligible_over_higher_ineligible_score()
     test_latch_needs_confirm()
+    test_center_fp_heavier()
     print("ok")

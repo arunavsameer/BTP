@@ -16,7 +16,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from ..data.shuffle import unpermute_map
-from .decoder import HeatmapDecoder
+from .decoder import HeatmapDecoder, HeatmapDelta
 from .tiny_cnn import TinyCNN
 
 LOOM_CHANNELS = 4
@@ -124,14 +124,17 @@ class RSJEPA(nn.Module):
         ema_momentum: float = 0.996,
         n_frames: int = 3,
         use_loom: bool = True,
+        copy_residual: bool = False,
     ):
         super().__init__()
         self.feature_grid = feature_grid
         self.ema_momentum = ema_momentum
         self.n_frames = n_frames
+        self.copy_residual = copy_residual
         self.context = ContextEncoder(width, feature_grid, z_channels, n_frames, use_loom)
         self.predictor = ResidualPredictor(z_channels)
         self.decoder = HeatmapDecoder(z_channels=z_channels)
+        self.delta_head = HeatmapDelta(z_channels=z_channels) if copy_residual else None
         self.target = copy.deepcopy(self.context)
         for p in self.target.parameters():
             p.requires_grad_(False)
@@ -147,12 +150,31 @@ class RSJEPA(nn.Module):
             ema_momentum=float(cfg.get("jepa.ema_momentum", 0.996)),
             n_frames=len(offsets),
             use_loom=bool(cfg.get("student.use_loom", True)),
+            copy_residual=bool(cfg.get("student.copy_residual", False)),
         )
 
     def _align(self, z: torch.Tensor, perm: torch.Tensor | None) -> torch.Tensor:
         if perm is None:
             return z
         return unpermute_map(z, perm, self.feature_grid)
+
+    def _future_from_now(self, z_t: torch.Tensor, z_plus_hat: torch.Tensor) -> dict:
+        h_now_hat = self.decoder(z_t)
+        if self.copy_residual:
+            delta = self.delta_head(z_plus_hat - z_t)
+            base = h_now_hat.detach()
+            h_plus_hat = (base + delta).clamp(0.0, 1.0)
+            h_mid_hat = (base + 0.5 * delta).clamp(0.0, 1.0)
+        else:
+            delta = None
+            h_plus_hat = self.decoder(z_plus_hat)
+            h_mid_hat = self.decoder(z_t + 0.5 * (z_plus_hat - z_t))
+        return {
+            "h_now_hat": h_now_hat,
+            "h_plus_hat": h_plus_hat,
+            "h_mid_hat": h_mid_hat,
+            "delta": delta,
+        }
 
     def forward(
         self,
@@ -162,16 +184,7 @@ class RSJEPA(nn.Module):
     ) -> dict:
         z_t = self._align(self.context(frames), perm)
         z_plus_hat = self.predictor(z_t)
-        h_plus_hat = self.decoder(z_plus_hat)
-        h_now_hat = self.decoder(z_t)
-        h_mid_hat = self.decoder(z_t + 0.5 * (z_plus_hat - z_t))
-        out = {
-            "z_t": z_t,
-            "z_plus_hat": z_plus_hat,
-            "h_plus_hat": h_plus_hat,
-            "h_now_hat": h_now_hat,
-            "h_mid_hat": h_mid_hat,
-        }
+        out = {"z_t": z_t, "z_plus_hat": z_plus_hat, **self._future_from_now(z_t, z_plus_hat)}
         if frames_future is not None:
             with torch.no_grad():
                 self.target.eval()
@@ -181,7 +194,7 @@ class RSJEPA(nn.Module):
     def predict_future_heatmap(self, frames: torch.Tensor) -> torch.Tensor:
         z_t = self.context(frames)
         z_plus_hat = self.predictor(z_t)
-        return self.decoder(z_plus_hat)
+        return self._future_from_now(z_t, z_plus_hat)["h_plus_hat"]
 
     @torch.no_grad()
     def update_ema(self) -> None:

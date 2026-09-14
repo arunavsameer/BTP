@@ -22,6 +22,20 @@ except Exception:  # pragma: no cover
 
 from .augment import ClipAugmentor  # CPU path kept for tests; training uses GPU preprocess
 
+_QUIET_EPISODE_MARKERS = (
+    "empty_street",
+    "safe_walk",
+    "car_pass_far",
+    "parallel_pedestrian",
+    "periph_empty",
+    "parked_car",
+)
+
+
+def _quiet_episode(name: str) -> bool:
+    key = name.lower()
+    return any(m in key for m in _QUIET_EPISODE_MARKERS)
+
 
 def _build_index(
     n_episodes: int,
@@ -89,8 +103,11 @@ class CollisionDataset(Dataset):
         hot_mult: float = 5.0,
         rare_mult: float = 2.5,
         change_mult: float = 3.0,
+        quiet_mult: float = 1.0,
+        quiet_peak: float = 0.25,
+        quiet_ep_mult: float = 1.0,
     ) -> np.ndarray:
-        """Upsample true collisions and frames whose heatmap actually changes."""
+        """Upsample collisions, changing frames, and (optionally) quiet / empty-road clips."""
         has_rare = has_rare or {}
         w = np.ones(len(self.index), dtype=np.float64)
         for i, (ep_idx, t) in enumerate(self.index):
@@ -102,6 +119,10 @@ class CollisionDataset(Dataset):
             w[i] = 1.0 + hot_mult * peak + change_mult * change
             if has_rare.get(self.episodes[ep_idx], False):
                 w[i] *= rare_mult
+            if quiet_mult > 1.0 and peak < quiet_peak:
+                w[i] *= quiet_mult
+            if quiet_ep_mult > 1.0 and _quiet_episode(self.episodes[ep_idx]):
+                w[i] *= quiet_ep_mult
         return w
 
     def __getitem__(self, i: int):

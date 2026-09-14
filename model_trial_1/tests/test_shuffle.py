@@ -188,6 +188,18 @@ def test_grid3_shuffle_and_model() -> None:
     assert out["h_plus_hat"].shape == (2, 3, 3)
 
 
+def test_copy_residual_shapes() -> None:
+    m = RSJEPA(width=16, feature_grid=3, z_channels=8, n_frames=4, use_loom=True, copy_residual=True)
+    x = torch.rand(2, 4, 3, 160, 160)
+    out = m(x, x)
+    assert out["delta"].shape == (2, 3, 3)
+    assert out["h_plus_hat"].shape == (2, 3, 3)
+    assert 0.0 <= float(out["h_plus_hat"].detach().min())
+    assert float(out["h_plus_hat"].detach().max()) <= 1.0
+    pred = m.predict_future_heatmap(x)
+    assert pred.shape == (2, 3, 3)
+
+
 if __name__ == "__main__":
     test_rotate_rule()
     test_heatmap_roundtrip()
@@ -201,4 +213,5 @@ if __name__ == "__main__":
     test_model_four_frames()
     test_prepare_batch_uint8()
     test_grid3_shuffle_and_model()
+    test_copy_residual_shapes()
     print("ok")

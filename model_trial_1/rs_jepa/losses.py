@@ -33,12 +33,22 @@ def false_positive_penalty(
     pred: torch.Tensor,
     target: torch.Tensor,
     safe_threshold: float = 0.20,
+    center_cols: torch.Tensor | None = None,
+    center_mult: float = 1.0,
 ) -> torch.Tensor:
-    """Push predictions down on cells that are truly safe (adjacent lane, empty)."""
+    """Push predictions down on cells that are truly safe (adjacent lane, empty).
+
+    ``center_mult`` extra-weights the walking-corridor columns — the usual false beep.
+    """
     pred = pred.float()
     target = target.float()
     safe = (target < safe_threshold).float()
-    return (pred.clamp(min=0.0).pow(2) * safe).mean()
+    weight = safe
+    if center_cols is not None and float(center_mult) != 1.0:
+        col_w = pred.new_ones(pred.shape[-1])
+        col_w[center_cols.long()] = float(center_mult)
+        weight = weight * col_w.view(1, 1, -1)
+    return (pred.clamp(min=0.0).pow(2) * weight).mean()
 
 
 def jepa_distance(z_hat: torch.Tensor, z: torch.Tensor, cos_weight: float = 1.0) -> torch.Tensor:
@@ -100,4 +110,10 @@ def warning_alignment_loss(
         ce = (ce * threat).sum() / threat.sum().clamp(min=1.0)
     else:
         ce = logits.new_zeros(())
-    return mse + peak + 0.25 * ce
+    over = torch.relu(ps.amax(dim=1) - ts.amax(dim=1)).pow(2)
+    quiet = (ts.amax(dim=1) < caution_threshold).float()
+    if float(quiet.sum()) > 0:
+        over_pen = (over * quiet).sum() / quiet.sum().clamp(min=1.0)
+    else:
+        over_pen = pred.new_zeros(())
+    return mse + peak + 0.25 * ce + over_pen

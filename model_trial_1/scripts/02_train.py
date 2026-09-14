@@ -96,6 +96,9 @@ def build_loaders(cfg: Config, split: dict):
         hot_mult=float(cfg.get("train.hot_mult", 5.0)),
         rare_mult=float(cfg.get("train.rare_mult", 2.5)),
         change_mult=float(cfg.get("train.change_mult", 3.0)),
+        quiet_mult=float(cfg.get("train.quiet_mult", 1.0)),
+        quiet_peak=float(cfg.get("train.quiet_peak", 0.25)),
+        quiet_ep_mult=float(cfg.get("train.quiet_ep_mult", 1.0)),
     )
     sampler = WeightedRandomSampler(
         torch.as_tensor(weights, dtype=torch.double),
@@ -153,7 +156,8 @@ def main() -> None:
     print(
         f"[rsjepa] params={count_params(model):,}  n_frames={model.n_frames}  "
         f"grid={grid}x{grid}  cells={grid * grid}  "
-        f"z={int(cfg.get('student.z_channels'))}  loom={cfg.get('student.use_loom')}"
+        f"z={int(cfg.get('student.z_channels'))}  loom={cfg.get('student.use_loom')}  "
+        f"copy_residual={bool(cfg.get('student.copy_residual', False))}"
     )
 
     ckpt_dir = Path(cfg.get("paths.ckpt_dir"))
@@ -209,6 +213,8 @@ def main() -> None:
     dir_w = float(cfg.get("jepa.dir_weight", 0.0))
     fp_w = float(cfg.get("jepa.fp_weight", 0.35))
     fp_thr = float(cfg.get("jepa.fp_safe_threshold", 0.20))
+    fp_center = float(cfg.get("jepa.fp_center_mult", 1.0))
+    delta_w = float(cfg.get("jepa.delta_weight", 0.0))
     clip = float(cfg.get("train.grad_clip", 1.0))
     row_w, left, center, right, caution = warning_index_tensors(cfg, device)
 
@@ -255,11 +261,18 @@ def main() -> None:
                 l_h = weighted_focal_mse(h_pred, h_fut, focal_w, gamma, change, change_w, fn_w)
                 l_now = weighted_focal_mse(h_now_pred, h_now, focal_w, gamma, fn_weight=fn_w)
                 l_mid = weighted_focal_mse(out["h_mid_hat"], h_mid, focal_w, gamma, fn_weight=fn_w)
-                l_fp = false_positive_penalty(h_pred, h_fut, fp_thr)
+                l_fp = false_positive_penalty(
+                    h_pred, h_fut, fp_thr, center_cols=center, center_mult=fp_center
+                )
                 l_j = jepa_distance(out["z_plus_hat"], out["z_plus"])
                 l_dir = warning_alignment_loss(
                     h_pred, h_fut, row_w, left, center, right, caution
                 )
+                l_delta = h_pred.new_zeros(())
+                if delta_w > 0 and out.get("delta") is not None:
+                    l_delta = torch.nn.functional.mse_loss(
+                        out["delta"].float(), (h_fut - h_now).float().clamp(-1.0, 1.0)
+                    )
                 loss = (
                     l_h
                     + now_w * l_now
@@ -267,6 +280,7 @@ def main() -> None:
                     + dir_w * l_dir
                     + fp_w * l_fp
                     + lam * l_j
+                    + delta_w * l_delta
                 )
 
             scaler.scale(loss).backward()
