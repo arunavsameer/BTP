@@ -1,0 +1,84 @@
+# Collision-JEPA default configuration.
+# All paths are resolved relative to the project root (folder containing this repo)
+# unless given as absolute paths.
+
+seed: 1337
+
+data:
+  # Source dataset zip and where it is unpacked.
+  zip_path: "e:/btp/dataset_100.zip"
+  raw_dir: "e:/btp/collision_jepa/data_raw"        # unzipped episodes live here
+  cache_dir: "e:/btp/collision_jepa/cache"          # cached frames / heatmaps / Z
+  # Space-saving knobs (see plan). Overlays are visualization-only.
+  skip_overlays: true          # do not extract spatial_overlay.mp4
+  cache_all_frames: true       # cache all 150 frames per episode (else only sampled)
+
+  grid: 5                      # heatmap is grid x grid
+  fps: 30
+  n_frames: 150
+
+  # Episode-level stratified split.
+  val_fraction: 0.2
+  split_file: "e:/btp/collision_jepa/cache/split.json"
+
+heatmap:
+  # Threshold semantics for high-threat weighting and metrics.
+  medium_threshold: 0.45
+  high_threshold: 0.75
+  # A cell counts as "high threat" (for recall metrics) above this.
+  recall_threshold: 0.5
+
+student:
+  img_size: 128                # student input HxW
+  frame_offsets: [-10, -5, 0]  # relative to current time t (30 fps -> ~167 ms spacing)
+  z_channels: 16               # Z is grid x grid x z_channels
+  cnn_width: 32                # base channel width of the depthwise-separable CNN
+  feature_grid: 5              # spatial size Z is pooled to (matches grid)
+
+teacher:
+  # V-JEPA-2 via HuggingFace. Kept frozen, only run offline for caching.
+  hf_model_id: "facebook/vjepa2-vitl-fpc64-256"
+  clip_frames: 8
+  clip_stride: 2
+  img_size: 256                # V-JEPA-2 vitl checkpoints expect 256
+  z_channels: 16
+  device: "auto"               # auto -> cuda if available else cpu
+  fp16: true                   # half precision for the frozen backbone (fits 4 GB)
+
+horizon:
+  tau_seconds: 1.0             # main prediction horizon
+  tau_frames: 30
+
+train:
+  device: "auto"
+  batch_size: 32
+  stage0_epochs: 40
+  teacher_epochs: 40
+  student_epochs: 60
+  lr: 0.001
+  weight_decay: 0.0001
+  num_workers: 4               # overlap data loading with GPU compute
+  # Loss weights
+  focal_weight: 1.0            # weight of the high-threat focal term in L_H
+  focal_gamma: 2.0
+  # Experiment A: heatmap-only. Bring JEPA back later at 0.01 then 0.03, not 0.1.
+  jepa_lambda: 0.0             # L = L_H + jepa_lambda * L_JEPA
+
+warning:
+  # Column groups for direction readout.
+  left_cols: [0, 1]
+  center_cols: [2]
+  right_cols: [3, 4]
+  # Row weights (far -> near); near rows matter more.
+  row_weights: [0.4, 0.6, 0.8, 1.0, 1.0]
+  # Severity thresholds on the near-weighted direction score (starting points).
+  caution_threshold: 0.45
+  stop_threshold: 0.75
+  # Hysteresis (HitLatch): consecutive frames required to switch state.
+  confirm_frames: 3
+  release_frames: 5
+
+paths:
+  ckpt_dir: "e:/btp/collision_jepa/checkpoints"
+  log_dir: "e:/btp/collision_jepa/logs"
+  export_dir: "e:/btp/collision_jepa/export"
