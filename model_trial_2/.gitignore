@@ -1,0 +1,17 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local data, weights, logs (stay inside this folder, not git)
+cache/
+checkpoints/
+logs/
+export/
+overlays/
+hf_cache/
+*.pt
+*.onnx
+*.npy
+*.npz
+*.mp4

@@ -2,23 +2,22 @@ seed: 1337
 
 data:
   sources:
+    # 600 episodes: pack 300 + mixed_s69 250 + side_s69 50.
     - name: mixed
-      path: /storage/BTP/blender_sim/datasets/mixed250_s67_n250
+      path: /storage/BTP/blender_sim/datasets/mixed250_s69_n250
       take: all
     - name: side
-      path: /storage/BTP/blender_sim/datasets/side40_s11_n50
+      path: /storage/BTP/blender_sim/datasets/side50_s69_n50
       take: all
     - name: pack
       path: /storage/BTP/blender_sim/datasets/pack_20260911_043022_s67_n1000
       take: 300
-  cache_dir: /storage/BTP/model_trial_1/cache
-  split_file: /storage/BTP/model_trial_1/cache/split.json
-  catalog_file: /storage/BTP/model_trial_1/cache/catalog.json
+  cache_dir: /storage/BTP/model_trial_1/cache_grid5
+  split_file: /storage/BTP/model_trial_1/cache_grid5/split.json
+  catalog_file: /storage/BTP/model_trial_1/cache_grid5/catalog.json
   n_frames: 150
   fps: 30
   val_fraction: 0.2
-  # Test is carved from the original val pool (scripts/05_make_test_split.py) so
-  # train stays frozen for already-running experiments.
   test_fraction: 0.0
   cache_all_frames: true
   target_grid: 5
@@ -30,7 +29,9 @@ student:
   feature_grid: 5
   z_channels: 24
   use_loom: true
-  frame_offsets: [-20, -10, -5, 0]
+  copy_residual: true
+  # Even 5-frame steps (30 fps): 667ms of motion, linear in time.
+  frame_offsets: [-20, -15, -10, -5, 0]
 
 horizon:
   tau_seconds: 1.0
@@ -41,24 +42,23 @@ heatmap:
   recall_threshold: 0.5
 
 shuffle:
-  # Fraction of training samples that get a non-identity 5x5 permutation.
-  # Identity samples keep the real layout so deployment (no shuffle) is in-distribution.
-  prob: 0.80
-  prob_start: 0.40
-  curriculum: true
-  # 180° rotate a moved cell when its destination is opposite the source
-  # relative to image centre (preserves looming / "coming toward me").
+  # Keep a little left/right invariance; 0.20 was still noisy on empty road.
+  prob: 0.15
+  prob_start: 0.15
+  curriculum: false
   rotate_opposite: true
 
 jepa:
-  # EMA of the student encoder is the target encoder (V-JEPA-style).
   ema_momentum: 0.996
   lambda: 0.12
-  now_weight: 0.20
-  mid_weight: 0.35
-  dir_weight: 0.45
-  fp_weight: 0.12
-  fp_safe_threshold: 0.20
+  now_weight: 0.35
+  mid_weight: 0.25
+  dir_weight: 0.30
+  fp_weight: 0.45
+  fp_safe_threshold: 0.25
+  fp_center_mult: 3.5
+  fp_center_cols: [1, 2, 3]
+  delta_weight: 0.50
 
 train:
   device: auto
@@ -70,13 +70,24 @@ train:
   epochs: 40
   cosine: true
   amp: true
-  focal_weight: 1.25
+  focal_weight: 1.0
   focal_gamma: 2.0
   change_weight: 2.5
-  fn_weight: 2.0
-  hot_mult: 5.0
-  rare_mult: 2.5
+  fn_weight: 0.6
+  hot_mult: 1.5
+  rare_mult: 2.0
   change_mult: 3.0
+  quiet_mult: 4.0
+  quiet_peak: 0.25
+  quiet_ep_mult: 2.5
+  center_cool_mult: 5.5
+  center_cool_peak: 0.28
+  center_cool_mode: inner
+  spatial_loss: true
+  spatial_center: 2.2
+  spatial_ring: 1.5
+  spatial_edge: 1.0
+  spatial_corner: 0.65
   grad_clip: 1.0
 
 warning:
@@ -89,8 +100,15 @@ warning:
   confirm_frames: 3
   release_frames: 5
 
+selection:
+  nuisance_weight: 0.5
+  miss_weight: 0.5
+  max_nuisance: 0.20
+  max_miss: 0.25
+  use_latch: true
+
 paths:
-  ckpt_dir: /storage/BTP/model_trial_1/checkpoints
-  export_dir: /storage/BTP/model_trial_1/export
-  log_dir: /storage/BTP/model_trial_1/logs
-  overlay_dir: /storage/BTP/model_trial_1/overlays
+  ckpt_dir: /storage/BTP/model_trial_1/checkpoints_grid5
+  export_dir: /storage/BTP/model_trial_1/export_grid5
+  log_dir: /storage/BTP/model_trial_1/logs_grid5
+  overlay_dir: /storage/BTP/model_trial_1/overlays_grid5

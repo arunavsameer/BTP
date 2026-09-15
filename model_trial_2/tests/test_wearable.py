@@ -8,9 +8,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from rs_jepa.engine import wearable_better  # noqa: E402
-from rs_jepa.metrics import WearableAccumulator  # noqa: E402
-from rs_jepa.warning import CAUTION, SAFE, STOP  # noqa: E402
+from cvjepa.engine import wearable_better  # noqa: E402
+from cvjepa.metrics import WearableAccumulator  # noqa: E402
+from cvjepa.warning import CAUTION, SAFE, STOP  # noqa: E402
 
 
 def test_perfect_balance() -> None:
@@ -97,7 +97,7 @@ def test_latch_needs_confirm() -> None:
 def test_center_fp_heavier() -> None:
     import torch
 
-    from rs_jepa.losses import false_positive_penalty, spatial_heatmap_weights
+    from cvjepa.losses import false_positive_penalty, spatial_heatmap_weights
 
     pred = torch.zeros(1, 3, 3)
     pred[0, 1, 1] = 0.8
@@ -109,7 +109,7 @@ def test_center_fp_heavier() -> None:
 
 
 def test_spatial_weights_center_highest() -> None:
-    from rs_jepa.losses import spatial_heatmap_weights
+    from cvjepa.losses import spatial_heatmap_weights
 
     w = spatial_heatmap_weights(5, center=2.2, ring=1.5, edge=1.0, corner=0.65)
     assert w.shape == (5, 5)

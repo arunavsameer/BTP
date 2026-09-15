@@ -33,6 +33,7 @@ from rs_jepa.engine import (  # noqa: E402
 from rs_jepa.losses import (  # noqa: E402
     false_positive_penalty,
     jepa_distance,
+    spatial_heatmap_weights,
     warning_alignment_loss,
     weighted_focal_mse,
 )
@@ -99,6 +100,9 @@ def build_loaders(cfg: Config, split: dict):
         quiet_mult=float(cfg.get("train.quiet_mult", 1.0)),
         quiet_peak=float(cfg.get("train.quiet_peak", 0.25)),
         quiet_ep_mult=float(cfg.get("train.quiet_ep_mult", 1.0)),
+        center_cool_mult=float(cfg.get("train.center_cool_mult", 1.0)),
+        center_cool_peak=float(cfg.get("train.center_cool_peak", 0.28)),
+        center_cool_mode=str(cfg.get("train.center_cool_mode", "inner")),
     )
     sampler = WeightedRandomSampler(
         torch.as_tensor(weights, dtype=torch.double),
@@ -217,6 +221,18 @@ def main() -> None:
     delta_w = float(cfg.get("jepa.delta_weight", 0.0))
     clip = float(cfg.get("train.grad_clip", 1.0))
     row_w, left, center, right, caution = warning_index_tensors(cfg, device)
+    fp_cols = cfg.get("jepa.fp_center_cols") or cfg.get("warning.center_cols")
+    fp_center_idx = torch.tensor(list(fp_cols), dtype=torch.long, device=device)
+    spatial_w = None
+    if cfg.get("train.spatial_loss", False):
+        spatial_w = spatial_heatmap_weights(
+            grid,
+            center=float(cfg.get("train.spatial_center", 2.2)),
+            ring=float(cfg.get("train.spatial_ring", 1.5)),
+            edge=float(cfg.get("train.spatial_edge", 1.0)),
+            corner=float(cfg.get("train.spatial_corner", 0.65)),
+        ).to(device)
+        print("[rsjepa] spatial heatmap weights (normalized):\n", spatial_w.detach().cpu().numpy().round(2))
 
     def predict_fn(batch):
         return model.predict_future_heatmap(batch["frames"])
@@ -258,11 +274,17 @@ def main() -> None:
                 h_pred = out["h_plus_hat"]
                 h_now_pred = out["h_now_hat"]
                 change = (h_fut - h_now).abs()
-                l_h = weighted_focal_mse(h_pred, h_fut, focal_w, gamma, change, change_w, fn_w)
-                l_now = weighted_focal_mse(h_now_pred, h_now, focal_w, gamma, fn_weight=fn_w)
-                l_mid = weighted_focal_mse(out["h_mid_hat"], h_mid, focal_w, gamma, fn_weight=fn_w)
+                l_h = weighted_focal_mse(
+                    h_pred, h_fut, focal_w, gamma, change, change_w, fn_w, cell_weights=spatial_w
+                )
+                l_now = weighted_focal_mse(
+                    h_now_pred, h_now, focal_w, gamma, fn_weight=fn_w, cell_weights=spatial_w
+                )
+                l_mid = weighted_focal_mse(
+                    out["h_mid_hat"], h_mid, focal_w, gamma, fn_weight=fn_w, cell_weights=spatial_w
+                )
                 l_fp = false_positive_penalty(
-                    h_pred, h_fut, fp_thr, center_cols=center, center_mult=fp_center
+                    h_pred, h_fut, fp_thr, center_cols=fp_center_idx, center_mult=fp_center
                 )
                 l_j = jepa_distance(out["z_plus_hat"], out["z_plus"])
                 l_dir = warning_alignment_loss(

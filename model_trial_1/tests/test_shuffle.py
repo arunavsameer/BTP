@@ -198,6 +198,20 @@ def test_copy_residual_shapes() -> None:
     assert float(out["h_plus_hat"].detach().max()) <= 1.0
     pred = m.predict_future_heatmap(x)
     assert pred.shape == (2, 3, 3)
+    m5 = RSJEPA(width=16, feature_grid=5, z_channels=8, n_frames=4, use_loom=True, copy_residual=True)
+    x5 = torch.rand(1, 4, 3, 160, 160)
+    pred5 = m5.predict_future_heatmap(x5)
+    assert pred5.shape == (1, 5, 5)
+
+
+def test_model_five_frames() -> None:
+    m = RSJEPA(width=16, feature_grid=5, z_channels=8, n_frames=5, use_loom=True, copy_residual=True)
+    x = torch.rand(1, 5, 3, 160, 160)
+    pred = m.predict_future_heatmap(x)
+    assert pred.shape == (1, 5, 5)
+    out = m(x, x)
+    assert out["h_plus_hat"].shape == (1, 5, 5)
+    assert out["delta"].shape == (1, 5, 5)
 
 
 if __name__ == "__main__":
@@ -214,4 +228,5 @@ if __name__ == "__main__":
     test_prepare_batch_uint8()
     test_grid3_shuffle_and_model()
     test_copy_residual_shapes()
+    test_model_five_frames()
     print("ok")

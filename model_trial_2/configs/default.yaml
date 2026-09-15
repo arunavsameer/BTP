@@ -11,22 +11,45 @@ data:
     - name: pack
       path: /storage/BTP/blender_sim/datasets/pack_20260911_043022_s67_n1000
       take: 300
-  cache_dir: /storage/BTP/model_trial_1/cache_grid5
-  split_file: /storage/BTP/model_trial_1/cache_grid5/split.json
-  catalog_file: /storage/BTP/model_trial_1/cache_grid5/catalog.json
+  cache_dir: /storage/BTP/model_trial_2/cache
+  split_file: /storage/BTP/model_trial_2/cache/split.json
+  catalog_file: /storage/BTP/model_trial_2/cache/catalog.json
   n_frames: 150
   fps: 30
   val_fraction: 0.2
   test_fraction: 0.0
-  cache_all_frames: true
   target_grid: 5
   heatmap_upsample: nearest
+
+# Giant V-JEPA 2 teacher. If 8 GB cannot load it, switch hf_model_id to
+# facebook/vjepa2-vitl-fpc64-256 (still a real V-JEPA 2 encoder, 300M).
+teacher:
+  hf_model_id: facebook/vjepa2-vitg-fpc64-256
+  hf_cache_dir: /storage/BTP/model_trial_2/hf_cache
+  img_size: 256
+  clip_frames: 8
+  clip_stride: 2
+  z_channels: 32
+  pool_hidden: 128
+  torch_dtype: float16
+  micro_batch: 1
+  device: auto
+  # Phase 1: freeze ViT, train adapter + decoder + predictor.
+  adapter_epochs: 6
+  # Phase 2: LoRA on last encoder blocks (collision-specific latent).
+  lora_epochs: 14
+  lora_rank: 16
+  lora_alpha: 16.0
+  lora_last_blocks: 6
+  adapter_lr: 0.001
+  lora_lr: 0.0002
+  sample_stride: 4
 
 student:
   img_size: 160
   cnn_width: 32
   feature_grid: 5
-  z_channels: 24
+  z_channels: 32
   use_loom: true
   copy_residual: true
   frame_offsets: [-20, -15, -10, -5, 0]
@@ -39,18 +62,10 @@ horizon:
 heatmap:
   recall_threshold: 0.5
 
-shuffle:
-  # Same native 5×5 data, real layout only.
-  prob: 0.0
-  prob_start: 0.0
-  curriculum: false
-  rotate_opposite: true
-
 jepa:
-  ema_momentum: 0.996
-  lambda: 0.12
+  lambda: 0.25
   now_weight: 0.35
-  mid_weight: 0.25
+  mid_weight: 0.20
   dir_weight: 0.30
   fp_weight: 0.45
   fp_safe_threshold: 0.25
@@ -63,9 +78,9 @@ train:
   batch_size: 32
   num_workers: 2
   prefetch_factor: 4
+  student_epochs: 40
   lr: 0.001
   weight_decay: 0.0001
-  epochs: 40
   cosine: true
   amp: true
   focal_weight: 1.0
@@ -106,7 +121,7 @@ selection:
   use_latch: true
 
 paths:
-  ckpt_dir: /storage/BTP/model_trial_1/checkpoints_grid5_noshuffle
-  export_dir: /storage/BTP/model_trial_1/export_grid5_noshuffle
-  log_dir: /storage/BTP/model_trial_1/logs_grid5_noshuffle
-  overlay_dir: /storage/BTP/model_trial_1/overlays_grid5_noshuffle
+  ckpt_dir: /storage/BTP/model_trial_2/checkpoints
+  export_dir: /storage/BTP/model_trial_2/export
+  log_dir: /storage/BTP/model_trial_2/logs
+  overlay_dir: /storage/BTP/model_trial_2/overlays

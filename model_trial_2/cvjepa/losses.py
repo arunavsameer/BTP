@@ -1,4 +1,4 @@
-"""Loss functions."""
+"""Loss functions: heatmap, false-positive, JEPA, warning alignment."""
 
 from __future__ import annotations
 
@@ -14,10 +14,6 @@ def spatial_heatmap_weights(
     corner: float = 0.65,
     normalize: bool = True,
 ) -> torch.Tensor:
-    """Per-cell loss weights: center > inner ring > edges > corners.
-
-    Mean is 1 when ``normalize`` is True so overall loss scale stays comparable.
-    """
     w = torch.zeros(grid, grid)
     c = (grid - 1) * 0.5
     last = grid - 1
@@ -51,7 +47,6 @@ def weighted_focal_mse(
     fn_weight: float = 0.0,
     cell_weights: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Cell MSE with extra weight on hot cells, changing cells, and under-prediction."""
     pred = pred.float()
     target = target.float()
     se = (pred - target) ** 2
@@ -74,10 +69,6 @@ def false_positive_penalty(
     center_cols: torch.Tensor | None = None,
     center_mult: float = 1.0,
 ) -> torch.Tensor:
-    """Push predictions down on cells that are truly safe (adjacent lane, empty).
-
-    ``center_mult`` extra-weights the walking-corridor columns — the usual false beep.
-    """
     pred = pred.float()
     target = target.float()
     safe = (target < safe_threshold).float()
@@ -90,11 +81,10 @@ def false_positive_penalty(
 
 
 def jepa_distance(z_hat: torch.Tensor, z: torch.Tensor, cos_weight: float = 1.0) -> torch.Tensor:
-    """Distance between predicted and EMA-target future states.
-
-    Z is LayerNormed per cell, so raw MSE is on a stable scale.
-    """
-    mse = F.mse_loss(z_hat.float(), z.float())
+    """Match student Zhat+ to teacher Z. Scale by teacher std so heatmap loss is not drowned."""
+    scale = z.detach().flatten(1).std(dim=1, keepdim=True).clamp_min(1e-3)
+    scale = scale.view(-1, 1, 1, 1)
+    mse = F.mse_loss(z_hat.float() / scale, z.float() / scale)
     cos = F.cosine_similarity(z_hat.float(), z.float(), dim=1)
     return mse + cos_weight * (1.0 - cos).mean()
 
@@ -112,7 +102,6 @@ def warning_scores(
     center_cols: torch.Tensor,
     right_cols: torch.Tensor,
 ) -> torch.Tensor:
-    """LEFT/CENTER/RIGHT scores [B, 3] matching ``warning.direction_scores``."""
     weighted = heatmap * row_weights.view(1, -1, 1)
     left = _group_max(weighted, left_cols)
     center = _group_max(weighted, center_cols)
@@ -129,7 +118,6 @@ def warning_alignment_loss(
     right_cols: torch.Tensor,
     caution_threshold: float = 0.45,
 ) -> torch.Tensor:
-    """Match wearable direction scores; extra penalty for a shy peak on real threats."""
     pred = pred.float()
     target = target.float()
     ps = warning_scores(pred, row_weights, left_cols, center_cols, right_cols)
