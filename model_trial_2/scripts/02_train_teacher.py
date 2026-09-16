@@ -204,8 +204,10 @@ def main() -> None:
                 alpha=float(cfg.get("teacher.lora_alpha", 16.0)),
             )
             lora_applied = True
+            model.to(device)
             print(f"[teacher] resumed LoRA on {n} Linear layers")
         model.load_state_dict(ckpt["model"], strict=False)
+        model.to(device)
         start_epoch = int(ckpt.get("epoch", 0)) + 1
         if best_path.exists():
             best_ck = torch.load(best_path, map_location="cpu", weights_only=False)
@@ -221,6 +223,7 @@ def main() -> None:
                 alpha=float(cfg.get("teacher.lora_alpha", 16.0)),
             )
             lora_applied = True
+            model.to(device)
             print(f"[teacher] LoRA wrapped {n} Linear layers in last blocks")
         model.backbone.set_backbone_grad(include_lora)
         opt = torch.optim.AdamW(model.trainable_parameters(include_lora=include_lora), lr=lr, weight_decay=wd)

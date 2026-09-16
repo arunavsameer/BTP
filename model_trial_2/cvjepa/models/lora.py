@@ -19,15 +19,18 @@ class LoRALinear(nn.Module):
             p.requires_grad_(False)
         self.rank = int(rank)
         self.scale = float(alpha) / max(self.rank, 1)
-        self.lora_A = nn.Parameter(torch.zeros(self.rank, linear.in_features))
-        self.lora_B = nn.Parameter(torch.zeros(linear.out_features, self.rank))
+        # New Parameters default to CPU; keep them on the wrapped Linear's device.
+        device = linear.weight.device
+        self.lora_A = nn.Parameter(torch.zeros(self.rank, linear.in_features, device=device))
+        self.lora_B = nn.Parameter(torch.zeros(linear.out_features, self.rank, device=device))
         nn.init.kaiming_uniform_(self.lora_A, a=math.sqrt(5))
         nn.init.zeros_(self.lora_B)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         base = self.linear(x)
-        delta = F.linear(F.linear(x, self.lora_A), self.lora_B) * self.scale
-        return base + delta
+        x_lora = x.to(dtype=self.lora_A.dtype)
+        delta = F.linear(F.linear(x_lora, self.lora_A), self.lora_B) * self.scale
+        return base + delta.to(dtype=base.dtype)
 
 
 def _encoder_blocks(model: nn.Module) -> list[nn.Module] | None:

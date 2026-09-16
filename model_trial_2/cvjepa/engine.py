@@ -207,3 +207,17 @@ def configure_runtime() -> None:
             torch.set_float32_matmul_precision("high")
         except Exception:
             pass
+        # Some cluster PyTorch envs mix CUDA 12/13 NVIDIA wheels; cuDNN then
+        # fails to init and V-JEPA 2's Conv3d patch embed raises
+        # CUDNN_STATUS_NOT_INITIALIZED. Native CUDA conv is fine.
+        try:
+            x = torch.zeros(1, 3, 4, 16, 16, device="cuda")
+            w = torch.nn.Conv3d(3, 8, kernel_size=2).to("cuda")
+            with torch.no_grad():
+                _ = w(x)
+            del x, w
+            torch.cuda.empty_cache()
+        except Exception:
+            torch.backends.cudnn.enabled = False
+            torch.backends.cudnn.benchmark = False
+            print("[runtime] cuDNN unavailable; using native CUDA convolutions")

@@ -3,17 +3,17 @@ seed: 1337
 data:
   sources:
     - name: mixed
-      path: /storage/BTP/blender_sim/datasets/mixed250_s69_n250
+      path: /home/asrivastava/VJEPA2_BTP/datasets/mixed250_s69_n250
       take: all
     - name: side
-      path: /storage/BTP/blender_sim/datasets/side50_s69_n50
+      path: /home/asrivastava/VJEPA2_BTP/datasets/side50_s69_n50
       take: all
     - name: pack
-      path: /storage/BTP/blender_sim/datasets/pack_20260911_043022_s67_n1000
-      take: 300
-  cache_dir: /storage/BTP/model_trial_2/cache
-  split_file: /storage/BTP/model_trial_2/cache/split.json
-  catalog_file: /storage/BTP/model_trial_2/cache/catalog.json
+      path: /home/asrivastava/VJEPA2_BTP/datasets/pack_20260911_043022_s67_n1000
+      take: 500
+  cache_dir: /raid/asrivastava/VJEPA2_BTP/model_trial_2/cache
+  split_file: /raid/asrivastava/VJEPA2_BTP/model_trial_2/cache/split.json
+  catalog_file: /raid/asrivastava/VJEPA2_BTP/model_trial_2/cache/catalog.json
   n_frames: 150
   fps: 30
   val_fraction: 0.2
@@ -25,14 +25,15 @@ data:
 # facebook/vjepa2-vitl-fpc64-256 (still a real V-JEPA 2 encoder, 300M).
 teacher:
   hf_model_id: facebook/vjepa2-vitg-fpc64-256
-  hf_cache_dir: /storage/BTP/model_trial_2/hf_cache
+  hf_cache_dir: /raid/asrivastava/VJEPA2_BTP/model_trial_2/hf_cache
   img_size: 256
   clip_frames: 8
   clip_stride: 2
   z_channels: 32
   pool_hidden: 128
   torch_dtype: float16
-  micro_batch: 1
+  # Original recipe used 1 for an 8 GB 4060. A100 40 GB can take 8.
+  micro_batch: 8
   device: auto
   # Phase 1: freeze ViT, train adapter + decoder + predictor.
   adapter_epochs: 6
@@ -121,7 +122,7 @@ selection:
   use_latch: true
 
 paths:
-  ckpt_dir: /storage/BTP/model_trial_2/checkpoints
-  export_dir: /storage/BTP/model_trial_2/export
-  log_dir: /storage/BTP/model_trial_2/logs
-  overlay_dir: /storage/BTP/model_trial_2/overlays
+  ckpt_dir: /raid/asrivastava/VJEPA2_BTP/model_trial_2/checkpoints
+  export_dir: /raid/asrivastava/VJEPA2_BTP/model_trial_2/export
+  log_dir: /raid/asrivastava/VJEPA2_BTP/model_trial_2/logs
+  overlay_dir: /raid/asrivastava/VJEPA2_BTP/model_trial_2/overlays

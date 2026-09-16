@@ -16,6 +16,7 @@ sys.path.insert(0, str(ROOT))
 from cvjepa.config import Config, resolve_device  # noqa: E402
 from cvjepa.data import load_json  # noqa: E402
 from cvjepa.data.dataset import teacher_clip_indices  # noqa: E402
+from cvjepa.engine import configure_runtime  # noqa: E402
 from cvjepa.models.teacher import CollisionTeacher  # noqa: E402
 
 
@@ -26,6 +27,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = Config.load(args.config)
+    configure_runtime()
     device = resolve_device(cfg.get("teacher.device", "auto"))
     hf_cache = Path(cfg.get("teacher.hf_cache_dir", ROOT / "hf_cache"))
     os.environ.setdefault("HF_HOME", str(hf_cache))
@@ -57,7 +59,9 @@ def main() -> None:
             alpha=float(cfg.get("teacher.lora_alpha", 16.0)),
         )
         model.backbone.set_backbone_grad(False)
+        model.to(device)
     model.load_state_dict(state["model"], strict=False)
+    model.to(device)
     model.eval()
     print(f"[cacheZ] loaded {ckpt_path} epoch={state.get('epoch')} phase={state.get('phase')}")
 

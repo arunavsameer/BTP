@@ -1,14 +1,22 @@
+.venv
 .venv/
 __pycache__/
 *.pyc
 .pytest_cache/
 
-# Local data, weights, logs (stay inside this folder, not git)
+# Local data, weights, logs (stay inside this folder, not git).
+# Bare names also cover the /raid symlinks used on this machine.
+cache
 cache/
+checkpoints
 checkpoints/
+logs
 logs/
+export
 export/
+overlays
 overlays/
+hf_cache
 hf_cache/
 *.pt
 *.onnx
