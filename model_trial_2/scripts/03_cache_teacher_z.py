@@ -24,6 +24,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default=str(ROOT / "configs" / "default.yaml"))
     parser.add_argument("--ckpt", default="")
+    parser.add_argument("--overwrite", action="store_true", help="recompute even if teacher_z.npz exists")
     args = parser.parse_args()
 
     cfg = Config.load(args.config)
@@ -64,9 +65,16 @@ def main() -> None:
     model.to(device)
     model.eval()
     print(f"[cacheZ] loaded {ckpt_path} epoch={state.get('epoch')} phase={state.get('phase')}")
+    n_skip = 0 if args.overwrite else sum(1 for ep in all_eps if (cache_dir / ep / "teacher_z.npz").exists())
+    print(f"[cacheZ] episodes={len(all_eps)}  skip_existing={n_skip}  overwrite={bool(args.overwrite)}")
 
     e_lo = (clip_frames - 1) * stride
     for ei, ep in enumerate(all_eps):
+        out_path = cache_dir / ep / "teacher_z.npz"
+        if not args.overwrite and out_path.exists():
+            if (ei + 1) % 50 == 0 or ei + 1 == len(all_eps):
+                print(f"[cacheZ] {ei + 1}/{len(all_eps)}  (skip existing)", flush=True)
+            continue
         frames = np.load(cache_dir / ep / f"frames_{size}.npy", mmap_mode="r")
         z_end = np.zeros((n_frames, zc, grid, grid), dtype=np.float32)
         mask = np.zeros((n_frames,), dtype=bool)
@@ -87,7 +95,7 @@ def main() -> None:
                 for j, e in enumerate(clip_ends[s : s + mb]):
                     z_end[e] = z[j]
                     mask[e] = True
-        np.savez_compressed(cache_dir / ep / "teacher_z.npz", z_end=z_end, mask=mask)
+        np.savez_compressed(out_path, z_end=z_end, mask=mask)
         if (ei + 1) % 10 == 0 or ei == 0 or ei + 1 == len(all_eps):
             print(f"[cacheZ] {ei + 1}/{len(all_eps)}", flush=True)
         if device == "cuda":
