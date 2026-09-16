@@ -62,10 +62,14 @@ def main() -> None:
     has_rare = split.get("has_rare", {})
 
     print("=== Copy baseline  H(t+tau) = H(t) ===")
-    res = evaluate(cfg, split["val"], has_rare)
-    print(format_summary("copy [val all]", res["overall"]))
-    if res["rare"]["n"]:
-        print(format_summary("copy [val rare]", res["rare"]))
+    for split_name in ("val", "test"):
+        eps = list(split.get(split_name) or [])
+        if not eps:
+            continue
+        res = evaluate(cfg, eps, has_rare)
+        print(format_summary(f"copy [{split_name} all]", res["overall"]))
+        if res["rare"]["n"]:
+            print(format_summary(f"copy [{split_name} rare]", res["rare"]))
     print(
         "\nInterpretation: a learned model must beat these, especially HT-recall and "
         "STOP-F1 on the 'rare' row (episodes with NEAR_MISS/CRITICAL)."

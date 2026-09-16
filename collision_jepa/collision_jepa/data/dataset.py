@@ -33,6 +33,38 @@ def teacher_clip_indices(t_end: int, clip_frames: int, stride: int) -> list[int]
     return [start + i * stride for i in range(clip_frames)]
 
 
+def pack_teacher_clips(
+    frames: np.ndarray,
+    heatmaps: np.ndarray | None = None,
+    clip_frames: int = 8,
+    clip_stride: int = 2,
+    sample_stride: int = 1,
+) -> tuple[np.ndarray, np.ndarray | None, np.ndarray] | None:
+    """Vectorized gather of teacher clips.
+
+    Returns uint8 clips ``[B, T, 3, H, W]``, float32 targets ``[B, G, G]``, and
+    clip-end frame indices, or None if nothing is valid.
+    """
+    n = int(frames.shape[0])
+    t_lo = (clip_frames - 1) * clip_stride
+    if t_lo >= n:
+        return None
+    ends = np.arange(t_lo, n, sample_stride, dtype=np.int64)
+    offs = np.arange(clip_frames, dtype=np.int64) * clip_stride
+    idx = ends[:, None] - (clip_frames - 1) * clip_stride + offs[None, :]
+    if int(idx.min()) < 0 or int(idx.max()) >= n:
+        keep = (idx.min(axis=1) >= 0) & (idx.max(axis=1) < n)
+        ends, idx = ends[keep], idx[keep]
+        if ends.size == 0:
+            return None
+    clips = np.asarray(frames)[idx]  # [B, T, H, W, 3]
+    clips = np.ascontiguousarray(np.transpose(clips, (0, 1, 4, 2, 3)))
+    if heatmaps is None:
+        return clips, None, ends
+    targets = np.ascontiguousarray(heatmaps[ends], dtype=np.float32)
+    return clips, targets, ends
+
+
 def _build_index(
     episodes: list[str],
     n_frames: int,

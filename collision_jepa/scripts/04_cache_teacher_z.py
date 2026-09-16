@@ -22,18 +22,16 @@ ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
 from collision_jepa.config import Config, resolve_device  # noqa: E402
-from collision_jepa.data.dataset import teacher_clip_indices  # noqa: E402
+from collision_jepa.data.dataset import pack_teacher_clips  # noqa: E402
 from collision_jepa.data.splits import load_split  # noqa: E402
-from collision_jepa.data.unzip import find_episode_dirs  # noqa: E402
-from collision_jepa.data.video import ensure_frame_cache  # noqa: E402
+from collision_jepa.data.unzip import episode_dir_map, resolve_dataset_root  # noqa: E402
+from collision_jepa.data.video import load_or_cache_frames  # noqa: E402
+from collision_jepa.engine import configure_runtime, prefetch_items, uint8_clips_to_device  # noqa: E402
 from collision_jepa.models.teacher import CollisionTeacher  # noqa: E402
 
 
-def episode_dir_map(cfg: Config) -> dict[str, Path]:
-    raw_dir = Path(cfg.get("data.raw_dir"))
-    roots = [p for p in raw_dir.iterdir() if p.is_dir() and p.name.startswith("dataset")]
-    root = roots[0] if roots else raw_dir
-    return {p.name: p for p in find_episode_dirs(root)}
+def _dir_map(cfg: Config) -> dict[str, Path]:
+    return episode_dir_map(resolve_dataset_root(cfg.get("data.raw_dir")))
 
 
 def main() -> None:
@@ -43,12 +41,13 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = Config.load(args.config)
+    configure_runtime()
     device = resolve_device(cfg.get("teacher.device", "auto"))
     print(f"[cacheZ] device={device}")
 
     split = load_split(cfg.get("data.split_file"))
-    all_eps = sorted(set(split["train"]) | set(split["val"]))
-    dir_map = episode_dir_map(cfg)
+    all_eps = sorted(set(split["train"]) | set(split["val"]) | set(split.get("test") or []))
+    dir_map = _dir_map(cfg)
 
     size = int(cfg.get("teacher.img_size", 256))
     clip_frames = int(cfg.get("teacher.clip_frames", 8))
@@ -63,11 +62,19 @@ def main() -> None:
         hf_model_id=cfg.get("teacher.hf_model_id"),
         z_channels=zc,
         feature_grid=grid,
+        occ_channels=int(cfg.get("student.occ_channels", 4)),
         fp16=bool(cfg.get("teacher.fp16", True)),
     ).to(device)
     ckpt_path = Path(cfg.get("paths.ckpt_dir")) / "teacher.pt"
     state = torch.load(ckpt_path, map_location=device)
-    model.load_state_dict(state["model"])
+    missing, unexpected = model.load_state_dict(state["model"], strict=False)
+    missing = [k for k in missing if ".predictor." not in k]
+    unexpected = [k for k in unexpected if ".predictor." not in k]
+    if missing or unexpected:
+        raise SystemExit(
+            f"[cacheZ] teacher.pt does not match this teacher code "
+            f"(missing={missing[:8]} unexpected={unexpected[:8]})"
+        )
     if device == "cuda" and bool(cfg.get("teacher.fp16", True)):
         model.backbone.model.half()
     model.eval()
@@ -78,39 +85,30 @@ def main() -> None:
         f"STOP-F1={(state.get('val') or {}).get('overall', {}).get('stop_f1')}"
     )
 
-    e_lo = (clip_frames - 1) * stride
-    for ei, ep in enumerate(all_eps):
+    def _load(ep):
         if ep not in dir_map:
-            continue
-        frames_path = ensure_frame_cache(dir_map[ep], cache_dir, size)
-        frames = np.load(frames_path, mmap_mode="r")
+            return None
+        frames = load_or_cache_frames(dir_map[ep], cache_dir, size, cache_name=ep)
+        packed = pack_teacher_clips(frames, None, clip_frames, stride, sample_stride=1)
+        if packed is None:
+            return None
+        clips_u8, _targets, clip_ends = packed
+        return clips_u8, clip_ends, ep
 
+    for ei, (clips_u8, clip_ends, ep) in enumerate(prefetch_items(all_eps, _load)):
         z_end = np.zeros((n_frames, zc, grid, grid), dtype=np.float32)
         mask = np.zeros((n_frames,), dtype=bool)
+        clip_ends = clip_ends.tolist()
 
-        ends = list(range(e_lo, min(n_frames, len(frames))))
-        clips = []
-        clip_ends = []
-        for e in ends:
-            idx = teacher_clip_indices(e, clip_frames, stride)
-            if idx[0] < 0 or idx[-1] >= len(frames):
-                continue
-            clip = np.stack([np.asarray(frames[i]) for i in idx], axis=0)
-            clip = np.transpose(clip.astype(np.float32) / 255.0, (0, 3, 1, 2))
-            clips.append(clip)
-            clip_ends.append(e)
-
-        with torch.no_grad():
-            for s in range(0, len(clips), mb):
-                cb = torch.from_numpy(np.stack(clips[s : s + mb])).float().to(device)
-                z = model.encode(cb).float().cpu().numpy()  # [b, zc, g, g]
+        with torch.inference_mode():
+            for s in range(0, clips_u8.shape[0], mb):
+                cb = uint8_clips_to_device(clips_u8[s : s + mb], device)
+                z = model.encode(cb).float().cpu().numpy()
                 for j, e in enumerate(clip_ends[s : s + mb]):
                     z_end[e] = z[j]
                     mask[e] = True
 
-        del clips
-        if device == "cuda":
-            torch.cuda.empty_cache()
+        del clips_u8
         out_path = cache_dir / ep / "teacher_z.npz"
         np.savez_compressed(out_path, z_end=z_end, mask=mask)
         if (ei + 1) % 5 == 0 or ei == 0 or ei == len(all_eps) - 1:

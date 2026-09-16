@@ -48,22 +48,27 @@ def make_split(
     episode_dirs: list[Path],
     val_fraction: float = 0.2,
     seed: int = 1337,
+    names: list[str] | None = None,
 ) -> dict:
-    """Return a dict with 'train' and 'val' lists of episode directory names.
+    """Return a dict with 'train' and 'val' lists of episode cache ids.
 
     Stratified by family: within each family we shuffle deterministically and send
     ``val_fraction`` of episodes to validation (at least one when a family is
-    non-empty and large enough).
+    non-empty and large enough). ``names`` must align with ``episode_dirs`` when
+    folder names collide across subsets (``subset__episode_dir``).
     """
+    if names is not None and len(names) != len(episode_dirs):
+        raise ValueError("names must match episode_dirs")
     by_family: dict[str, list[str]] = {}
     families: dict[str, str] = {}
     rare: dict[str, bool] = {}
-    for ep in episode_dirs:
+    for i, ep in enumerate(episode_dirs):
         meta = read_episode_meta(ep)
         fam = meta["_family"]
-        by_family.setdefault(fam, []).append(ep.name)
-        families[ep.name] = fam
-        rare[ep.name] = meta["_has_rare"]
+        name = names[i] if names is not None else ep.name
+        by_family.setdefault(fam, []).append(name)
+        families[name] = fam
+        rare[name] = meta["_has_rare"]
 
     rng = random.Random(seed)
     train: list[str] = []
@@ -83,9 +88,49 @@ def make_split(
     return {
         "train": train,
         "val": val,
+        "test": [],
         "families": families,
         "has_rare": rare,
         "val_fraction": val_fraction,
+        "seed": seed,
+    }
+
+
+def make_count_split(
+    episode_dirs: list[Path],
+    n_val: int = 50,
+    n_test: int = 50,
+    seed: int = 1337,
+    names: list[str] | None = None,
+) -> dict:
+    """Random episode-level split with fixed val/test counts (no frame leakage)."""
+    if names is not None and len(names) != len(episode_dirs):
+        raise ValueError("names must match episode_dirs")
+    families: dict[str, str] = {}
+    rare: dict[str, bool] = {}
+    ids: list[str] = []
+    for i, ep in enumerate(episode_dirs):
+        meta = read_episode_meta(ep)
+        name = names[i] if names is not None else ep.name
+        ids.append(name)
+        families[name] = meta["_family"]
+        rare[name] = meta["_has_rare"]
+    if len(ids) < n_val + n_test + 1:
+        raise ValueError(f"need more than {n_val + n_test} episodes, got {len(ids)}")
+    rng = random.Random(seed)
+    shuffled = list(ids)
+    rng.shuffle(shuffled)
+    test = sorted(shuffled[:n_test])
+    val = sorted(shuffled[n_test : n_test + n_val])
+    train = sorted(shuffled[n_test + n_val :])
+    return {
+        "train": train,
+        "val": val,
+        "test": test,
+        "families": families,
+        "has_rare": rare,
+        "n_val": n_val,
+        "n_test": n_test,
         "seed": seed,
     }
 

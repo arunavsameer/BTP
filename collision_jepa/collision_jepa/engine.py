@@ -7,8 +7,9 @@ and the full student.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import numpy as np
 import torch
@@ -96,11 +97,56 @@ def set_seed(seed: int) -> None:
 
 def configure_runtime() -> None:
     """Set thread/cuDNN options for fast, stable training on this machine."""
-    try:
-        import cv2
-
-        cv2.setNumThreads(1)
-    except Exception:
-        pass
     # Fixed input sizes -> let cuDNN pick the fastest kernels.
     torch.backends.cudnn.benchmark = True
+    if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        try:
+            torch.set_float32_matmul_precision("high")
+        except Exception:
+            pass
+        for name in ("enable_flash_sdp", "enable_mem_efficient_sdp"):
+            fn = getattr(torch.backends.cuda, name, None)
+            if callable(fn):
+                try:
+                    fn(True)
+                except Exception:
+                    pass
+
+
+def prefetch_items(names, load_fn) -> Iterator:
+    """Decode/load the next item on a CPU thread while the GPU works."""
+    names = list(names)
+    if not names:
+        return
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        fut = pool.submit(load_fn, names[0])
+        for i in range(len(names)):
+            item = fut.result()
+            if i + 1 < len(names):
+                fut = pool.submit(load_fn, names[i + 1])
+            if item is not None:
+                yield item
+
+
+def uint8_clips_to_device(
+    clips_u8: np.ndarray,
+    device: str,
+    targets: np.ndarray | None = None,
+):
+    """Pin and move packed uint8 clips ``[B,T,3,H,W]`` to GPU, normalize to [0,1]."""
+    x = torch.from_numpy(np.ascontiguousarray(clips_u8))
+    if device == "cuda":
+        x = x.pin_memory().to(device, non_blocking=True)
+    else:
+        x = x.to(device)
+    x = x.float().div_(255.0)
+    if targets is None:
+        return x
+    y = torch.from_numpy(np.ascontiguousarray(targets))
+    if device == "cuda":
+        y = y.pin_memory().to(device, non_blocking=True)
+    else:
+        y = y.to(device)
+    return x, y

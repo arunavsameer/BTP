@@ -29,7 +29,7 @@ from collision_jepa.engine import (  # noqa: E402
     set_seed,
     train_one_epoch,
 )
-from collision_jepa.losses import weighted_focal_mse  # noqa: E402
+from collision_jepa.losses import collision_heatmap_loss  # noqa: E402
 from collision_jepa.metrics import format_summary  # noqa: E402
 from collision_jepa.models.baseline import Stage0Model  # noqa: E402
 from collision_jepa.models.tiny_cnn import count_params  # noqa: E402
@@ -91,12 +91,21 @@ def main() -> None:
         lr=float(cfg.get("train.lr", 1e-3)),
         weight_decay=float(cfg.get("train.weight_decay", 1e-4)),
     )
-    focal_w = float(cfg.get("train.focal_weight", 1.0))
-    gamma = float(cfg.get("train.focal_gamma", 2.0))
 
     def loss_step(batch):
         pred = model(batch["frames"])
-        return weighted_focal_mse(pred, batch["h_future"], focal_w, gamma)
+        return collision_heatmap_loss(
+            pred,
+            batch["h_future"],
+            focal_weight=float(cfg.get("train.focal_weight", 4.0)),
+            gamma=float(cfg.get("train.focal_gamma", 2.0)),
+            bg_weight=float(cfg.get("train.bg_weight", 0.05)),
+            ignore_below=float(cfg.get("train.ignore_below", 0.15)),
+            fa_weight=float(cfg.get("train.fa_weight", 1.0)),
+            fa_pred_thr=float(cfg.get("train.fa_pred_thr", 0.45)),
+            fa_true_thr=float(cfg.get("train.fa_true_thr", 0.2)),
+            beta=float(cfg.get("train.smooth_l1_beta", 0.1)),
+        )
 
     def predict_fn(batch):
         return model(batch["frames"])

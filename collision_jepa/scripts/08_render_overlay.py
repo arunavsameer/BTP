@@ -24,7 +24,7 @@ sys.path.insert(0, str(ROOT))
 
 from collision_jepa.config import Config, resolve_device  # noqa: E402
 from collision_jepa.data.splits import load_split  # noqa: E402
-from collision_jepa.data.unzip import find_episode_dirs  # noqa: E402
+from collision_jepa.data.unzip import episode_dir_map, resolve_dataset_root  # noqa: E402
 from collision_jepa.models.student import Student  # noqa: E402
 from collision_jepa.warning import HitLatch, classify, severity_name  # noqa: E402
 
@@ -35,11 +35,8 @@ _SEV_BGR = {
 }
 
 
-def episode_dir_map(cfg: Config) -> dict[str, Path]:
-    raw_dir = Path(cfg.get("data.raw_dir"))
-    roots = [p for p in raw_dir.iterdir() if p.is_dir() and p.name.startswith("dataset")]
-    root = roots[0] if roots else raw_dir
-    return {p.name: p for p in find_episode_dirs(root)}
+def _dir_map(cfg: Config) -> dict[str, Path]:
+    return episode_dir_map(resolve_dataset_root(cfg.get("data.raw_dir")))
 
 
 def colorize_heatmap(hm: np.ndarray, width: int, height: int) -> np.ndarray:
@@ -191,7 +188,7 @@ def main() -> None:
     cfg = Config.load(args.config)
     device = resolve_device(cfg.get("train.device", "auto"))
     split = load_split(cfg.get("data.split_file"))
-    dir_map = episode_dir_map(cfg)
+    dir_map = _dir_map(cfg)
 
     if args.episodes:
         episodes = list(args.episodes)
