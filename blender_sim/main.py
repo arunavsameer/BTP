@@ -146,7 +146,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--duration",
         type=float,
         default=0.0,
-        help="Episode length in seconds. frames = round(duration * fps). Default 5 s. --frames wins if both set.",
+        help="Episode length in seconds. frames = round(duration * fps). Default 10 s. --frames wins if both set.",
     )
     p.add_argument(
         "--media",
@@ -437,6 +437,7 @@ def build_frame_record(
             path_s=path_s,
             path_lat=path_lat,
             boxes=inner_boxes or None,
+            class_name=actor.class_name,
         )
         objects.append(
             {

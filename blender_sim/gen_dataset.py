@@ -528,7 +528,7 @@ def _self_test() -> None:
     mixed_names = {e["scenario"] for e in build_plan(16, 5, cfg)["episodes"]}
     assert not mixed_names.issubset(CLEAR_CENTER_SCENARIOS)
     fps = int(cfg["render"]["fps"])
-    assert int(round(5.0 * fps)) == int(cfg["render"]["frames_per_episode"])
+    assert int(round(10.0 * fps)) == int(cfg["render"]["frames_per_episode"])
     safe, near, crit = _pools(cfg)
     catalog = set(safe + near + crit)
     assert "tree_on_path" in catalog

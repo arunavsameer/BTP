@@ -258,14 +258,16 @@ Evaluated at a **threat point** on the object (camera-height clamp), not the mes
 
 ## Spatial heat
 
-`--threat-grid K` (default 3, often 5) writes a `K×K` matrix per frame. A cell is hot when an object is a **potential collision** **and** that object currently covers the cell (inscribed mesh parts: cabin, limb, trunk, pole — not the outer AABB, no neighbour bleed). Mere distance is not a threat: a lamp beside a seated walker stays 0.
+`--threat-grid K` (default 3, often 5) writes a `K×K` matrix per frame. A cell is hot when a human walker would **slow or stop** for that object **and** that object currently covers the cell (inscribed mesh parts: cabin, limb, trunk, pole — not the outer AABB, no neighbour bleed). Mere distance is not a threat: a lamp beside a seated walker stays 0.
 
-Each object scores \(S=\max(S_{\mathrm{hit}},S_{\mathrm{pass}})\); the cell keeps the max over objects that overlap it. \(\lVert V_{\mathrm{rel}}\rVert\approx 0\) (both still, or co-moving) → \(S=0\).
+Each object scores \(S=\max(S_{\mathrm{hit}},S_{\mathrm{path}},S_{\mathrm{stat}},S_{\mathrm{prox}})\); the cell keeps the max over objects that overlap it. Cars, people, holes, and furniture use different envelopes (`kind_for` in `spatial_threat.py`). Both still (seated + a pole) → \(S=0\). Urgency is a class TTC window: a pedestrian ~5 m on a collision course is already amber (time to act); 11 m stays cold. A person filling the gait at ~2 m is red.
 
-- \(S_{\mathrm{hit}}\) — will the hulls collide if both keep their current planar velocity? Hit likelihood × TTC urgency. Walking into a hole, a head-on car, a child through the chest. A far-lane miss stays ~0.
-- \(S_{\mathrm{pass}}\) — the **other** body is moving, and will pass close even if the hulls miss. A person filling the camera at ~3 m with a glancing CPA still warns. A parked car or lamp you walk past cannot take this channel.
+- \(S_{\mathrm{hit}}\) — will the hulls collide if both keep their current planar velocity? Hit likelihood × class TTC window. Walking into a hole, a head-on car, a child through the chest.
+- \(S_{\mathrm{path}}\) — a **mover** is cutting the space I would walk into, even if the disk centres miss. A car crossing 5–7 m in front is a stop; the same car parallel in the next lane stays cold. A person cutting the gait ~6–8 m ahead is already warm; ~2 m is red.
+- \(S_{\mathrm{stat}}\) — I am walking **toward** a world-static body on my gait (parked car, tree, pole). Inverse in gap. An on-gait tree warms from ~5–6 m. A lamp I will pass is not a threat.
+- \(S_{\mathrm{prox}}\) — already inside personal space in front and closing.
 
-JSON `threat_label` / TTC / CPA stay the **point-mass** solve above. The overlay can disagree with the label on purpose (a close moving miss that you would brake for still lights).
+JSON `threat_label` / TTC / CPA stay the **point-mass** solve above. The overlay can disagree with the label on purpose (a crossing car with a 5 m CPA that you would still halt for).
 
 Formulas and knobs: [`IMPLEMENTATION.md`](IMPLEMENTATION.md) §16.
 

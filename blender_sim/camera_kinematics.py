@@ -254,11 +254,12 @@ class EgoProfile:
         return self.mode == "seated"
 
 
-def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5.0) -> EgoProfile:
+def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 10.0) -> EgoProfile:
     """Draw an ego mode and its parameters from `cfg['ego']`.
 
     `episode_seconds` scales the timing windows so a hesitation actually
-    lands inside a short episode instead of after the last frame.
+    lands inside a short episode instead of after the last frame. Config
+    windows are written for a 10 s clip.
     """
     ecfg = dict(cfg.get("ego") or {})
     weights = dict(ecfg.get("mode_weights") or {"walk": 1.0})
@@ -322,11 +323,11 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
         if mode == "crosswalk":
             lo, hi = ecfg.get("crosswalk_target_frac", (0.88, 1.00))
             f0, f1 = ecfg.get("crosswalk_span", (0.22, 0.78))
-            min_start, min_dur = 0.45, 3.00
+            min_start, min_dur = (0.80, 4.50) if span >= 8.0 else (0.45, 3.00)
         else:
             lo, hi = ecfg.get("diagonal_target_frac", (0.45, 1.00))
             f0, f1 = ecfg.get("diagonal_span", (0.12, 0.85))
-            min_start, min_dur = 0.20, 3.00
+            min_start, min_dur = (0.35, 4.00) if span >= 8.0 else (0.20, 3.00)
         prof.diag_frac = float(rng.uniform(float(lo), float(hi)))
         # Floor in seconds so a 6-frame QA clip does not compress the turn
         # into a 90° snap at t=0 (injectors still see the same schedule).
@@ -342,11 +343,16 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
         prof.sidestep_rate = float(rng.uniform(float(r_lo), float(r_hi)))
         prof.speed_wobble = float(rng.uniform(float(w_lo), float(w_hi)))
         if rng.random() < float(ecfg.get("hesitate_prob", 0.55)):
-            h_lo, h_hi = ecfg.get("hesitate_window_s", (0.9, 2.6))
-            d_lo, d_hi = ecfg.get("hesitate_duration_s", (0.5, 1.6))
-            t0 = float(rng.uniform(float(h_lo), float(h_hi)))
-            prof.halt_t0 = min(t0, max(0.2, span - 0.6))
-            prof.halt_t1 = prof.halt_t0 + float(rng.uniform(float(d_lo), float(d_hi)))
+            h_lo, h_hi = ecfg.get("hesitate_window_s", (1.8, 5.2))
+            d_lo, d_hi = ecfg.get("hesitate_duration_s", (0.7, 2.0))
+            # Config windows are for a 10 s clip.
+            scale = span / 10.0
+            t0 = float(rng.uniform(float(h_lo), float(h_hi))) * scale
+            dur = float(rng.uniform(float(d_lo), float(d_hi)))
+            if scale < 1.0:
+                dur = max(0.45, dur * max(0.55, scale))
+            prof.halt_t0 = min(t0, max(0.2, span - 0.8))
+            prof.halt_t1 = min(span - 0.15, prof.halt_t0 + dur)
             prof.halt_ramp = float(ecfg.get("halt_ramp_s", HALT_RAMP_S))
         return prof
 

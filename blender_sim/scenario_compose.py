@@ -9,7 +9,7 @@ Actors live in the road Frenet frame ``(s, lateral)``. A *capsule* is an
 axis-aligned rectangle in that plane (half-extents along-track and across)
 that moves with the same piecewise-linear ``(ds/dt, d(lateral)/dt)`` the
 integrator uses. Two capsules *conflict* if those rectangles overlap at any
-sampled time in the first few seconds — the window that is actually on camera.
+sampled time in the episode horizon — the window that is actually on camera.
 
 Composition never runs a per-frame N-body solver (that would fight the gait
 and the two-phase render). Separation is computed **once** at inject time:
@@ -532,8 +532,8 @@ class ComposeSession:
     s_lo: float
     s_hi: float
     nudge_s: float = 2.6
-    max_nudges: int = 14
-    horizon: float = 5.0
+    max_nudges: int = 18
+    horizon: float = 10.0
     dt_sample: float = 0.12
     clearance_s: float = 0.20
     clearance_lat: float = 0.18
@@ -560,8 +560,8 @@ class ComposeSession:
             s_lo=float(s_lo),
             s_hi=float(s_hi),
             nudge_s=float(block.get("nudge_s_m", 2.6)),
-            max_nudges=int(block.get("max_nudges", 14)),
-            horizon=float(block.get("horizon_s", 5.0)),
+            max_nudges=int(block.get("max_nudges", 18)),
+            horizon=float(block.get("horizon_s", 10.0)),
             dt_sample=float(block.get("dt_sample", 0.12)),
             clearance_s=float(block.get("clearance_s", 0.20)),
             clearance_lat=float(block.get("clearance_lat", 0.18)),

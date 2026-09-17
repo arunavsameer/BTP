@@ -1800,16 +1800,15 @@ def configure_eevee(scene: bpy.types.Scene, rcfg: dict) -> None:
     _set("shadow_pool_size", str(rcfg.get("shadow_pool_size", "2048")))
     _set("gi_irradiance_pool_size", str(rcfg.get("gi_irradiance_pool_size", "32")))
     _set("indirect_light_intensity", 1.35)
-    # Dense scatter (trees / grass) lives in the first 40 m of the walk.
-    # Tight cascades keep the shadow map on the gait instead of wasting
-    # pages on the far verge.
-    _set("cascade_max_distance", float(rcfg.get("cascade_max_distance", 48.0)))
+    # Dense scatter (trees / grass) lives in the first tens of metres of
+    # the walk. Cascades still have to reach a 10 s oncoming car (~40–70 m).
+    _set("cascade_max_distance", float(rcfg.get("cascade_max_distance", 80.0)))
     _set("cascade_exponent", 0.85)
     _set("cascade_fade", 0.12)
     _set("shadow_max_resolution", "512")
     _set("volumetric_samples", int(rcfg.get("volumetric_samples", 16)))
     _set("volumetric_start", float(rcfg.get("volumetric_start", 0.1)))
-    _set("volumetric_end", float(rcfg.get("volumetric_end", 80.0)))
+    _set("volumetric_end", float(rcfg.get("volumetric_end", 100.0)))
     _set("volumetric_tile_size", str(rcfg.get("volumetric_tile_size", "8")))
 
     rt = getattr(eevee, "ray_tracing_options", None)
@@ -3772,9 +3771,9 @@ class WorldGenerator:
             self.force_ego_mode = ""
         n_cross = sum(1 for n in names if n in CROSS_GAP_SCENARIOS)
         if n_cross:
-            # One crosser: original 5–20 m window. Compounds stagger extra
-            # crossers further down the ribbon, so open a longer gap.
-            hi = 20.0 if n_cross <= 1 else 28.0
+            # One crosser: window covers a 10 s meet (~6–18 m). Compounds
+            # stagger extra crossers further down the ribbon.
+            hi = 34.0 if n_cross <= 1 else 44.0
             self._building_gaps.append((4.0, hi))
         if any(n in SPARSE_SCENARIOS for n in names):
             self.cfg["world"]["n_background_pedestrians"] = (0, 0)
@@ -4095,7 +4094,7 @@ class WorldGenerator:
 
         The per-frame loop then walks only the actors that can actually move
         and only the actors that can actually be annotated, instead of
-        re-filtering the full list 150 times per episode. Static clutter is
+        re-filtering the full list 300 times per episode. Static clutter is
         the majority of the list in a cluttered biome, and its `update()` is
         a no-op that still costs a Python call and a Vector allocation.
         """
@@ -4151,19 +4150,21 @@ class WorldGenerator:
             "periph_child_cut": self._inject_child_dart,
             "oncoming_pedestrian": lambda r: self._inject_oncoming(
                 r, kind="person", obj_speed=self.rng.uniform(0.95, 1.30),
-                tau=3.0, dlat="opposite",
+                tau=float(self.cfg["scenarios"]["oncoming_ped_tau"]), dlat="opposite",
             ),
             "parallel_pedestrian": lambda r: self._inject_parallel_person(r),
             "cyclist_same_way": lambda r: self._inject_cyclist_same_way(r),
             "car_pass_far": lambda r: self._inject_car_lane(
-                r, far=True, obj_speed=self.rng.uniform(5.5, 8.0), tau=3.2,
+                r, far=True, obj_speed=self.rng.uniform(5.5, 8.0),
+                tau=float(self.cfg["scenarios"]["car_pass_tau"]),
             ),
             "car_approaching": lambda r: self._inject_car_lane(
-                r, far=False, obj_speed=self.rng.uniform(5.0, 7.0), tau=3.0,
+                r, far=False, obj_speed=self.rng.uniform(5.0, 7.0),
+                tau=float(self.cfg["scenarios"]["car_approach_tau"]),
             ),
             "distant_jaywalk": lambda r: self._inject_distant_jaywalk(r),
             "pothole_offset": lambda r: self._inject_pothole(
-                r, lead=float(self.cfg["scenarios"].get("pothole_offset_lead_m", 8.0)), dlat=1.80,
+                r, lead=float(self.cfg["scenarios"].get("pothole_offset_lead_m", 13.0)), dlat=1.80,
             ),
             "parked_car_opposite": lambda r: self._inject_parked_car(r),
             "crossing_street": self._inject_none,
@@ -4199,11 +4200,11 @@ class WorldGenerator:
             "cyclist_near_miss": lambda r: self._inject_oncoming(
                 r, kind="bicycle",
                 obj_speed=self.rng.uniform(*self.cfg["world"]["bicycle_speed"]),
-                tau=2.5, dlat=nm,
+                tau=float(self.cfg["scenarios"]["cyclist_near_tau"]), dlat=nm,
             ),
             "car_near_miss_lane": lambda r: self._inject_oncoming(
                 r, kind="vehicle", obj_speed=self.rng.uniform(4.8, 6.5),
-                tau=2.8, dlat=nm, pad=1.05,
+                tau=float(self.cfg["scenarios"]["car_near_tau"]), dlat=nm, pad=1.05,
             ),
             "car_cross_front": lambda r: self._inject_through_cross(
                 r, kind="vehicle", cpa=nm, from_left=self.rng.random() < 0.5,
@@ -4211,15 +4212,17 @@ class WorldGenerator:
             ),
             "cube_near_miss": lambda r: self._inject_oncoming(
                 r, kind="cube", obj_speed=self.rng.uniform(*self.cfg["world"]["cube_speed"]),
-                tau=2.6, dlat=nm, cube_size=self.rng.uniform(0.35, 0.60),
+                tau=float(self.cfg["scenarios"]["cube_near_tau"]), dlat=nm,
+                cube_size=self.rng.uniform(0.35, 0.60),
             ),
             "shape_near_miss": lambda r: self._inject_oncoming(
                 r, kind="shape",
                 obj_speed=self.rng.uniform(*self.cfg["world"].get("shape_speed", self.cfg["world"]["cube_speed"])),
-                tau=2.6, dlat=nm, cube_size=self.rng.uniform(0.35, 0.65),
+                tau=float(self.cfg["scenarios"]["cube_near_tau"]), dlat=nm,
+                cube_size=self.rng.uniform(0.35, 0.65),
             ),
             "pothole_near": lambda r: self._inject_pothole(
-                r, lead=float(self.cfg["scenarios"].get("pothole_near_lead_m", 7.2)), dlat=0.85,
+                r, lead=float(self.cfg["scenarios"].get("pothole_near_lead_m", 11.5)), dlat=0.85,
             ),
             "jaywalker": lambda r: self._inject_through_cross(
                 r, kind="person", cpa=cr, from_left=self.rng.random() < 0.5,
@@ -4232,30 +4235,31 @@ class WorldGenerator:
             "swerve_vehicle": lambda r: self._inject_cut_in(
                 r,
                 t0=float(self.cfg["scenarios"]["swerve_trigger_s"]),
-                t_hit=3.4,
+                t_hit=float(self.cfg["scenarios"]["swerve_hit_s"]),
                 v_car=5.5,
                 cpa=cr,
                 behavior="swerve",
             ),
             "pothole_on_path": lambda r: self._inject_pothole(
-                r, lead=float(self.cfg["scenarios"].get("pothole_on_path_lead_m", 7.8)), dlat=0.0,
+                r, lead=float(self.cfg["scenarios"].get("pothole_on_path_lead_m", 12.5)), dlat=0.0,
             ),
             "tree_on_path": lambda r: self._inject_tree(
-                r, lead=float(self.cfg["scenarios"].get("tree_on_path_lead_m", 7.5)), dlat=0.0,
+                r, lead=float(self.cfg["scenarios"].get("tree_on_path_lead_m", 12.0)), dlat=0.0,
             ),
             "tree_near": lambda r: self._inject_tree(
-                r, lead=float(self.cfg["scenarios"].get("tree_near_lead_m", 7.2)), dlat=0.80,
+                r, lead=float(self.cfg["scenarios"].get("tree_near_lead_m", 11.5)), dlat=0.80,
             ),
             "lamp_on_path": lambda r: self._inject_lamp(
-                r, lead=float(self.cfg["scenarios"].get("lamp_on_path_lead_m", 7.5)), dlat=0.0,
+                r, lead=float(self.cfg["scenarios"].get("lamp_on_path_lead_m", 12.0)), dlat=0.0,
             ),
             "lamp_near": lambda r: self._inject_lamp(
-                r, lead=float(self.cfg["scenarios"].get("lamp_near_lead_m", 7.2)), dlat=0.80,
+                r, lead=float(self.cfg["scenarios"].get("lamp_near_lead_m", 11.5)), dlat=0.80,
             ),
             "hasty_look": self._inject_none,
             "cube_head_on": lambda r: self._inject_oncoming(
                 r, kind="cube", obj_speed=self.rng.uniform(*self.cfg["world"]["cube_speed"]),
-                tau=2.4, dlat=cr, cube_size=self.rng.uniform(0.40, 0.70),
+                tau=float(self.cfg["scenarios"]["cube_head_tau"]), dlat=cr,
+                cube_size=self.rng.uniform(0.40, 0.70),
             ),
             "cube_from_left": lambda r: self._inject_through_cross(
                 r, kind="cube", cpa=cr, from_left=True,
@@ -4271,7 +4275,8 @@ class WorldGenerator:
             "shape_head_on": lambda r: self._inject_oncoming(
                 r, kind="shape",
                 obj_speed=self.rng.uniform(*self.cfg["world"].get("shape_speed", self.cfg["world"]["cube_speed"])),
-                tau=2.4, dlat=cr, cube_size=self.rng.uniform(0.40, 0.75),
+                tau=float(self.cfg["scenarios"]["cube_head_tau"]), dlat=cr,
+                cube_size=self.rng.uniform(0.40, 0.75),
             ),
             "shape_from_left": lambda r: self._inject_through_cross(
                 r, kind="shape", cpa=cr, from_left=True,
@@ -4287,7 +4292,7 @@ class WorldGenerator:
             "car_cut_in": lambda r: self._inject_cut_in(
                 r,
                 t0=float(self.cfg["scenarios"]["cut_in_trigger_s"]),
-                t_hit=2.9,
+                t_hit=float(self.cfg["scenarios"]["cut_in_hit_s"]),
                 v_car=6.2,
                 cpa=cr,
                 behavior="cut_in",
@@ -4295,7 +4300,7 @@ class WorldGenerator:
             "cyclist_head_on": lambda r: self._inject_oncoming(
                 r, kind="bicycle",
                 obj_speed=self.rng.uniform(*self.cfg["world"]["bicycle_speed"]),
-                tau=2.3, dlat=cr,
+                tau=float(self.cfg["scenarios"]["cyclist_head_tau"]), dlat=cr,
             ),
             "head_level_projectile": self._inject_head_cube,
             "car_cross_critical": lambda r: self._inject_through_cross(
@@ -4353,8 +4358,8 @@ class WorldGenerator:
             raise ValueError(f"unknown scenario {unknown!r}. Known: {known}")
 
         s0 = self._cam_s(rig, 0.0)
-        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 32.0))
-        s_hi = min(self.state.road.length - 5.0, s0 + max(18.0, look))
+        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 72.0))
+        s_hi = min(self.state.road.length - 5.0, s0 + max(28.0, look))
         session = ComposeSession.from_cfg(
             resolved, s_lo=s0 + 3.2, s_hi=s_hi, cfg=self.cfg,
         )
@@ -5052,7 +5057,7 @@ class WorldGenerator:
         actor.post_lat_target = post_lat_target
         if lat_target is not None and behavior not in ("through", "dart"):
             # Full-span smootherstep starts at rest. A through-crosser on the
-            # FOV edge would sit still for a second then lurch — skip it so
+            # corridor edge would sit still for a second then lurch — skip it so
             # they enter already walking. Cut-in / merge still ease.
             actor.lat_ease_from = float(actor.lateral)
             actor.lat_ease_t0 = float(swerve_t) if swerve_t is not None else 0.0
@@ -5120,11 +5125,47 @@ class WorldGenerator:
         half = math.radians(max(28.0, hfov) * 0.5)
         return max(1.20, float(depth_m) * math.tan(half * float(frac)))
 
-    def _visible_lead(self, preferred: float, *, near: float = 3.6, far: float = 9.2) -> float:
-        """Clamp along-track spawn so the actor stays in the walking VFOV."""
-        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 32.0))
-        hi = min(float(far), max(float(near) + 1.0, look * 0.42))
+    def _visible_lead(self, preferred: float, *, near: float = 5.0, far: float = 28.0) -> float:
+        """Clamp along-track spawn into the episode look-ahead.
+
+        Far cars are supposed to start as specks and grow. Do not pin them
+        to the walking VFOV — that is what made 5 s clips jump to danger.
+        """
+        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 72.0))
+        hi = min(float(far), max(float(near) + 1.0, look * 0.90))
         return min(max(float(preferred), float(near)), hi)
+
+    def _cross_kind_params(self, kind: str) -> tuple[float, float, float, tuple[float, float]]:
+        """meet_s, near_lead, far_lead, (vmin, vmax) for a through-crosser."""
+        sc = self.cfg["scenarios"]
+        wcfg = self.cfg["world"]
+        if kind == "vehicle":
+            meet = float(sc.get("cross_car_meet_s", 6.6))
+            lo, hi = wcfg["cross_car_speed"]
+            return meet, 12.0, 24.0, (float(lo), float(hi))
+        if kind == "bicycle":
+            meet = float(sc.get("cross_bike_meet_s", 5.6))
+            return meet, 8.0, 18.0, (1.40, 2.80)
+        if kind in ("cube", "shape"):
+            meet = float(sc.get("cross_cube_meet_s", 5.8))
+            lo, hi = wcfg.get("cube_speed", (1.15, 2.20))
+            return meet, 7.0, 16.0, (float(lo), float(hi))
+        meet = float(sc.get("jaywalker_ttc", 6.4))
+        lo, hi = sc["cross_person_speed"]
+        return meet, 6.0, 18.0, (float(lo), float(hi))
+
+    def _lat_speed_for_meet(
+        self, dist: float, meet_s: float, natural: float, *, vmin: float, vmax: float,
+    ) -> float:
+        """Pace a lateral crossing so it occupies the gait around ``meet_s``.
+
+        Never faster than the visual ``natural`` speed; never outside the
+        kind band. A car on a short alley may still arrive early because
+        ``vmin`` is a roll, not a crawl.
+        """
+        timed = abs(float(dist)) / max(float(meet_s), 0.35)
+        pace = min(max(float(natural), float(vmin)), timed)
+        return max(float(vmin), min(float(vmax), pace))
 
     def _inject_through_cross(
         self,
@@ -5137,40 +5178,38 @@ class WorldGenerator:
         cube_size: float = 0.45,
         cube_z: Optional[float] = None,
     ) -> None:
-        """Enter one side of the frame and walk/roll all the way out the other.
+        """Enter the corridor edge and walk/roll all the way out the other.
 
-        Stays on the street ribbon. Lateral target is the far FOV/corridor edge,
-        not a 2 m shuffle that dies in the middle of the road.
+        Starts at the building-line / kerb, not an in-frame FOV edge, and
+        sits far enough ahead that the walker spends the first half of a
+        10 s clip approaching a still-distant crosser.
         """
         assert self.state is not None
         pad = self._kind_pad(kind)
         s0 = self._cam_s(rig, 0.0)
         L = self._gait_lat()
         lim = self.state.corridor.lateral_limit(pad, True)
-        walk = max(0.85, float(speed))
-        # Place the crossing a few metres ahead so they occupy the frame for seconds.
-        tan_b = math.tan(math.radians(max(28.0, float(self.cfg["camera"].get("hfov_deg") or 73.7)) * 0.5) * 0.90)
-        k = 1.0 - float(rig.walk_speed) * tan_b / max(walk, 0.1)
-        depth = 1.7 / k if k > 0.18 else 5.2
-        depth = min(max(depth, 3.8), 7.0)
+        meet, near, far, (vmin, vmax) = self._cross_kind_params(kind)
+        natural = max(vmin, min(vmax, float(speed)))
+        v_ego = self._ego_speed(rig)
+        depth = max(near, float(v_ego) * meet)
         depth = depth + 1.1 * max(0.0, float(cpa) - 0.25)
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
             depth = depth + extra
-        near = 6.6 if kind == "vehicle" else 3.8
-        far = 10.5 if kind == "vehicle" else 9.0
         depth = self._visible_lead(depth, near=near, far=far)
-        hw = self._frustum_half_width(depth, 0.92)
-        left = max(-lim, L - hw)
-        right = min(lim, L + hw)
+        # Corridor edge, not the frustum edge — they walk into the picture
+        # and continue out the far side. Pace is timed to the gait, not the
+        # far kerb, so a 10 s clip can watch them arrive.
         if from_left:
-            lat_start = left
-            lat_end = min(lim, right + 0.55)
+            lat_start = -lim
+            lat_end = lim
         else:
-            lat_start = right
-            lat_end = max(-lim, left - 0.55)
-        # Small miss offset so critical vs near-miss is a graze, not a teleport.
-        # The path still runs edge-to-edge; CPA comes from when they pass the gait line.
+            lat_start = lim
+            lat_end = -lim
+        walk = self._lat_speed_for_meet(
+            abs(lat_start - L), meet, natural, vmin=vmin, vmax=vmax,
+        )
         s = s0 + depth
         heading_sign = 1.0 if from_left else -1.0
         actor = self._spawn_kind(
@@ -5201,13 +5240,13 @@ class WorldGenerator:
         lim = self.state.corridor.lateral_limit(pad, True)
         walk = self.rng.uniform(*self.cfg["scenarios"]["cross_person_speed"])
         from_left = self.rng.random() < 0.5
-        depth = 5.4
+        depth = 10.0
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
             depth = depth + extra
-        depth = self._visible_lead(depth, near=4.0, far=8.8)
-        hw = min(self._frustum_half_width(depth, 0.88), lim * 0.95)
-        lat_start = max(-lim, L - hw) if from_left else min(lim, L + hw)
+        depth = self._visible_lead(depth, near=7.0, far=18.0)
+        lat_start = -lim if from_left else lim
+        lat_start = max(-lim, min(lim, lat_start))
         # Merge onto the gait line, with a small CPA offset.
         miss = float(cpa)
         if toward:
@@ -5278,7 +5317,7 @@ class WorldGenerator:
     def _inject_cyclist_overtake(self, rig: Any) -> None:
         s0, L = self._cam_sl(rig, 0.0)
         lat = self._resolve_lat(0.85, L, 0.40)
-        s = self._visible_lead(s0 + 2.2 - s0, near=1.6, far=4.2) + s0
+        s = s0 + self._visible_lead(3.6, near=2.4, far=6.5)
         if self._compose is not None:
             s = s + self._compose.take_group_offset("along")
         speed = max(float(rig.walk_speed) + 2.4, 3.6)
@@ -5307,7 +5346,7 @@ class WorldGenerator:
         """Parked car on the near gutter; an open door occupies the gait."""
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
-        s = s0 + self._visible_lead(6.4, near=4.8, far=8.5)
+        s = s0 + self._visible_lead(10.5, near=8.0, far=16.0)
         if self._compose is not None:
             s = s + self._compose.take_group_offset("static")
         lat_car = self._resolve_lat(1.25, L, 1.05)
@@ -5338,8 +5377,8 @@ class WorldGenerator:
         """Car ahead, facing away, rolling back toward the walker."""
         s0, _L = self._cam_sl(rig, 0.0)
         lat = self._near_lane()
-        v = self.rng.uniform(1.6, 2.8)
-        s = s0 + self._visible_lead(6.8, near=5.0, far=8.8)
+        v = self.rng.uniform(1.4, 2.4)
+        s = s0 + self._visible_lead(12.5, near=9.0, far=20.0)
         if self._compose is not None:
             s = s + self._compose.take_group_offset("along")
         actor = self._spawn_kind("vehicle", s, lat, heading_sign=1.0)
@@ -5356,7 +5395,7 @@ class WorldGenerator:
     def _inject_parallel_person(self, rig: Any) -> None:
         s0, L = self._cam_sl(rig, 0.0)
         lat = self._resolve_lat(0.80, L, 0.35)
-        s = s0 + 4.0
+        s = s0 + 6.0
         if self._compose is not None:
             s = s + self._compose.take_group_offset("along")
         actor = self._spawn_kind("person", s, lat, heading_sign=1.0)
@@ -5371,7 +5410,7 @@ class WorldGenerator:
     def _inject_cyclist_same_way(self, rig: Any) -> None:
         s0, _L = self._cam_sl(rig, 0.0)
         lat = self._far_lane()
-        s = s0 + 7.0
+        s = s0 + 12.0
         if self._compose is not None:
             s = s + self._compose.take_group_offset("along")
         speed = self.rng.uniform(*self.cfg["world"]["bicycle_speed"])
@@ -5396,12 +5435,12 @@ class WorldGenerator:
         v = float(self.rng.uniform(*self.cfg["world"]["vehicle_speed"]))
         oncoming = self.rng.random() < 0.75
         if oncoming:
-            # Far enough to stay in frame for a few seconds, close enough
-            # that the hull sits on a FOV side — not a vanishing-point speck.
-            depth = self._visible_lead(13.4, near=10.5, far=16.5)
+            # Far enough to stay in frame for most of a 10 s clip, close
+            # enough that the hull sits on a FOV side — not a vanishing-point speck.
+            depth = self._visible_lead(24.0, near=18.0, far=32.0)
             sign = -1.0
         else:
-            depth = self._visible_lead(7.6, near=5.6, far=10.5)
+            depth = self._visible_lead(14.0, near=10.0, far=20.0)
             sign = 1.0
         if self._compose is not None:
             depth = depth + min(2.2, abs(self._compose.take_group_offset("along")))
@@ -5418,7 +5457,7 @@ class WorldGenerator:
     def _inject_periph_parked(self, rig: Any) -> None:
         """Parked car in a gutter — visible beside the empty sidewalk."""
         s0, _L = self._cam_sl(rig, 0.0)
-        depth = self._visible_lead(7.4, near=5.6, far=10.0)
+        depth = self._visible_lead(12.0, near=8.0, far=18.0)
         if self._compose is not None:
             depth = depth + self._compose.take_group_offset("along")
         s = s0 + depth
@@ -5437,7 +5476,7 @@ class WorldGenerator:
         """Person on the opposite sidewalk — never on the gait line."""
         s0, L = self._cam_sl(rig, 0.0)
         lat = self._resolve_lat("opposite", L, 0.35)
-        depth = self._visible_lead(6.8, near=4.8, far=9.6)
+        depth = self._visible_lead(12.0, near=8.0, far=18.0)
         if self._compose is not None:
             depth = depth + self._compose.take_group_offset("along")
         s = s0 + depth
@@ -5456,8 +5495,8 @@ class WorldGenerator:
         """Car visible in the near driving lane, then turns onto the gait.
 
         A far-lane start walks out of the HFOV before the turn is visible.
-        Near-lane + ~12 m lead keeps the hull on the road side of the frame
-        for a beat, then the swerve brings it into the image centre.
+        Near-lane + a long lead keeps the hull on the road side of the frame
+        for several seconds, then the swerve brings it into the image centre.
         """
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
@@ -5465,13 +5504,13 @@ class WorldGenerator:
         v_car = (
             self.rng.uniform(5.8, 7.6) if runoff else self.rng.uniform(5.0, 6.6)
         )
-        depth = self._visible_lead(12.2, near=10.0, far=14.5)
+        depth = self._visible_lead(22.0, near=16.0, far=30.0)
         if self._compose is not None:
             depth = depth + min(2.2, abs(self._compose.take_group_offset("along")))
         s = min(max(2.0, s0 + depth), self.state.road.length - 5.0)
-        t0 = self.rng.uniform(0.35, 0.70)
+        t0 = self.rng.uniform(1.6, 2.8)
         closing = float(v_car) + float(self._ego_speed(rig))
-        t_hit = max(t0 + 1.70, min(3.10, depth / max(closing, 1.0)))
+        t_hit = max(t0 + 2.40, min(6.80, depth / max(closing, 1.0)))
         if runoff:
             lim = self.state.corridor.lateral_limit(1.05, True)
             lat_target = math.copysign(lim, L if L else 1.0)
@@ -5480,8 +5519,8 @@ class WorldGenerator:
             cpa = float(self.cfg["scenarios"]["critical_cpa_target"])
             lat_target = L + math.copysign(cpa, 1.0 if L >= 0.0 else -1.0)
             behavior = "cut_in"
-        ease = max(1.60, min(2.40, t_hit - t0))
-        t0 = max(0.12, t_hit - ease)
+        ease = max(2.00, min(3.40, t_hit - t0))
+        t0 = max(0.20, t_hit - ease)
         rate = abs(lat_target - lane) / max(0.35, ease)
         actor = self._spawn_kind("vehicle", s, lane, heading_sign=-1.0)
         self._bind(
@@ -5508,8 +5547,11 @@ class WorldGenerator:
         if self._compose is not None:
             far = self._compose.prefer_far_lane(far)
         lat = self._far_lane() if far else self._near_lane()
-        v = float(self.rng.uniform(*self.cfg["world"]["cross_car_speed"]))
-        depth = self._visible_lead(8.4, near=6.6, far=11.5)
+        v = float(self.rng.uniform(*self.cfg["world"]["vehicle_speed"]))
+        tau = float(self.cfg["scenarios"]["cross_car_tau"])
+        v_close = float(self._ego_speed(rig)) + v
+        depth = max(v_close, v) * tau
+        depth = self._visible_lead(depth, near=12.0, far=36.0)
         if self._compose is not None:
             depth = depth + min(2.4, abs(self._compose.take_group_offset("along")))
         s = min(max(2.0, s0 + depth), self.state.road.length - 6.0)
@@ -5547,7 +5589,7 @@ class WorldGenerator:
         s0, L = self._cam_sl(rig, 0.0)
         pad = 0.35
         lim = self.state.corridor.lateral_limit(pad, True)
-        s = min(s0 + 16.0, self.state.road.length - 8.0)
+        s = min(s0 + 28.0, self.state.road.length - 8.0)
         if self._compose is not None:
             extra, _side = self._compose.take_cross_layout(True)
             s = min(s + extra, self.state.road.length - 8.0)
@@ -5575,7 +5617,7 @@ class WorldGenerator:
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
         count = int(n) if int(n) > 0 else self.rng.randint(2, 4)
-        lead0 = 5.4
+        lead0 = float(self.cfg["scenarios"].get("static_shape_lead_m", 8.8))
         if self._compose is not None:
             lead0 = lead0 + self._compose.take_group_offset("static")
         for i in range(count):
@@ -5695,7 +5737,7 @@ class WorldGenerator:
 
     def _inject_parked_car(self, rig: Any) -> None:
         s0, _L = self._cam_sl(rig, 0.0)
-        s = s0 + 9.0
+        s = s0 + 16.0
         if self._compose is not None:
             s = s + self._compose.take_group_offset("along")
         lat = self._far_lane()
@@ -5746,8 +5788,8 @@ class WorldGenerator:
         s_car0 = s_hit + float(v_car) * (float(t_hit) + tau_extra)
         s_car0 = min(max(2.0, s_car0), self.state.road.length - 5.0)
         lat_target = L + math.copysign(float(cpa), 1.0 if L >= 0.0 else -1.0)
-        ease = max(1.60, min(2.40, float(t_hit) - 0.20))
-        t0 = max(0.12, float(t_hit) - ease)
+        ease = max(2.00, min(3.40, float(t_hit) - 0.40))
+        t0 = max(0.20, float(t_hit) - ease)
         rate = abs(lat_target - lane) / max(0.35, ease)
         actor = self._spawn_kind("vehicle", s_car0, lane, heading_sign=-1.0)
         self._bind(
@@ -5789,9 +5831,9 @@ class WorldGenerator:
         see it as a genuine CRITICAL rather than a grazing near-miss.
         """
         assert self.state is not None
-        t_hit = self.rng.uniform(2.2, 3.2)
+        lo, hi = self.cfg["scenarios"]["run_off_hit_s"]
+        t_hit = self.rng.uniform(float(lo), float(hi))
         v_car = self.rng.uniform(6.5, 10.5)
-        t0 = max(0.4, t_hit - self.rng.uniform(1.1, 1.9))
         s_hit, L = self._cam_sl(rig, t_hit)
         lane = self._near_lane()
         tau_extra = 0.0
@@ -5803,8 +5845,8 @@ class WorldGenerator:
         # Overshoot past the walker toward the facade.
         lim = self.state.corridor.lateral_limit(1.05, True)
         lat_target = math.copysign(lim, L if L else 1.0)
-        ease = max(1.60, min(2.50, t_hit - 0.20))
-        t0 = max(0.12, t_hit - ease)
+        ease = max(2.00, min(3.50, t_hit - 0.40))
+        t0 = max(0.20, t_hit - ease)
         rate = abs(lat_target - lane) / max(0.35, ease)
         actor = self._spawn_kind("vehicle", s_car0, lane, heading_sign=-1.0)
         self._bind(
@@ -5841,7 +5883,8 @@ class WorldGenerator:
         s0, L = self._cam_sl(rig, 0.0)
         base = self._near_lane() if lane is None else float(lane)
         v_close = self._ego_speed(rig) + float(speed)
-        tau = self.rng.uniform(2.4, 3.6)
+        lo, hi = self.cfg["scenarios"]["weave_tau"]
+        tau = self.rng.uniform(float(lo), float(hi))
         if self._compose is not None:
             tau = tau + self._compose.take_group_offset("along") / max(v_close, 1.0)
         s = min(max(2.0, s0 + max(v_close, float(speed)) * tau), self.state.road.length - 4.0)
@@ -5870,20 +5913,25 @@ class WorldGenerator:
         systematically underestimates the threat of a smaller, faster body.
         """
         assert self.state is not None
+        sc = self.cfg["scenarios"]
         pad = 0.24
-        t_hit = self.rng.uniform(1.70, 2.60)
+        lo, hi = sc["child_dart_hit_s"]
+        t_hit = self.rng.uniform(float(lo), float(hi))
+        rlo, rhi = sc["child_dart_run_s"]
+        run = self.rng.uniform(float(rlo), float(rhi))
+        t0 = max(0.60, t_hit - run)
         s_hit, L = self._cam_sl(rig, t_hit)
         lim = self.state.corridor.lateral_limit(pad, True)
         speed = self.rng.uniform(1.9, 3.1)
         from_left = self.rng.random() < 0.5
         if self._compose is not None:
             _extra, from_left = self._compose.take_cross_layout(from_left)
-        # Start far enough that they reach the gait at t_hit (chest intercept).
-        dist = min(abs(lim - L) * 0.95, speed * t_hit)
-        dist = max(1.6, dist)
+        # Wait at the corridor edge, then bolt so they reach the gait at t_hit.
+        dist = min(abs(lim - L) * 0.95, speed * max(0.80, t_hit - t0))
+        dist = max(2.4, dist)
         lat_start = L - dist if from_left else L + dist
         lat_start = max(-lim, min(lim, lat_start))
-        speed = abs(lat_start - L) / max(0.55, t_hit)
+        speed = abs(lat_start - L) / max(0.55, t_hit - t0)
         lat_end = L + (0.55 if from_left else -0.55)
         lat_end = max(-lim, min(lim, lat_end))
         s = s_hit
@@ -5896,6 +5944,7 @@ class WorldGenerator:
             speed=0.0,
             lat_speed=speed,
             lat_target=lat_end,
+            swerve_t=t0,
             behavior="dart",
             allow_sidewalk=True,
             pad=pad,
