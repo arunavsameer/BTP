@@ -139,6 +139,26 @@ def camera_projection_matrix(
         )
 
 
+# Spatial overlay uses inscribed boxes, not the outer union AABB.
+INNER_BOX_SCALE = 0.85
+
+
+def _inset_local_corners(
+    locals_: tuple[Vector, ...],
+    scale: float = INNER_BOX_SCALE,
+) -> tuple[Vector, ...]:
+    """Shrink an object-space AABB toward its centre. Scale 1 keeps it."""
+    if not locals_ or scale >= 0.999:
+        return locals_
+    n = float(len(locals_))
+    cx = sum(c.x for c in locals_) / n
+    cy = sum(c.y for c in locals_) / n
+    cz = sum(c.z for c in locals_) / n
+    centre = Vector((cx, cy, cz))
+    s = float(scale)
+    return tuple(centre + (c - centre) * s for c in locals_)
+
+
 class LocalBoundCache:
     """Object-space AABB corners of a root mesh and every MESH descendant.
 
@@ -171,6 +191,31 @@ class LocalBoundCache:
         if self.parts:
             return [self.parts[0][0].matrix_world.translation.copy()]
         return []
+
+    def inner_world_corner_sets(
+        self,
+        scale: float = INNER_BOX_SCALE,
+        only_obj: Any = None,
+    ) -> list[list[Vector]]:
+        """One inscribed 8-corner box per MESH part (cabin, wheel, limb, …).
+
+        ``only_obj`` restricts to that mesh (tree trunk, lamp pole) so child
+        arms / canopy never inflate the heat splat.
+        """
+        sets: list[list[Vector]] = []
+        for o, locals_ in self.parts:
+            if only_obj is not None and o is not only_obj:
+                continue
+            inset = _inset_local_corners(locals_, scale)
+            mw = o.matrix_world
+            sets.append([mw @ c for c in inset])
+        if not sets and only_obj is not None and getattr(only_obj, "bound_box", None):
+            inset = _inset_local_corners(
+                tuple(Vector(c) for c in only_obj.bound_box), scale,
+            )
+            mw = only_obj.matrix_world
+            sets.append([mw @ c for c in inset])
+        return sets
 
 
 _BOUND_BY_PTR: dict[int, LocalBoundCache] = {}
@@ -419,6 +464,41 @@ def project_from_corners(
     if n_front == 0:
         return None
     return _bbox_from_pixels(pixels, res_x, res_y, n_front)
+
+
+def inset_world_corners(
+    corners: list[Vector],
+    scale: float = INNER_BOX_SCALE,
+) -> list[Vector]:
+    """Inset a world-space corner set about its centroid (pothole mouth)."""
+    if not corners or scale >= 0.999:
+        return list(corners)
+    n = float(len(corners))
+    acc = Vector((0.0, 0.0, 0.0))
+    for c in corners:
+        acc += c
+    centre = acc / n
+    s = float(scale)
+    return [centre + (c - centre) * s for c in corners]
+
+
+def project_inner_boxes(
+    corner_sets: list[list[Vector]],
+    view: Matrix,
+    proj: Matrix,
+    res_x: int,
+    res_y: int,
+) -> list[tuple[int, int, int, int]]:
+    """Project inscribed part boxes. Empty / behind-camera parts are dropped."""
+    out: list[tuple[int, int, int, int]] = []
+    for corners in corner_sets:
+        if not corners:
+            continue
+        bbox = project_from_corners(corners, view, proj, res_x, res_y)
+        if bbox is None:
+            continue
+        out.append((bbox.xmin, bbox.ymin, bbox.xmax, bbox.ymax))
+    return out
 
 
 def project_object(

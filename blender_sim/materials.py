@@ -415,6 +415,84 @@ def make_facade(name: str, wall: tuple[float, float, float], night: bool, seed: 
     return mat
 
 
+def make_facade_brick(name: str, wall: tuple[float, float, float], seed: float = 0.0) -> Any:
+    """Running-bond brick on the elevation; mortar is darker and bumpier."""
+    mat, nt, bsdf, _out = _new_mat(name)
+    maps = _object_coords(nt, (1.25, 1.25, 1.25))
+    brick = nt.nodes.new("ShaderNodeTexBrick")
+    brick.location = (-360, 40)
+    _set(brick, "Scale", 1.0)
+    _set(brick, "Mortar Size", 0.06)
+    _set(brick, "Mortar Smooth", 0.08)
+    _set(brick, "Bias", 0.08 + 0.10 * (seed % 1.0))
+    _set(brick, "Brick Width", 0.95)
+    _set(brick, "Row Height", 0.42)
+    _set(brick, "Color1", (min(1.0, wall[0] * 1.22), min(1.0, wall[1] * 1.10), min(1.0, wall[2] * 0.95), 1.0))
+    _set(brick, "Color2", (wall[0] * 0.72, wall[1] * 0.62, wall[2] * 0.55, 1.0))
+    _set(brick, "Mortar", (0.18, 0.16, 0.14, 1.0))
+    _link(nt, maps, "Vector", brick, "Vector")
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-360, -220)
+    _set(noise, "Scale", 18.0 + 8.0 * (seed % 1.0))
+    _set(noise, "Detail", 6.0)
+    _link(nt, maps, "Vector", noise, "Vector")
+    mix = _mix_rgba(nt, (-80, 20))
+    _link(nt, brick, "Color", mix, "A", b_typ="RGBA")
+    _set(mix, "B", (wall[0] * 0.55, wall[1] * 0.50, wall[2] * 0.45, 1.0), "RGBA")
+    _link(nt, noise, "Factor", mix, "Factor", a_typ="VALUE", b_typ="VALUE")
+    _link(nt, mix, "Result", bsdf, "Base Color", a_typ="RGBA")
+    _set(bsdf, "Roughness", 0.86)
+    _set(bsdf, "Specular IOR Level", 0.14)
+    _set(bsdf, "Metallic", 0.0)
+    inv = nt.nodes.new("ShaderNodeInvert")
+    inv.location = (-80, -200)
+    _link(nt, brick, "Factor", inv, "Color")
+    _bump_from(nt, inv, "Color", bsdf, strength=0.48, distance=0.010)
+    return mat
+
+
+def make_facade_plaster(name: str, wall: tuple[float, float, float], seed: float = 0.0) -> Any:
+    """Stucco / plaster: fine noise albedo plus roughness variation."""
+    mat, nt, bsdf, _out = _new_mat(name)
+    maps = _object_coords(nt, (2.4, 2.4, 2.4))
+    noise = nt.nodes.new("ShaderNodeTexNoise")
+    noise.location = (-360, 40)
+    _set(noise, "Scale", 9.0 + 6.0 * (seed % 1.0))
+    _set(noise, "Detail", 8.0)
+    _set(noise, "Roughness", 0.55)
+    _link(nt, maps, "Vector", noise, "Vector")
+    mix = _mix_rgba(nt, (-80, 20))
+    _set(mix, "A", (*wall, 1.0), "RGBA")
+    _set(mix, "B", (wall[0] * 0.78, wall[1] * 0.76, wall[2] * 0.72, 1.0), "RGBA")
+    _link(nt, noise, "Factor", mix, "Factor", a_typ="VALUE", b_typ="VALUE")
+    _link(nt, mix, "Result", bsdf, "Base Color", a_typ="RGBA")
+    rmix = _math(nt, "MULTIPLY", (-80, -160), 0.22)
+    radd = _math(nt, "ADD", (80, -160), 0.62)
+    _link_to(nt, noise, "Factor", _math_in(rmix, 0))
+    _link_to(nt, rmix, "Value", _math_in(radd, 0))
+    _link(nt, radd, "Value", bsdf, "Roughness")
+    _set(bsdf, "Specular IOR Level", 0.18)
+    _set(bsdf, "Metallic", 0.0)
+    _bump_from(nt, noise, "Factor", bsdf, strength=0.22, distance=0.006)
+    return mat
+
+
+def make_building_facade(
+    name: str,
+    wall: tuple[float, float, float],
+    night: bool,
+    rng: random.Random,
+    seed: float = 0.0,
+) -> Any:
+    """Pick brick / plaster-noise / window-grid per building."""
+    kind = rng.choice(("brick", "plaster", "windows"))
+    if kind == "brick":
+        return make_facade_brick(name, wall, seed)
+    if kind == "plaster":
+        return make_facade_plaster(name, wall, seed)
+    return make_facade(name, wall, night, seed)
+
+
 def make_car_paint(name: str, color: tuple[float, float, float]) -> Any:
     mat, nt, bsdf, _out = _new_mat(name)
     maps = _object_coords(nt, (0.8, 0.8, 0.8))
@@ -427,8 +505,12 @@ def make_car_paint(name: str, color: tuple[float, float, float]) -> Any:
     _set(mix, "B", (min(1.0, color[0] * 1.15), min(1.0, color[1] * 1.15), min(1.0, color[2] * 1.12), 1.0), "RGBA")
     _link(nt, noise, "Factor", mix, "Factor", a_typ="VALUE", b_typ="VALUE")
     _link(nt, mix, "Result", bsdf, "Base Color", a_typ="RGBA")
+    rmix = _math(nt, "MULTIPLY", (-40, -160), 0.16)
+    radd = _math(nt, "ADD", (120, -160), 0.16)
+    _link_to(nt, noise, "Factor", _math_in(rmix, 0))
+    _link_to(nt, rmix, "Value", _math_in(radd, 0))
+    _link(nt, radd, "Value", bsdf, "Roughness")
     _set(bsdf, "Metallic", 0.78)
-    _set(bsdf, "Roughness", 0.22)
     _set(bsdf, "Coat Weight", 1.0)
     _set(bsdf, "Coat Roughness", 0.05)
     _set(bsdf, "Coat IOR", 1.5)
@@ -953,6 +1035,12 @@ def make_chaos_car_paint(
     _link(nt, noise, "Factor", mix, "Factor", a_typ="VALUE", b_typ="VALUE")
     _link(nt, mix, "Result", bsdf, "Base Color", a_typ="RGBA")
     apply_surface_chaos(bsdf, rng, c, fam, base_roughness=0.22)
+    rmix = _math(nt, "MULTIPLY", (-40, -180), 0.14)
+    _link_to(nt, noise, "Factor", _math_in(rmix, 0))
+    try:
+        _link(nt, rmix, "Value", bsdf, "Roughness")
+    except Exception:
+        pass
     # A car is a lacquered panel far more often than a random prop.
     if rng.random() < 0.55:
         _set(bsdf, "Coat Weight", float(rng.uniform(0.4, 1.0)))

@@ -153,6 +153,10 @@ SCENARIO_ALIASES: dict[str, str] = {
     "oncoming_car": "car_approaching",
     "pothole": "pothole_on_path",
     "hole": "pothole_on_path",
+    "tree": "tree_on_path",
+    "lamp": "lamp_on_path",
+    "streetlamp": "lamp_on_path",
+    "hasty": "hasty_look",
     "person": "oncoming_pedestrian",
     "ped": "oncoming_pedestrian",
     "cyclist": "cyclist_same_way",
@@ -195,9 +199,9 @@ SCENARIO_ALIASES: dict[str, str] = {
     "side_child": "periph_child_cut",
 }
 
-_NOOP = frozenset({"safe_walk", "empty_street", "periph_empty"})
+_NOOP = frozenset({"safe_walk", "empty_street", "periph_empty", "hasty_look"})
 _STATIC_CLASSES = frozenset({
-    "pothole", "crater", "broken_slab", "debris", "tree",
+    "pothole", "crater", "broken_slab", "debris", "tree", "streetlamp",
     "threat_cube", "threat_sphere", "threat_cylinder", "threat_pyramid",
     "threat_cone", "threat_capsule", "threat_lump",
 })
@@ -212,9 +216,14 @@ _INJECT_PRIORITY: dict[str, int] = {
     "pothole_on_path": 0,
     "pothole_near": 0,
     "pothole_offset": 0,
+    "tree_on_path": 0,
+    "tree_near": 0,
+    "lamp_on_path": 0,
+    "lamp_near": 0,
     "parked_car_opposite": 1,
     "empty_street": 2,
     "safe_walk": 2,
+    "hasty_look": 2,
     "oncoming_pedestrian": 10,
     "parallel_pedestrian": 10,
     "cyclist_same_way": 10,
@@ -278,6 +287,7 @@ _EXTENT_S = {
     "threat_cube": 0.48,
     "person": 0.70,
     "tree": 0.55,
+    "streetlamp": 0.22,
     "crater": 1.10,
     "broken_slab": 0.70,
     "debris": 0.65,
@@ -290,6 +300,7 @@ _EXTENT_LAT = {
     "threat_cube": 0.36,
     "person": 0.42,
     "tree": 0.55,
+    "streetlamp": 0.22,
     "crater": 0.75,
     "broken_slab": 0.50,
     "debris": 0.45,
@@ -846,6 +857,9 @@ def _self_test() -> None:
     assert "periph_empty" in catalog
     assert "periph_car_turn" in catalog
     assert "periph_ped_cut" in catalog
+    assert "tree_on_path" in catalog
+    assert "lamp_on_path" in catalog
+    assert "hasty_look" in catalog
     assert set(CLEAR_CENTER_SCENARIOS).issubset(set(catalog))
     assert resolve_scenario_name("side_cut", random.Random(1), live) == "periph_ped_cut"
     assert resolve_scenario_name("side_turn", random.Random(1), live) == "periph_car_turn"

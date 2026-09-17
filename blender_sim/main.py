@@ -45,11 +45,14 @@ from camera_kinematics import (
 )
 from config import apply_camera_fov, get_config
 from projection import (
+    INNER_BOX_SCALE,
     bound_cache_for,
     camera_projection_matrix,
     camera_view_matrix,
     clear_bound_caches,
     footprint_mouth_corners,
+    inset_world_corners,
+    project_inner_boxes,
     project_object,
     threat_point_from_corners,
 )
@@ -140,6 +143,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--frames", type=int, default=0, help="Override frames_per_episode (0 = config).")
     p.add_argument(
+        "--duration",
+        type=float,
+        default=0.0,
+        help="Episode length in seconds. frames = round(duration * fps). Default 5 s. --frames wins if both set.",
+    )
+    p.add_argument(
         "--media",
         choices=("frames", "video", "both"),
         default=None,
@@ -183,8 +192,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="ego_mode",
         help=(
             "Ego trajectory: walk | diagonal_cross | crosswalk | erratic | "
-            "seated | auto. 'seated' pins walk_speed to 0. Crossing scenarios "
-            "force crosswalk unless this flag locks another mode. Default: auto."
+            "hasty | seated | auto. 'seated' pins walk_speed to 0. 'hasty' is "
+            "high-frequency look jitter. Crossing scenarios force crosswalk "
+            "unless this flag locks another mode. Default: auto."
         ),
     )
     p.add_argument(
@@ -390,6 +400,22 @@ def build_frame_record(
         if bbox is None:
             continue
 
+        # Heat paints inscribed mesh-part boxes (cabin, wheel, limb, trunk),
+        # not the outer 2-D AABB. JSON `bounding_box_2d` stays the outer box.
+        splat_root = actor.obj
+        only_part = None
+        if actor.class_name in ("tree", "streetlamp") and actor.threat_obj is not None:
+            splat_root = actor.threat_obj
+            only_part = actor.threat_obj
+        if actor.class_name in SUNKEN_CLASSES:
+            inner_sets = [inset_world_corners(corners, INNER_BOX_SCALE)]
+        else:
+            splat_bounds = bound_cache_for(splat_root)
+            inner_sets = splat_bounds.inner_world_corner_sets(
+                INNER_BOX_SCALE, only_obj=only_part,
+            )
+        inner_boxes = project_inner_boxes(inner_sets, view, proj, res_x, res_y)
+
         label = classify_threat(kin, v_obj_vec.length, cfg["threat"])
         half_s, half_lat = horizontal_extents(threat_corners, (tx, ty, tz))
         path_s = path_lat = None
@@ -410,6 +436,7 @@ def build_frame_record(
             res_y=res_y,
             path_s=path_s,
             path_lat=path_lat,
+            boxes=inner_boxes or None,
         )
         objects.append(
             {
@@ -1322,6 +1349,12 @@ def main() -> int:
     if media not in ("frames", "video", "both"):
         print(f"invalid --media {media!r}; expected frames|video|both", file=sys.stderr)
         return 2
+    frames_override = int(args.frames)
+    if frames_override <= 0:
+        dur = float(getattr(args, "duration", 0.0) or 0.0)
+        if dur > 0.0:
+            fps = max(1, int(cfg["render"]["fps"]))
+            frames_override = max(1, int(round(dur * fps)))
     plan_eps: list[dict] | None = None
     if args.plan:
         plan_path = Path(args.plan)
@@ -1372,7 +1405,7 @@ def main() -> int:
                 out_root=out_root,
                 no_render=bool(args.no_render),
                 no_occlusion=bool(args.no_occlusion),
-                frames_override=int(args.frames),
+                frames_override=int(frames_override),
                 media=media,
                 hfov_deg=args.hfov,
                 lens_mm=args.lens_mm,

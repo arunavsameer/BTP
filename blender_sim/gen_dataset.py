@@ -51,6 +51,8 @@ _FAMILIES: dict[str, tuple[str, ...]] = {
         "distant_jaywalk",
     ),
     "pothole": ("pothole_on_path", "pothole_near", "pothole_offset"),
+    "tree": ("tree_on_path", "tree_near"),
+    "lamp": ("lamp_on_path", "lamp_near"),
     "car": (
         "car_approaching",
         "car_pass_far",
@@ -382,13 +384,19 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Delete each episode's rgb/ folder after the video is muxed.",
     )
     p.add_argument("--frames", type=int, default=0, help="Override frames_per_episode (0 = config).")
+    p.add_argument(
+        "--duration",
+        type=float,
+        default=0.0,
+        help="Episode seconds; frames = round(duration * fps). --frames wins if both set.",
+    )
     p.add_argument("--threat-grid", type=int, default=3, dest="threat_grid", metavar="K")
     p.add_argument("--spatial-overlay", action="store_true",
                    help="Also write spatial_overlay.mp4 on each episode.")
     p.add_argument("--biome", type=str, default="auto",
                    help="street | avenue | park | plaza | alley | residential | market | auto.")
     p.add_argument("--ego-mode", "--ego", type=str, default="auto", dest="ego_mode",
-                   help="walk | diagonal_cross | crosswalk | erratic | seated | auto.")
+                   help="walk | diagonal_cross | crosswalk | erratic | hasty | seated | auto.")
     p.add_argument("--ego-height", type=str, default="auto", dest="ego_height",
                    help="short | typical | tall | auto | metres.")
     p.add_argument("--chaos", type=float, default=None,
@@ -456,6 +464,8 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
     ]
     if args.frames > 0:
         cmd += ["--frames", str(int(args.frames))]
+    elif float(getattr(args, "duration", 0.0) or 0.0) > 0.0:
+        cmd += ["--duration", str(float(args.duration))]
     if args.spatial_overlay:
         cmd.append("--spatial-overlay")
     if args.no_render:
@@ -517,6 +527,13 @@ def _self_test() -> None:
         assert ep["kind"] == "single"
     mixed_names = {e["scenario"] for e in build_plan(16, 5, cfg)["episodes"]}
     assert not mixed_names.issubset(CLEAR_CENTER_SCENARIOS)
+    fps = int(cfg["render"]["fps"])
+    assert int(round(5.0 * fps)) == int(cfg["render"]["frames_per_episode"])
+    safe, near, crit = _pools(cfg)
+    catalog = set(safe + near + crit)
+    assert "tree_on_path" in catalog
+    assert "lamp_on_path" in catalog
+    assert "hasty_look" in catalog
     print("gen_dataset self-test: OK")
 
 

@@ -63,7 +63,7 @@ These are the reasons the code looks the way it does. Almost every “why” in 
 
 **C1. One Frenet parameter.** Every actor and the camera share the **road centreline** arc-length `s` plus a signed `lateral` (positive = road-right, \(\hat{r}=\hat{t}\times\hat{z}\)). The sidewalk is an offset of that spline, not a second path. Mixing a resampled sidewalk spline’s arc length with road `s` would desynchronise injectors from the annotator.
 
-**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix *is* body-aware. Those two products answer different questions and must not be collapsed.
+**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix is a separate product: body intercept × TTC, plus a logistic on how close the hulls are *now*. Those two products answer different questions and must not be collapsed.
 
 **C3. Stationary ego is a first-class state.** Seated / hesitate have `walk_speed = 0`. Every solver must accept \(V_{\mathrm{cam}}=0\) without dividing by it. Intercepts spawn at \(\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},\,v_{\mathrm{obj}})\tau\), never on top of the HMD.
 
@@ -129,13 +129,14 @@ Every flag `parse_args` accepts:
 | `--output DIR` | `<repo>/output` | Root for `episode_*` folders. |
 | `--seed INT` | 42 | Master RNG. |
 | `--frames N` | 0 = config 150 | Override length. Still clamped by remaining road. |
+| `--duration SEC` | 0 = config 5.0 s | `frames = round(SEC * fps)`. Ignored if `--frames` is set. |
 | `--media frames\|video\|both` | config `both` | What visual product to keep. |
 | `--no-rgb` | | Delete `rgb/` after mux. Ignored if no video is being written. PNGs kept if mux fails. |
 | `--no-render` | | Skip EEVEE. JSON only. Overlay skipped. |
 | `--no-annotations` | | Skip `annotations/annotations.json`. Spatial JSON still written. |
 | `--no-occlusion` | | Skip the centre-ray occlusion flag (faster; boxes still computed). |
 | `--biome street\|avenue\|park\|plaza\|alley\|residential\|market\|auto` | auto | Weighted draw if auto. |
-| `--ego-mode walk\|diagonal_cross\|crosswalk\|erratic\|seated\|auto` | auto | Locks `choose_ego_profile` weights to one mode. Crossing injectors force `crosswalk` when this is `auto`. |
+| `--ego-mode walk\|diagonal_cross\|crosswalk\|erratic\|hasty\|seated\|auto` | auto | Locks `choose_ego_profile` weights to one mode. Crossing injectors force `crosswalk` when this is `auto`. `hasty_look` forces `hasty`. |
 | `--ego-height short\|typical\|tall\|auto\|metres` | auto | Standing eye-height band or explicit metres. |
 | `--chaos FLOAT` | unset | Locks `material_chaos` to `[c, c]`. `0` is the pre-chaos pipeline. |
 | `--no-trees` | | Zeroes `n_trees`, `n_grass_clumps`, `n_street_trees`, `n_median_trees`, `n_path_trees` on world **and** every biome override. |
@@ -343,7 +344,7 @@ Never:
 | `scenario_compose.py` | no | CLI tokens, aliases, Frenet occupancy |
 | `humanoid.py` | yes | Articulated pedestrian + Winter walk cycle |
 | `materials.py` | yes | Procedural PBR, chaos, Blender 4/5 Mix-node guards |
-| `spatial_threat.py` | no | Body-aware score + K×K splat |
+| `spatial_threat.py` | no | Intercept×TTC + proximity sigmoid; K×K splat |
 | `spatial_overlay.py` | no | PPM heat + ffmpeg overlay graph |
 | `gen_dataset.py` | no | Balanced pack planner; execs `run.sh --plan` |
 | `main.py` | yes | CLI, episode loop, annotation JSON, render, mux |
@@ -386,7 +387,7 @@ Priority:
 
 **`gait`.** Walk speed bands stroll \(U(0.70,1.00)\) / walk \(U(1.00,1.50)\) / hurry \(U(1.50,2.05)\) m/s, bounce 0.04 m @ 1.8 Hz, optional pitch bob 0.015 rad. Seated is exactly 0.
 
-**`ego`.** Mode weights (walk 0.44, erratic 0.22, seated 0.14, crosswalk 0.12, diagonal 0.08), seated eye \(U(0.95,1.28)\), sidestep / wobble / hesitate windows, diagonal / crosswalk target fraction and span. Standing eye height is drawn from short / typical / tall bands unless `--ego-height` locks it.
+**`ego`.** Mode weights (walk 0.44, erratic 0.22, seated 0.14, crosswalk 0.12, diagonal 0.08). `hasty` is **not** in the weights; `hasty_look` forces it. Seated eye \(U(0.95,1.28)\), sidestep / wobble / hesitate windows, diagonal / crosswalk target fraction and span, `hasty` look amps. Standing eye height is drawn from short / typical / tall bands unless `--ego-height` locks it.
 
 **`jitter`.** Per-axis amplitude, frequency, octaves, persistence, lacunarity for camera-local Perlin.
 
@@ -518,12 +519,12 @@ Snapshot consumed by the annotator and written into `camera_data`:
 | `t` | Episode time (s) |
 | `position` | Eye, Blender world (Frenet + curb + gait). **No** Perlin translation |
 | `velocity` | Finite difference of that eye (includes gait \(dZ/dt\)) |
-| `tangent`, `right`, `up` | Road Frenet at current `s` |
+| `tangent`, `right`, `up` | `tangent` is `_look_direction` (road for walk/seated/hasty; blended for crosswalk/diagonal). `right`/`up` from that look × world-up. Perlin jitter is **not** in `tangent` |
 | `pitch`, `yaw`, `roll` | Camera-**local** jitter + gait pitch bob (radians) |
 | `matrix_world` | The 4×4 actually written to the object |
-| `walk_speed` | Instantaneous **ground** speed; 0 seated / halt |
+| `walk_speed` | `speed_at(t)`: spline \(ds/dt\), 0 seated / halt. Not \(\hypot(ds,d\ell)\) during a crossing |
 | `arc_length`, `lateral` | Frenet of the ego this frame |
-| `mode` | `walk` / `diagonal_cross` / `erratic` / `seated` |
+| `mode` | `walk` / `diagonal_cross` / `crosswalk` / `erratic` / `hasty` / `seated` |
 
 `pitch_yaw_roll` in JSON is these local angles, **not** a world IMU.
 
@@ -535,11 +536,17 @@ Drawn once per episode from `cfg['ego']`. Separated from `CameraRig` so it can b
 
 **`seated`.** `stationary=True` ⇒ `speed_at=0`, `travelled=0`, `max_time=1e6`, gait gain 0. Eye height drawn from `seated_eye_height_m`. Lateral is later nudged 0.35 m toward the building line (a bench sits back from the kerb).
 
-**`diagonal_cross`.** `diag_frac` \(U(0.45,1.00)\) of the way to the opposite kerb. Window is `diagonal_span` as a fraction of episode length. Lateral ramps with smoothstep \(u^2(3-2u)\). Span is \(\max(2|L|, 2.5)\) so a centreline start still produces a real crossing. Stored as a **fraction**, not metres, because the profile is drawn before the rig knows this biome’s corridor width.
+**`diagonal_cross`.** `diag_frac` \(U(0.45,1.00)\) of the way to the opposite kerb. Window is `diagonal_span` as a fraction of episode length, floored to `min_start=0.20` s and `min_dur=3.00` s. Stored as a **fraction**, not metres, because the profile is drawn before the rig knows this biome’s corridor width.
+
+**`crosswalk`.** Same lateral integrator as diagonal, but almost kerb-to-kerb: `crosswalk_target_frac` \(U(0.88,1.00)\), `crosswalk_span` \((0.22,0.78)\), `min_start=0.45` s, `min_dur=3.00` s. Crossing injectors (`CROSS_EGO_SCENARIOS`) force this mode when CLI ego is `auto`.
+
+Lateral for both crossing modes uses Perlin **smootherstep** \(u^3(u(6u-15)+10)\), not cubic \(u^2(3-2u)\). Span is \(\max(2|L|, 2.5)\) so a centreline start still produces a real crossing. Heading follows `_look_direction` (motion vector, capped at 50° off the road).
 
 **`erratic`.** Sidestep amplitude \(U(0.22,0.80)\) m at \(U(0.10,0.38)\) Hz (fBm). Speed wobble \(U(0.15,0.55)\). 55% chance of a halt inside `hesitate_window_s` for `hesitate_duration_s`, clamped so it lands before the last 0.6 s.
 
-`--ego-mode walk` rebuilds the profile with `mode_weights={walk: 1}`. Unknown names raise.
+**`hasty`.** Not in `mode_weights` (auto never draws it). `hasty_look` sets `force_ego_mode="hasty"`. Body still walks the gait; look is a faster Perlin at \(U(2.5,6)\) Hz with yaw/pitch/roll amps from `cfg['ego']['hasty']`, plus extra vertical bob `hasty_bob_m`.
+
+`--ego-mode walk` (etc.) rebuilds the profile with `mode_weights={that_mode: 1}`. Unknown names raise.
 
 ### 9.4 `CameraRig`
 
@@ -561,15 +568,15 @@ Constructor arguments: Blender camera object, road `PathSpline` (duck-typed: `ev
 
 **`arc_length_at(t)`** — `sidewalk_s0 + travelled(t)`, clamped to `(0.05, length-0.05)`. `sidewalk_s0` is **3.0 m**. That keeps the first frame from sitting inside a building that starts at s=0, and it is the origin injectors use as “now”.
 
-**`lateral_at(t)`** — walk/seated: constant (then clamp). Diagonal: smoothstep toward the far kerb. Erratic: base + `sidestep_amp * fBm(t * rate)`. Then `_clamp_lateral`.
+**`lateral_at(t)`** — walk/seated: constant (then clamp). `diagonal_cross` / `crosswalk`: smootherstep \(u^3(u(6u-15)+10)\) toward the far kerb. Erratic: base + `sidestep_amp * fBm(t * rate)`. Then `_clamp_lateral`.
 
 **`max_time()`** — remaining = `length - s0 - 2`. Seated → `1e6`. No table → `remaining / max(v, 1e-3)`. With table → first sample whose travelled ≥ remaining. Never divides by a halted speed.
 
-**`sample_angles(t)`** — three independent fBm streams scaled by `jitter[axis]`. Time is `t * frequency_hz + phase` so “slow yaw” really is slow.
+**`sample_angles(t)`** — walk / diagonal / crosswalk / erratic / seated: three independent fBm streams scaled by `jitter[axis]`. Time is `t * frequency_hz + phase` so “slow yaw” really is slow. **`hasty`:** same three noises at `hasty_hz` with the larger `hasty_*_deg` amplitudes (not the `jitter` table).
 
 **`_gait_gain(t)`** — 0 if seated; else `speed_at(t) / walk_speed` clamped to [0,1]. A bobbing camera with zero ground velocity is a strong, wrong cue: it looks like motion the labels deny.
 
-**`gait_height`** — `eye + A * gain * sin(2π f t)`.
+**`gait_height`** — `eye + A * gain * sin(2π f t)`. Hasty adds `hasty_bob_m * sin(2π hasty_hz t)`.
 
 **`gait_pitch_bob`** — `amp * gain * cos(2π f t)` (quadrature: head dips at mid-stance).
 
@@ -580,12 +587,13 @@ Constructor arguments: Blender camera object, road `PathSpline` (duck-typed: `ev
 **`update(t, dt)`** — the sim-loop call:
 
 1. Frenet origin at `(arc_length_at, lateral_at)`. Origin Z is **curb**, not asphalt, even when a diagonal crossing is on the road — a known simplification (the walker does not step down 12 cm in the integrator). Park curb is 0, so it is exact there.
-2. Re-orthogonalize `up = right × tangent`.
+2. `look = _look_direction(t, path_tan)`: road tangent when lateral rate is ~0; otherwise `normalize(tan·ds + right·dlat)`, clamped to 50° off the road. `right = look × world_up`, `up = right × look`.
 3. Add gait height.
 4. Sample jitter + pitch bob.
-5. `_compose_matrix`: columns `(right, up, −tangent)` so local −Z = +tangent. Jitter is Euler XYZ **in camera space**, then `rot_base @ rot_jitter`.
+5. `_compose_matrix`: columns `(right, up, −look)` so local −Z = +look. Jitter is Euler XYZ **in camera space**, then `rot_base @ rot_jitter`.
 6. `_apply_camera_matrix`: decompose to loc/quat, set `rotation_mode='QUATERNION'`, write location, quaternion, scale 1, **then** `matrix_world`. Blender 5 ignores `matrix_world` alone when the object is still in Euler mode.
 7. Velocity: frame 0 (or `dt~0`) is a central difference of `predict_position` (correct under diagonal / halt). Later frames: `(position - prev) / dt` of the **jittered** eye. That includes a tiny look-jitter translation of zero (jitter is rotation about the eye) and the gait \(dZ/dt\).
+8. `CameraState.tangent` is **look**, not the spline tangent. `walk_speed` is `speed_at(t)`.
 
 ### 9.5 What is not in the camera
 
@@ -633,7 +641,7 @@ This is a **3-D AABB**, slightly loose (a diagonal limb sticks out of the AABB).
 - **`volume`** (people, cars, trees, shapes): XY of AABB centre, Z clamped into `[zmin, zmax]`, preferring `cam_z`. A car roof at 1.5 m vs a 1.6 m camera has a 0.1 m residual, not 1.6 m.
 - **`footprint`** (pothole / crater / puddle / broken_slab): XY of centre, **Z = camera height** so the hole occupies the walker’s vertical column.
 
-Trees: the 2-D box uses the full hierarchy (canopy included). The threat point and Frenet extents use `actor.threat_obj` (the trunk). Taking the canopy AABB as the threat point would put the hazard 1.5 m off the path and a swaying crown would jitter TTC.
+Trees: the 2-D detector box uses the full hierarchy (canopy included). The threat point, Frenet extents, **and spatial splat** use `actor.threat_obj` (the trunk). Taking the canopy AABB as the threat point would put the hazard 1.5 m off the path and a swaying crown would jitter TTC.
 
 Sunken classes (`pothole`, `crater`, `broken_slab`): `footprint_mouth_corners` builds a thin world slab (±3 cm) at the pavement mouth from the local XY radius. The render mesh’s buried well is ignored for the box. Without this, the box inflates downward and can miss the screen when only the mouth is in frame.
 
@@ -835,7 +843,7 @@ A hard reject (`_on_drive_or_walk`) drops any candidate whose `|lat|` is on the 
 
 `_spawn_canopy_gobo` — one alpha-hashed ribbon at 6.5–10.5 m. Hidden from camera / diffuse / glossy if those flags exist; `visible_shadow=True`. Models “avenue of plane trees” as a moving shadow, not 10k leaves.
 
-`_spawn_streetlamps` — pole + arm toward the carriageway + emissive bulb + downward SPOT. Alternating sides. `_site_free` vs trunks. Dead/gain custom props. Daytime: energy 0, hidden.
+`_spawn_streetlamps` — pole wrapped as an annotatable static `Actor` (`class_name="streetlamp"`, `threat_obj=pole`) + arm toward the carriageway + emissive bulb + downward SPOT. Alternating sides. `_site_free` vs trunks. Dead/gain custom props. Daytime: energy 0, hidden. Dedicated injectors `lamp_on_path` / `lamp_near` plant an extra pole on or beside the gait.
 
 ### 11.15 Furniture and head hazards
 
@@ -1211,6 +1219,8 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `car_cross_front` | near | Through-cross vehicle, CPA 1.0, random side, 3.2–4.8 m/s. |
 | `cube_near_miss` / `shape_near_miss` | near | Oncoming primitive, `dlat=1.0`, \(\tau=2.6\), size ~0.35–0.65 m. |
 | `pothole_near` | near | Hole at `dlat=0.85`, lead 7.2 m. Shin-graze, not a trip. |
+| `tree_near` | near | Extra trunk at `dlat=0.80`, lead 7.2 m. |
+| `lamp_near` | near | Extra pole at `dlat=0.80`, lead 7.2 m. |
 | `cyclist_weaving` | near | Near-lane bike, sine 0.9–1.9 m @ 0.28–0.62 Hz. |
 | `jaywalker` | critical | Through-cross person, CPA 0.12, random side. |
 | `jaywalker_turn_toward` | critical | Side entry, then oncoming on the gait. |
@@ -1218,6 +1228,8 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `swerve_vehicle` | critical | Near-lane car, `swerve_t=1.8`, then drift onto gait, CPA 0.12, \(v=5.5\), \(t_{\mathrm{hit}}=3.4\). |
 | `car_cut_in` | critical | Same family, `swerve_t=1.2`, \(v=6.2\), \(t_{\mathrm{hit}}=2.9\). |
 | `pothole_on_path` | critical | On-gait hole, lead 7.8 m, `dlat=0`. |
+| `tree_on_path` | critical | Extra trunk on the gait, lead 7.5 m. Splat / TTC use the bole. |
+| `lamp_on_path` | critical | Extra pole on the gait, lead 7.5 m. Splat / TTC use the pole. |
 | `cube_on_path` | critical | One static cube on the gait. |
 | `shapes_on_path` | critical | 2–4 mixed static primitives on the gait, 2.55 m apart. |
 | `cube_head_on` / `shape_head_on` | critical | Oncoming primitive, `dlat=0.12`, \(\tau=2.4\). |
@@ -1230,6 +1242,7 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `child_darting` | critical | `spawn_humanoid(child=True)`, 1.9–3.1 m/s lateral dart through the gait. |
 | `crossing_street` | safe | No extra injector. Forces ego `crosswalk` (Frenet lateral + heading). |
 | `cyclist_overtake` | safe | Bike same way, ~0.85 m toward the road, faster than ego, lead ~2 m. |
+| `hasty_look` | safe | No extra injector. Forces ego `hasty` (fast look, extra bob). |
 | `group_crossing` | near | 2–3 through-cross pedestrians; forces ego `crosswalk`. |
 | `scooter_from_sidewalk` | near | Through-cross bicycle from a FOV edge. |
 | `parked_car_door` | near | Parked car in the near gutter + a static door-height box on the gait. |
@@ -1253,7 +1266,16 @@ That last point is why injection order is static → along → lateral: the expe
 
 ## 16. `spatial_threat.py` (no `bpy`)
 
-A cell is hot when the walker would **collide** with (or step into) the object: body-aware path occupancy, not a point-mass CPA. Ego motion for this score is **sidewalk tangent × walk speed**, not the jittered eye, so a pothole on the gait does not flicker as the head bobs.
+A cell is hot when that object is a **potential collision** **and** it currently covers the cell. Score (when) and paint (where) are separate. Distance in the image is not a threat: a lamp filling the frame beside a seated walker is near and huge, and scores 0.
+
+Relative motion is required. If \(\lVert V_{\mathrm{rel}}\rVert \lesssim 0.12\,\mathrm{m/s}\) (both still, or co-moving) the score is 0 — nothing is approaching. Then two channels, \(S=\max(S_{\mathrm{hit}},S_{\mathrm{pass}})\):
+
+- \(S_{\mathrm{hit}}\) — constant-velocity **body intercept × TTC urgency**. Hulls on a collision course: a hole you will step in, a head-on car, a child cutting through the chest. A far head-on car with TTC ≈ 4 s is amber; the same car at TTC ≈ 1 s is red.
+- \(S_{\mathrm{pass}}\) — the **other body is moving**, and will pass close even if the hulls miss. A person filling the camera at ~3 m with a 1.5 m glance still warns. A parked car or lamp you walk past does **not**: they are world-static, so only \(S_{\mathrm{hit}}\) can light them, and only if you will strike.
+
+Ego motion for the solve is **`walk_speed` along `cam.tangent`**, not the jittered eye, so a pothole on the gait does not flicker as the head bobs. `cam.tangent` is `_look_direction`: road tangent for walk / seated / hasty; blended gait+lateral (capped at 50° off the road) for `crosswalk` / `diagonal_cross`. Perlin pitch/yaw/roll is applied only in the camera matrix, not here. Heat **paint** uses the camera projection, so a hasty look moves the blob with the RGB.
+
+JSON `threat_label` / TTC / CPA stay the **point-mass** solve in `threat_math.py` (`relative_kinematics` + `classify_threat`). The matrix is body-aware and can disagree with the label on purpose (C2).
 
 `k` is **only** `--threat-grid`. It is not a config key. Changing it does not require a rebuild of anything else.
 
@@ -1262,74 +1284,124 @@ A cell is hot when the walker would **collide** with (or step into) the object: 
 | Symbol | Value | Role |
 | --- | --- | --- |
 | `EGO_HALF_M` | 0.30 m | Shoulder half-width + sway |
-| `REACT_S` | 2.2 s | Time the walker still occupies if they keep going |
-| `REACT_BUF_M` | 0.55 m | Extra length of the stopping rectangle |
-| `HIT_FLOOR` | 0.58 | Definite collision maps to at least this before urgency |
-| `LAMBDA_V` | 0.22 | Urgency vs closing speed |
-| `LAMBDA_T` | 1.25 | Urgency vs time-to-hit |
-| `ADJ_PEAK` | 0.50 | Cap of the adjacent-lane term |
-| `ADJ_LANE_M` | 1.70 m | Preferred neighbour offset |
-| `CPA_SOFT_M` | 0.42 m | Softness of the planar CPA bump |
-| `CLOSE_GATE_MPS` | 0.30 | Closing rate at which the swept-volume term reaches full weight |
-| `BLEED_CELLS` | 0.55 | Gaussian extra width in grid-cell units |
-| `BLEED_WEIGHT_MIN` | 0.02 | Discard bleed below this |
+| `HIT_CLEAR_M` | 0.45 m | Hulls this close *now* still count as a meet when diverging |
+| `CPA_SOFT_M` | 0.28 m | Width of \(W_{\mathrm{hit}}=\exp(-(d_{\mathrm{clear}}/\cdot)^2)\) |
+| `PASS_SOFT_M` | 1.15 m | Width of \(W_{\mathrm{pass}}\) (glancing mover) |
+| `PASS_MAX_M` | 1.20 m | Hard cap: a wider CPA is not a near-pass |
+| `HORIZON_S` | 12 s | Ignore intercepts past a long episode |
+| `HIT_FLOOR` | 0.12 | Likely hit, far TTC |
+| `LAMBDA_V` | 0.16 | Urgency vs closing speed |
+| `LAMBDA_T` | 1.85 | Urgency vs TTC (1 s → ~0.84, 4 s → ~0.37) |
+| `TIME_SLOP_S` | 0.12 s | CPA times this far in the past still count as a meet |
+| `REL_STATIC_M_S` | 0.12 m/s | \(\lVert V_{\mathrm{rel}}\rVert\) below this → score 0 |
+| `OBJ_MOVE_M_S` | 0.20 m/s | \(\lVert V_{\mathrm{obj}}\rVert\) above this → object is a mover (\(S_{\mathrm{pass}}\) may fire) |
+| `ON_GAIT_LAT_M` | 0.60 m | \(\lvert\mathrm{path\_lat}\rvert\) below this uses ribbon \(p\); above keeps world XY |
+| `OVERLAP_PX` | 1.5 | Min pixel overlap for a cell to light. **No** Gaussian bleed. |
 
-### 16.2 Frenet of one object
+Paint uses **inscribed inner boxes** (cabin, wheel, limb, trunk, pole), not the outer 2-D AABB. JSON `bounding_box_2d` stays the outer box for detectors. Trees / streetlamps splat the trunk / pole only.
 
-\(\hat{s}\) = horizontal heading (camera tangent). \(\hat{r}=\hat{s}\times\hat{z}\) (via `heading_frame`).
+There is **no** gait-entry tube, **no** stopping-volume rectangle, **no** adjacent-lane glow, **no** neighbour Gaussian. Those lived in an earlier scorer; `object_threat_score` does not implement them.
 
-\[
-s=(P_{\mathrm{obj}}-P_{\mathrm{cam}})_{xy}\cdot\hat{s},\qquad
-\ell=(P_{\mathrm{obj}}-P_{\mathrm{cam}})_{xy}\cdot\hat{r}
-\]
+### 16.2 Frame, extents, path
 
-If the actor is on the same spline as the camera (or is static), `build_frame_record` passes `path_s = actor.s - cam.arc_length` and `path_lat = actor.lateral - cam.lateral` instead. That is the **ribbon** distance, not the chord, and it is what you want on a `corner_90`.
+\(\hat{s}\) = horizontal unit `cam.tangent`. \(\hat{r}=\hat{s}\times\hat{z}=(s_y,-s_x)\) via `heading_frame`. That is Frenet **road-right** in Blender Z-up (`tangent × world_up`), so a positive `path_lat` is to the walker’s right. (An earlier sign, \(\hat{r}=(-s_y,s_x)\), mirrored through-crossers onto the opposite kerb and zeroed their heat.)
 
-Object half-extents come from `horizontal_extents(threat_corners, heading)` — projected AABB onto \(\hat{s},\hat{r}\), floored at 0.12 m. Trees use trunk corners here.
-
-\(v_s,v_\ell\) = object velocity in that frame. \(v_{\mathrm{close}}=v_{\mathrm{ego}}-v_s\) (>0 if the gap in \(s\) is shrinking). \(R=r_{\mathrm{ego}}+r_{\mathrm{obj,lat}}\).
-
-Already behind and not closing (`s < -(r_long+0.6)` and `v_close ≤ 0.05`) → score 0. Cheap reject for the crowd behind the camera.
-
-### 16.3 Four ways to hit, then a neighbour term
+World relative position (Z dropped):
 
 \[
-W=\max(W_{\mathrm{stop}},W_{\mathrm{path}},W_{\mathrm{cross}},W_{\mathrm{cpa}})
+p_{\mathrm{world}}=(P_{\mathrm{obj}}-P_{\mathrm{cam}})_{xy}
 \]
 
-1. **Stopping volume.** Disk of the object vs the forward rectangle of length \(v_{\mathrm{ego}}T_{\mathrm{react}}+d_{\mathrm{buf}}\) and half-width \(R\). Soft edges (`_soft_unit`). Gated by \(v_{\mathrm{close}}/0.30\). A jaywalker filling the frame at 2 m is inside this box even if a point-mass CPA says they will have stepped aside. A bollard in front of a **seated** walker is not — the walker sweeps nothing.
-
-2. **Guaranteed path hit.** They occupy the gait tube now and \(t_{\mathrm{leave}}>t_{\mathrm{arrive}}\). Static hole: \(t_{\mathrm{leave}}=\infty\). Independent of camera bob. **`inf - inf` is NaN** — if `t_arr` is non-finite, `w_path=0` (we never get there); if `t_leave` is inf and `t_arr` is finite, `w_path=1`. Never subtract two infinities.
-
-3. **Crossing intercept.** They *enter* the tube at `t_in` (`_time_to_enter`) and are still at the walker’s \(s\) then. Gaussian on the along-track gap, exponential decay in `t_in`. Oncoming car, late cut-in.
-
-4. **Body-aware planar CPA.** Relative velocity in the ground plane, \(t^*=-(p\cdot v)/\|v\|^2\), clearance = miss − \(R\), \(W_{\mathrm{cpa}}=\exp(-(d_{\mathrm{clear}}/0.42)^2)\). `\|v\|~0` → no approach to solve; proximity alone is not a CPA.
-
-Urgency:
+If the actor has `follow_spline` or is static, `build_frame_record` also passes ribbon offsets \(\mathrm{path\_s}=s_{\mathrm{actor}}-s_{\mathrm{cam}}\) and \(\mathrm{path\_lat}=\ell_{\mathrm{actor}}-\ell_{\mathrm{cam}}\). The reconstructed ribbon point is
 
 \[
-U=1-\exp(-\lambda_v\max(v_{\mathrm{close}},0)-\lambda_t/\max(t_{\mathrm{hit}},0.08))
+p_{\mathrm{path}}=\mathrm{path\_s}\,\hat{s}+\mathrm{path\_lat}\,\hat{r}.
+\]
+
+`object_threat_score` then chooses:
+
+- \(\lvert\mathrm{path\_lat}\rvert\le 0.60\,\mathrm{m}\) (on / near gait) → \(p=p_{\mathrm{path}}\). That is the **ribbon**, not the chord, and it is what you want on a `corner_90` when world XY looks offset.
+- \(\lvert\mathrm{path\_lat}\rvert>0.60\,\mathrm{m}\) (through-crosser, far-lane car, …) → \(p=p_{\mathrm{world}}\). Rebuilding a large lateral offset in the *look* frame during a crosswalk turn would place a right-side person on the left, walking away.
+- No path args (background mesh without a spline) → \(p=p_{\mathrm{world}}\).
+
+Along-track scalars use that \(p\):
+
+\[
+s=p\cdot\hat{s},\qquad v_s=V_{\mathrm{obj},xy}\cdot\hat{s},\qquad v_{\mathrm{close}}=v_{\mathrm{ego}}-v_s
+\]
+
+(\(v_{\mathrm{close}}>0\) if the along-track gap is shrinking.) Already behind and not closing (`s < -(r_long+0.6)` and `v_close ≤ 0.05`) → score 0. Cheap reject for the crowd behind the camera.
+
+Object half-extents come from `horizontal_extents(threat_corners, heading)` — projected AABB onto \(\hat{s},\hat{r}\), floored at 0.12 m. Trees use trunk corners here. Combined disk radius:
+
+\[
+R = 0.30 + \min\bigl(1.35,\ \max(r_{\mathrm{lat}},\ 0.45\,r_{\mathrm{long}})\bigr)
+\]
+
+Hull gap *now*: \(d_{\mathrm{now}}=\max(0,\ \lVert p\rVert-R)\).
+
+### 16.3 Score: intercept and moving near-pass
+
+\[
+S=\mathrm{clamp}_{01}\bigl(\max(S_{\mathrm{hit}},\,S_{\mathrm{pass}})\bigr)
+\]
+
+`_clamp01` maps NaN → 0 so a bad frame cannot write the JSON token `NaN`.
+
+Ego velocity is \(V_e=v_{\mathrm{ego}}\,\hat{s}\) with \(v_{\mathrm{ego}}=\mathrm{walk\_speed}\) (spline \(ds/dt\), never negative; 0 when seated / halt). Relative velocity \(V_{\mathrm{rel}}=V_{\mathrm{obj},xy}-V_e\). If \(\lVert V_{\mathrm{rel}}\rVert < 0.12\,\mathrm{m/s}\) → **score 0**. A seated lamp, a matching-speed walker, and two bodies at rest are not approaching, overlapping or not.
+
+Planar CPA of the two disk centres:
+
+\[
+t^*=-\frac{p\cdot V_{\mathrm{rel}}}{\lVert V_{\mathrm{rel}}\rVert^2}
+\]
+
+A meet exists when \(t^*\in[-0.12,12]\,\mathrm{s}\) (past times clamped to 0), **or** when the hulls already overlap (`d_now ≤ 0.45 m`) while still diverging. No meet, or \(t^*>12\,\mathrm{s}\) → score 0.
+
+Clearance at the CPA instant: \(d_{\mathrm{clear}}=\max(0,\ \lVert p+t^*V_{\mathrm{rel}}\rVert-R)\). Shared urgency:
+
+\[
+t_{\mathrm{hit}}=\max(t^*,0.05)
+\quad\text{or, if }t^*\approx 0,\quad
+d_{\mathrm{now}}/\max(v_{\mathrm{close}},0.35)
 \]
 
 \[
-S_{\mathrm{hit}}=W\,(0.58+0.42\,U)
+U=1-\exp\bigl(-\lambda_v\max(v_{\mathrm{close}},0)-\lambda_t/t_{\mathrm{hit}}\bigr)
+\qquad
+\mathrm{mix}=0.12+0.88\,U
 \]
 
-**Adjacent high speed** (not a hit): mid-band, peak 0.50, only if `lat_gap>0.05`. A fast neighbour that will miss.
+**Hit (collision course).** Tight envelope — a foot of air at CPA is not a strike.
 
-Return \(\mathrm{clamp}_{01}(S_{\mathrm{hit}}+(1-W)S_{\mathrm{adj}})\). `_clamp01` maps NaN → 0 so a bad frame cannot write the JSON token `NaN`.
+\[
+W_{\mathrm{hit}}=\exp\bigl(-(d_{\mathrm{clear}}/0.28)^2\bigr)
+\qquad\text{(discarded if }W_{\mathrm{hit}}<0.02\text{)}
+\qquad
+S_{\mathrm{hit}}=W_{\mathrm{hit}}\,\mathrm{mix}
+\]
 
-Stationary ego: arrival times divide by **closing** rate \(v_{\mathrm{ego}}-v_s\), never by \(v_{\mathrm{ego}}\). A car driving at a seated walker still produces a time-to-hit. Every division is floored.
+**Near-pass (mover only).** \(\lVert V_{\mathrm{obj}}\rVert \ge 0.20\,\mathrm{m/s}\) **and** \(d_{\mathrm{clear}}\le 1.20\,\mathrm{m}\). World-static furniture cannot take this channel.
+
+\[
+W_{\mathrm{pass}}=\exp\bigl(-(d_{\mathrm{clear}}/1.15)^2\bigr)
+\qquad
+S_{\mathrm{pass}}=W_{\mathrm{pass}}\,\mathrm{mix}
+\]
+
+A car driving at a seated walker still produces a TTC because arrival uses \(V_{\mathrm{rel}}=V_{\mathrm{obj}}\). A far-lane miss has \(d_{\mathrm{clear}}>1.20\,\mathrm{m}\) → both channels 0. A 3 m glancing pedestrian has \(d_{\mathrm{clear}}\sim 0.9\,\mathrm{m}\) → \(S_{\mathrm{pass}}\) amber. Walking into a pothole: \(V_{\mathrm{obj}}=0\) so \(S_{\mathrm{pass}}=0\), but \(d_{\mathrm{clear}}=0\) → \(S_{\mathrm{hit}}\) fires.
+
+`walk_speed` is arc speed, not \(\hypot(ds,d\ell)\). During a 36° crosswalk the direction of \(V_e\) is the look, but \(\lVert V_e\rVert\) is a bit low. Neither channel uses image size.
 
 ### 16.4 Splat
 
-`splat_object` scores, then `splat_bbox` paints the 2-D box’s cells. Occupied cells (pixel overlap > 1.5 px in both axes) keep the full score. Neighbours get a size-aware Gaussian (`σ = half_box + 0.55·cell`). Per-cell **max** — two hazards in one cell do not add to 1.8.
+`splat_object` scores, then paints. If `boxes` (projected inner-part AABBs) is non-empty it uses `splat_boxes`; otherwise the outer 2-D box. `splat_bbox` fills only cells whose rectangle actually overlaps the box by more than 1.5 px on **both** axes. Empty neighbours stay 0 — the model never sees those bounding boxes. Per-cell **max**; two hazards in one cell do not add to 1.8.
 
 Row 0 = **top** of the image (same as `bounding_box_2d`).
 
 `empty_grid` / `finalize_grid` / `frame_spatial_entry` / `episode_spatial_payload` are the JSON helpers. Spatial JSON is **always** written, even with `--no-annotations`.
 
-`python spatial_threat.py` self-tests seated, static-on-gait, adjacent miss, NaN guards, and splat monotonicity.
+`python spatial_threat.py` self-tests: fast vs far head-on, on-gait pothole mid, offset pothole cold, Frenet `path_lat=0` wins over a curved world offset, close jaywalker hot, far-lane miss cold, receding ~0, matching-speed 4 m pedestrian ~0, seated overlap / lamp ~0, approaching car vs seated, walking past a thin pole cold, **3 m glancing mover warns**, **right-side through-crosser is not mirrored**, splat has no bleed, values in \([0,1]\) with no NaN.
 
 ---
 
@@ -1386,9 +1458,10 @@ For each `world.annotatable()` actor:
 7. **Box.** `project_object` with the shared view/proj matrices. `None` → omit.
 8. **Label.** `classify_threat(kin, \|v_obj\|, cfg['threat'])`.
 9. **Extents.** `horizontal_extents(threat_corners, tangent)` for the spatial score.
-10. **Path Frenet.** If the actor has `follow_spline` or is static: `path_s=actor.s-cam.arc_length`, `path_lat=actor.lateral-cam.lateral`. Background-only objects without a spline fall back to world-XY inside `object_threat_score`.
-11. **Splat.** `splat_object(...)`.
-12. **JSON object.** Root origin (not threat point) as `world_position`. Threat-point kinematics for distance / ttc / cpa / relative_velocity. All vectors Y-up. TTC non-finite → `9999.0`.
+10. **Path Frenet.** If the actor has `follow_spline` or is static: `path_s=actor.s-cam.arc_length`, `path_lat=actor.lateral-cam.lateral`. Inside `object_threat_score`, \(\lvert\mathrm{path\_lat}\rvert\le 0.60\,\mathrm{m}\) uses that ribbon point; a larger offset (through-crosser) keeps world XY so a look-turn cannot flip left/right. Background-only objects without a spline never pass path args.
+11. **Inner boxes.** Project inscribed mesh-part AABBs (`LocalBoundCache.inner_world_corner_sets`, scale `INNER_BOX_SCALE=0.85`). Tree / streetlamp: trunk / pole only. Pothole: inset mouth slab.
+12. **Splat.** `splat_object(..., boxes=inner_boxes)`. No neighbour bleed.
+13. **JSON object.** Root origin (not threat point) as `world_position`. Threat-point kinematics for distance / ttc / cpa / relative_velocity. All vectors Y-up. TTC non-finite → `9999.0`.
 
 Camera block: eye position (no Perlin translation), finite-difference velocity (includes gait \(dY/dt\) in Y-up), local pitch/yaw/roll, lens, HFOV, sensor, `ego_mode`, `ego_speed` (0 seated / halt — a consumer can tell “no optical flow” from “sensor dropout”).
 
@@ -1529,19 +1602,19 @@ Pixels: 1920×1080 RGB8 PNG, AgX, opaque film (`film_transparent=False` — no c
 | `flags.truncated` | Box hits the image edge, or < 8 corners in front | Occlusion |
 | `flags.occluded` | Centre-ray hit something else first | Pixel coverage |
 
-`class_name` values you will actually see: `person`, `vehicle`, `bicycle`, `tree`, `threat_cube`, `threat_sphere`, `threat_cylinder`, `threat_pyramid`, `threat_cone`, `threat_capsule`, `threat_lump`, `pothole`, `crater`, `broken_slab`, `debris`, `trash_can`, `scooter`, `barricade`, `tree_branch`, `ac_unit`, `sign`, `truck_door`, `projectile`. Puddle and bench exist in the viewport and are **not** listed.
+`class_name` values you will actually see: `person`, `vehicle`, `bicycle`, `tree`, `streetlamp`, `threat_cube`, `threat_sphere`, `threat_cylinder`, `threat_pyramid`, `threat_cone`, `threat_capsule`, `threat_lump`, `pothole`, `crater`, `broken_slab`, `debris`, `trash_can`, `scooter`, `barricade`, `tree_branch`, `ac_unit`, `sign`, `truck_door`, `projectile`. Puddle and bench exist in the viewport and are **not** listed.
 
 `label_histogram` in `episode.json` counts **(object × frame)**, not unique instances. A 5 s jaywalker is ~150 CRITICAL counts, not 1.
 
 ### 21.2 `spatial_annotations/spatial_annotations.json`
 
-Always written.
+Always written. Each entry is \(\max(S_{\mathrm{hit}},S_{\mathrm{pass}})\) from `object_threat_score` (§16), painted onto cells the inner box covers.
 
 ```json
 {"k": 3, "frames": [{"frame_id": "000000", "matrix": [[0.0, 0.12, 0.0], [0.81, 0.97, 0.41], [0.0, 0.72, 0.0]]}]}
 ```
 
-Row 0 = top of the image. Entries in `[0,1]`. A 3×3 is a tactile-vest resolution, not a segmentation.
+Row 0 = top of the image. Entries in `[0,1]`. A 3×3 is a tactile-vest resolution, not a segmentation. This is **not** the four-class `threat_label`.
 
 ### 21.3 `episode.json`
 
@@ -1549,9 +1622,9 @@ Row 0 = top of the image. Entries in `[0,1]`. A 3×3 is a tactile-vest resolutio
 
 ### 21.4 Worked label: seated vs walking into a trunk
 
-Walking, 1.2 m/s, trunk 2.0 m ahead on the gait, planar off (street). \(V_{\mathrm{rel}}=-V_{\mathrm{cam}}\), TTC ≈ 1.67 s, CPA ≈ 0 → **CRITICAL_THREAT**. Spatial \(W_{\mathrm{path}}=1\).
+Walking, 1.2 m/s, trunk 2.0 m ahead on the gait, planar off (street). \(V_{\mathrm{rel}}=-V_{\mathrm{cam}}\), TTC ≈ 1.67 s, CPA ≈ 0 → **CRITICAL_THREAT**. Spatial \(S_{\mathrm{hit}}\) is high (on-gait intercept, TTC ~1.4 s). \(S_{\mathrm{pass}}=0\) because the trunk is world-static.
 
-Same trunk, seated. \(V_{\mathrm{rel}}=0\), TTC = 9999, **SAFE_STATIC**. Spatial \(W_{\mathrm{stop}}=0\) (not closing), \(W_{\mathrm{path}}=0\) (`t_arr` infinite). Leaves may still sway in RGB. That pair is the point of the foliage design.
+Same trunk, seated. \(V_{\mathrm{rel}}=0\), TTC = 9999, **SAFE_STATIC**. Spatial score is 0 — nothing is approaching, overlapping or not. Leaves may still sway in RGB. That pair is the point of the foliage design.
 
 ---
 
@@ -1688,7 +1761,7 @@ Add energy + elevation ranges and a weight. Teach `apply_domain_randomization` c
 | Command | What must stay true |
 | --- | --- |
 | `python threat_math.py` | Parallel / diverging / head-on / seated / planar / taxonomy priority / no NaN / no ZeroDivision |
-| `python spatial_threat.py` | Seated bollard ~0, static-on-gait high, adjacent miss mid, `inf-inf` guarded, splat max not sum |
+| `python spatial_threat.py` | Fast vs far head-on; on-gait hole mid; offset hole cold; Frenet `path_lat=0` on a curve; close jaywalker; far-lane miss cold; seated 2 m ~0 / overlap high; 3 m glancing crosser warns; right-side through-crosser not mirrored; splat no bleed; no NaN |
 | `python spatial_overlay.py` | PPM header, filter graph parses |
 | `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only |
 | `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds |
@@ -1746,7 +1819,7 @@ Everything a downstream model needs is in those two JSON files plus optional RGB
 | Frenet `(s, lateral)` | Arc length along the **road** centreline + signed offset along \(\hat{t}\times\hat{z}\) |
 | Threat point | The 3-D point TTC/CPA use. Not the mesh origin. Not the 2-D box centre |
 | Threat label | One of four strings from `classify_threat` |
-| Spatial matrix | K×K body-aware heat, separate product from the four-class label |
+| Spatial matrix | K×K heat: \(\max(S_{\mathrm{hit}},S_{\mathrm{pass}})\), separate from the four-class label |
 | Injector | Closed-form placement of a forced event after the rig exists |
 | Compose | Occupancy reservation so several injectors share one street |
 | Chaos | Appearance dial, not motion. `--chaos 0` is tame materials |

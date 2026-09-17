@@ -123,6 +123,13 @@ CONFIG: dict[str, Any] = {
         # the episode.
         "diagonal_target_frac": (0.45, 1.00),
         "diagonal_span": (0.12, 0.85),
+        "hasty": {
+            "yaw_amp_deg": (25.0, 40.0),
+            "pitch_amp_deg": (12.0, 20.0),
+            "roll_amp_deg": (8.0, 12.0),
+            "freq_hz": (2.5, 6.0),
+            "bob_m": (0.025, 0.050),
+        },
     },
     # 1-D fractal Perlin (fBm) applied to local camera Euler angles.
     "jitter": {
@@ -405,6 +412,7 @@ CONFIG: dict[str, Any] = {
             "parked_car_opposite",
             "crossing_street",
             "cyclist_overtake",
+            "hasty_look",
         ),
         "near_miss_pool": (
             "near_miss_pass",
@@ -418,6 +426,8 @@ CONFIG: dict[str, Any] = {
             "cube_near_miss",
             "shape_near_miss",
             "pothole_near",
+            "tree_near",
+            "lamp_near",
             "cyclist_weaving",
             "group_crossing",
             "scooter_from_sidewalk",
@@ -429,6 +439,8 @@ CONFIG: dict[str, Any] = {
             "sudden_stop",
             "swerve_vehicle",
             "pothole_on_path",
+            "tree_on_path",
+            "lamp_on_path",
             "cube_head_on",
             "cube_from_left",
             "cube_from_right",
@@ -472,6 +484,10 @@ CONFIG: dict[str, Any] = {
         "pothole_on_path_lead_m": 7.8,
         "pothole_near_lead_m": 7.2,
         "pothole_offset_lead_m": 8.0,
+        "tree_on_path_lead_m": 7.5,
+        "tree_near_lead_m": 7.2,
+        "lamp_on_path_lead_m": 7.5,
+        "lamp_near_lead_m": 7.2,
         # Time until closest approach for a walking-speed crosser (not a sprint).
         "jaywalker_ttc": 3.2,
         "cross_person_speed": (1.00, 1.35),

@@ -32,6 +32,8 @@ break that assumption:
                     walker visibly turns onto the crossing.
 ``erratic``         fBm sidesteps plus speed modulation, with a chance of a
                     complete stop partway through.
+``hasty``           high-frequency look jitter (large yaw/pitch/roll). Body
+                    path is still the gait tangent so TTC does not flicker.
 ``seated``          on a bench: ``walk_speed = 0`` and a lower eye height.
 
 Arc length under a varying speed
@@ -156,7 +158,7 @@ class CameraState:
 
 
 EGO_MODES: tuple[str, ...] = (
-    "walk", "diagonal_cross", "crosswalk", "erratic", "seated",
+    "walk", "diagonal_cross", "crosswalk", "erratic", "hasty", "seated",
 )
 
 
@@ -185,6 +187,12 @@ class EgoProfile:
     speed_wobble: float = 0.0
     halt_t0: Optional[float] = None
     halt_t1: Optional[float] = None
+    # hasty: high-frequency look; body path still uses the gait tangent.
+    hasty_yaw_deg: float = 32.0
+    hasty_pitch_deg: float = 16.0
+    hasty_roll_deg: float = 10.0
+    hasty_hz: float = 4.0
+    hasty_bob_m: float = 0.035
 
     @property
     def stationary(self) -> bool:
@@ -259,11 +267,11 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
         if mode == "crosswalk":
             lo, hi = ecfg.get("crosswalk_target_frac", (0.88, 1.00))
             f0, f1 = ecfg.get("crosswalk_span", (0.22, 0.78))
-            min_start, min_dur = 0.45, 1.80
+            min_start, min_dur = 0.45, 3.00
         else:
             lo, hi = ecfg.get("diagonal_target_frac", (0.45, 1.00))
             f0, f1 = ecfg.get("diagonal_span", (0.12, 0.85))
-            min_start, min_dur = 0.20, 0.80
+            min_start, min_dur = 0.20, 3.00
         prof.diag_frac = float(rng.uniform(float(lo), float(hi)))
         # Floor in seconds so a 6-frame QA clip does not compress the turn
         # into a 90° snap at t=0 (injectors still see the same schedule).
@@ -284,6 +292,20 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
             t0 = float(rng.uniform(float(h_lo), float(h_hi)))
             prof.halt_t0 = min(t0, max(0.2, span - 0.6))
             prof.halt_t1 = prof.halt_t0 + float(rng.uniform(float(d_lo), float(d_hi)))
+        return prof
+
+    if mode == "hasty":
+        hj = dict(ecfg.get("hasty") or {})
+        y_lo, y_hi = hj.get("yaw_amp_deg", (25.0, 40.0))
+        p_lo, p_hi = hj.get("pitch_amp_deg", (12.0, 20.0))
+        r_lo, r_hi = hj.get("roll_amp_deg", (8.0, 12.0))
+        f_lo, f_hi = hj.get("freq_hz", (2.5, 6.0))
+        b_lo, b_hi = hj.get("bob_m", (0.025, 0.050))
+        prof.hasty_yaw_deg = float(rng.uniform(float(y_lo), float(y_hi)))
+        prof.hasty_pitch_deg = float(rng.uniform(float(p_lo), float(p_hi)))
+        prof.hasty_roll_deg = float(rng.uniform(float(r_lo), float(r_hi)))
+        prof.hasty_hz = float(rng.uniform(float(f_lo), float(f_hi)))
+        prof.hasty_bob_m = float(rng.uniform(float(b_lo), float(b_hi)))
         return prof
 
     return prof
@@ -446,7 +468,7 @@ class CameraRig:
         if prof.mode in ("diagonal_cross", "crosswalk") and abs(prof.diag_frac) > 1e-6:
             t0, t1 = prof.diag_t0, prof.diag_t1
             u = 0.0 if t <= t0 else (1.0 if t >= t1 else (t - t0) / max(t1 - t0, 1e-3))
-            u = u * u * (3.0 - 2.0 * u)
+            u = u * u * u * (u * (u * 6.0 - 15.0) + 10.0)
             # Cross toward the far kerb: opposite sign to the start lateral.
             # Full span is base → −base, i.e. 2|base|, with a floor so a
             # centreline path (base ≈ 0) still produces a real crossing.
@@ -481,6 +503,23 @@ class CameraRig:
 
     def sample_angles(self, t: float) -> tuple[float, float, float]:
         """Return (pitch, yaw, roll) in radians from the Perlin streams."""
+        if self.profile.mode == "hasty":
+            hz = max(0.5, float(self.profile.hasty_hz))
+
+            def hasty_axis(amp_deg: float, noise: Perlin1D, phase: float) -> float:
+                n = noise.fbm(
+                    t * hz + phase,
+                    octaves=3,
+                    persistence=0.48,
+                    lacunarity=2.15,
+                )
+                return math.radians(float(amp_deg)) * n
+
+            pitch = hasty_axis(self.profile.hasty_pitch_deg, self._pitch_noise, self._pitch_phase)
+            yaw = hasty_axis(self.profile.hasty_yaw_deg, self._yaw_noise, self._yaw_phase)
+            roll = hasty_axis(self.profile.hasty_roll_deg, self._roll_noise, self._roll_phase)
+            return pitch, yaw, roll
+
         j = self.cfg["jitter"]
 
         def axis(name: str, noise: Perlin1D, phase: float) -> float:
@@ -517,7 +556,12 @@ class CameraRig:
         g = self.cfg["gait"]
         a = float(g["amplitude_m"]) * self._gait_gain(t)
         f = float(g["frequency_hz"])
-        return self.profile.eye_height + a * math.sin(2.0 * math.pi * f * t)
+        z = self.profile.eye_height + a * math.sin(2.0 * math.pi * f * t)
+        if self.profile.mode == "hasty":
+            z += float(self.profile.hasty_bob_m) * math.sin(
+                2.0 * math.pi * max(0.5, float(self.profile.hasty_hz)) * t
+            )
+        return z
 
     def gait_pitch_bob(self, t: float) -> float:
         """Tiny nod locked to the bounce (optional, not in the spec minimum)."""
