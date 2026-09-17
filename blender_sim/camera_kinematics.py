@@ -31,7 +31,9 @@ break that assumption:
                     lateral change; gaze follows the motion vector so the
                     walker visibly turns onto the crossing.
 ``erratic``         fBm sidesteps plus speed modulation, with a chance of a
-                    complete stop partway through.
+                    complete stop partway through. The halt is a raised-cosine
+                    ramp, not a hard 0, and gaze stays the road tangent so a
+                    sidestep cannot yaw the world 90°.
 ``hasty``           high-frequency look jitter (large yaw/pitch/roll). Body
                     path is still the gait tangent so TTC does not flicker.
 ``seated``          on a bench: ``walk_speed = 0`` and a lower eye height.
@@ -39,7 +41,7 @@ break that assumption:
 Arc length under a varying speed
 --------------------------------
 ``walk`` has the closed form :math:`s(t) = s_0 + v t`. ``erratic`` does not:
-its speed is an fBm signal with hard hesitation windows, so ``s(t)`` is
+its speed is an fBm signal with ramped hesitation windows, so ``s(t)`` is
 :math:`s_0 + \\int_0^t v(\\tau)\\,d\\tau` with no analytic antiderivative.
 The rig therefore integrates once at construction onto a fixed-step table
 and interpolates it. That matters for correctness, not just speed: scenario
@@ -62,7 +64,10 @@ import random
 from dataclasses import dataclass, field
 from typing import Any, Optional, Sequence
 
-from mathutils import Euler, Matrix, Vector
+try:
+    from mathutils import Euler, Matrix, Vector
+except ImportError:  # system Python: halt-gain self-test still runs
+    Euler = Matrix = Vector = object  # type: ignore[misc, assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +136,55 @@ class Perlin1D:
 
 
 # ---------------------------------------------------------------------------
+# Halt window (raised cosine). Pure math so it can be tested without bpy.
+# ---------------------------------------------------------------------------
+
+HALT_RAMP_S = 0.40  # default ease in/out inside [t0, t1]
+
+
+def halt_speed_gain(
+    t: float,
+    t0: Optional[float],
+    t1: Optional[float],
+    ramp_s: float = HALT_RAMP_S,
+) -> float:
+    """Cruise multiplier: 1 outside a halt, 0 in the middle, C1 at the joints.
+
+    Ramps live *inside* ``[t0, t1]`` so injectors that read the window still
+    see a real stop, not a dip that never reaches zero. A hard box
+    ``t0 ≤ t < t1 → 0`` freezes optical flow in one frame and, when gaze
+    used the sidestep rate, yawed the world ~90°.
+    """
+    if t0 is None or t1 is None:
+        return 1.0
+    t0f = float(t0)
+    t1f = float(t1)
+    if t1f <= t0f:
+        return 1.0
+    span = t1f - t0f
+    ramp = min(max(0.0, float(ramp_s)), 0.45 * span)
+    tt = float(t)
+    if ramp < 1e-4:
+        return 0.0 if t0f <= tt < t1f else 1.0
+    if tt < t0f:
+        return 1.0
+    if tt < t0f + ramp:
+        u = (tt - t0f) / ramp
+        return 0.5 * (1.0 + math.cos(math.pi * u))  # 1 → 0, derivative 0 at ends
+    if tt < t1f - ramp:
+        return 0.0
+    if tt < t1f:
+        u = (tt - (t1f - ramp)) / ramp
+        return 0.5 * (1.0 - math.cos(math.pi * u))  # 0 → 1
+    return 1.0
+
+
+def _look_blends_lateral(mode: str) -> bool:
+    """Only a street crossing should yaw the body toward the lateral rate."""
+    return mode in ("diagonal_cross", "crosswalk")
+
+
+# ---------------------------------------------------------------------------
 # Camera state
 # ---------------------------------------------------------------------------
 
@@ -187,6 +241,7 @@ class EgoProfile:
     speed_wobble: float = 0.0
     halt_t0: Optional[float] = None
     halt_t1: Optional[float] = None
+    halt_ramp: float = HALT_RAMP_S
     # hasty: high-frequency look; body path still uses the gait tangent.
     hasty_yaw_deg: float = 32.0
     hasty_pitch_deg: float = 16.0
@@ -292,6 +347,7 @@ def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 5
             t0 = float(rng.uniform(float(h_lo), float(h_hi)))
             prof.halt_t0 = min(t0, max(0.2, span - 0.6))
             prof.halt_t1 = prof.halt_t0 + float(rng.uniform(float(d_lo), float(d_hi)))
+            prof.halt_ramp = float(ecfg.get("halt_ramp_s", HALT_RAMP_S))
         return prof
 
     if mode == "hasty":
@@ -402,14 +458,13 @@ class CameraRig:
         prof = self.profile
         if prof.stationary:
             return 0.0
-        if prof.halt_t0 is not None and prof.halt_t1 is not None:
-            if prof.halt_t0 <= t < prof.halt_t1:
-                return 0.0
         v = float(self.walk_speed)
         if prof.speed_wobble > 1e-6:
             n = self._speed_noise.fbm(t * 0.45, octaves=3, persistence=0.5, lacunarity=2.0)
             v *= 1.0 + prof.speed_wobble * n
-        return max(0.0, v)
+        v = max(0.0, v)
+        gain = halt_speed_gain(t, prof.halt_t0, prof.halt_t1, prof.halt_ramp)
+        return v * gain
 
     def _build_arc_table(self, horizon_s: float = 90.0) -> None:
         """Cumulative-trapezoid table of s(t) over [0, horizon].
@@ -475,8 +530,13 @@ class CameraRig:
             span = max(2.0 * abs(lat), 2.5)
             lat = lat - math.copysign(prof.diag_frac * span, lat if lat else 1.0) * u
         elif prof.mode == "erratic" and prof.sidestep_amp > 1e-6:
+            # Drive the sidestep by distance walked, not wall-clock. A halt
+            # then freezes the pose instead of sliding the body sideways
+            # while "stopped" (and yawing the camera into that slide).
+            dist = self.travelled(t)
+            spatial = float(prof.sidestep_rate) / max(float(self.walk_speed), 0.35)
             n = self._step_noise.fbm(
-                t * prof.sidestep_rate, octaves=3, persistence=0.5, lacunarity=2.05
+                dist * spatial, octaves=3, persistence=0.5, lacunarity=2.05
             )
             lat = lat + prof.sidestep_amp * n
         return self._clamp_lateral(lat)
@@ -673,17 +733,18 @@ class CameraRig:
         return origin, tangent, right
 
     def _look_direction(self, t: float, path_tan: Vector) -> Vector:
-        """Gaze along Frenet motion so a crossing walker turns onto the road.
+        """Gaze along the gait, or along Frenet motion on a street crossing.
 
-        Walk / seated / halt keep the road tangent. Crosswalk and diagonal
-        modes blend in the lateral rate so heading is not a world teleport.
+        Walk / seated / hasty / erratic / halt keep the *road* tangent so a
+        sidestep is a sway, not a 90° world cut. Crosswalk and diagonal
+        blend in the lateral rate so heading turns onto the crossing.
         """
         tan = Vector(path_tan)
         if tan.length > 1e-8:
             tan.normalize()
         else:
             tan = Vector((0.0, 1.0, 0.0))
-        if self.profile.stationary:
+        if self.profile.stationary or not _look_blends_lateral(self.profile.mode):
             return tan
         ds = float(self.speed_at(t))
         h = 0.06
@@ -770,3 +831,30 @@ def finite_difference_velocity(
     if dt <= 1e-8:
         return Vector((0.0, 0.0, 0.0))
     return (Vector(curr) - Vector(prev)) / dt
+
+
+def _self_test() -> None:
+    g = halt_speed_gain
+    assert g(0.0, None, None) == 1.0
+    assert abs(g(0.0, 2.0, 4.0, 0.40) - 1.0) < 1e-12
+    assert abs(g(2.0, 2.0, 4.0, 0.40) - 1.0) < 1e-9  # ramp starts here
+    assert g(3.0, 2.0, 4.0, 0.40) == 0.0
+    assert abs(g(4.0, 2.0, 4.0, 0.40) - 1.0) < 1e-9
+    assert abs(g(5.0, 2.0, 4.0, 0.40) - 1.0) < 1e-12
+    # Mid-ramp is ½; ends of the cosine have zero derivative.
+    mid = g(2.20, 2.0, 4.0, 0.40)
+    assert abs(mid - 0.5) < 1e-9, mid
+    dt = 1e-4
+    d0 = (g(2.0 + dt, 2.0, 4.0, 0.40) - g(2.0 - dt, 2.0, 4.0, 0.40)) / (2.0 * dt)
+    d1 = (g(2.4 + dt, 2.0, 4.0, 0.40) - g(2.4 - dt, 2.0, 4.0, 0.40)) / (2.0 * dt)
+    assert abs(d0) < 0.02, d0
+    assert abs(d1) < 0.02, d1
+    assert _look_blends_lateral("crosswalk") and _look_blends_lateral("diagonal_cross")
+    assert not _look_blends_lateral("erratic")
+    assert not _look_blends_lateral("walk")
+    assert not _look_blends_lateral("hasty")
+    print("camera_kinematics self-test: OK")
+
+
+if __name__ == "__main__":
+    _self_test()

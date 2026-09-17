@@ -63,7 +63,7 @@ These are the reasons the code looks the way it does. Almost every “why” in 
 
 **C1. One Frenet parameter.** Every actor and the camera share the **road centreline** arc-length `s` plus a signed `lateral` (positive = road-right, \(\hat{r}=\hat{t}\times\hat{z}\)). The sidewalk is an offset of that spline, not a second path. Mixing a resampled sidewalk spline’s arc length with road `s` would desynchronise injectors from the annotator.
 
-**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix is a separate product: body intercept × TTC, plus a logistic on how close the hulls are *now*. Those two products answer different questions and must not be collapsed.
+**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix is a separate product: body intercept × TTC, plus a moving near-pass term. Those two products answer different questions and must not be collapsed.
 
 **C3. Stationary ego is a first-class state.** Seated / hesitate have `walk_speed = 0`. Every solver must accept \(V_{\mathrm{cam}}=0\) without dividing by it. Intercepts spawn at \(\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},\,v_{\mathrm{obj}})\tau\), never on top of the HMD.
 
@@ -344,7 +344,7 @@ Never:
 | `scenario_compose.py` | no | CLI tokens, aliases, Frenet occupancy |
 | `humanoid.py` | yes | Articulated pedestrian + Winter walk cycle |
 | `materials.py` | yes | Procedural PBR, chaos, Blender 4/5 Mix-node guards |
-| `spatial_threat.py` | no | Intercept×TTC + proximity sigmoid; K×K splat |
+| `spatial_threat.py` | no | Intercept×TTC + moving near-pass; K×K splat |
 | `spatial_overlay.py` | no | PPM heat + ffmpeg overlay graph |
 | `gen_dataset.py` | no | Balanced pack planner; execs `run.sh --plan` |
 | `main.py` | yes | CLI, episode loop, annotation JSON, render, mux |
@@ -519,7 +519,7 @@ Snapshot consumed by the annotator and written into `camera_data`:
 | `t` | Episode time (s) |
 | `position` | Eye, Blender world (Frenet + curb + gait). **No** Perlin translation |
 | `velocity` | Finite difference of that eye (includes gait \(dZ/dt\)) |
-| `tangent`, `right`, `up` | `tangent` is `_look_direction` (road for walk/seated/hasty; blended for crosswalk/diagonal). `right`/`up` from that look × world-up. Perlin jitter is **not** in `tangent` |
+| `tangent`, `right`, `up` | `tangent` is `_look_direction` (road for walk/seated/hasty/**erratic**; blended for crosswalk/diagonal). `right`/`up` from that look × world-up. Perlin jitter is **not** in `tangent` |
 | `pitch`, `yaw`, `roll` | Camera-**local** jitter + gait pitch bob (radians) |
 | `matrix_world` | The 4×4 actually written to the object |
 | `walk_speed` | `speed_at(t)`: spline \(ds/dt\), 0 seated / halt. Not \(\hypot(ds,d\ell)\) during a crossing |
@@ -542,7 +542,7 @@ Drawn once per episode from `cfg['ego']`. Separated from `CameraRig` so it can b
 
 Lateral for both crossing modes uses Perlin **smootherstep** \(u^3(u(6u-15)+10)\), not cubic \(u^2(3-2u)\). Span is \(\max(2|L|, 2.5)\) so a centreline start still produces a real crossing. Heading follows `_look_direction` (motion vector, capped at 50° off the road).
 
-**`erratic`.** Sidestep amplitude \(U(0.22,0.80)\) m at \(U(0.10,0.38)\) Hz (fBm). Speed wobble \(U(0.15,0.55)\). 55% chance of a halt inside `hesitate_window_s` for `hesitate_duration_s`, clamped so it lands before the last 0.6 s.
+**`erratic`.** Sidestep amplitude \(U(0.22,0.80)\) m at \(U(0.10,0.38)\) Hz (fBm of **distance walked**, so a halt freezes the sway). Speed wobble \(U(0.15,0.55)\). 55% chance of a halt inside `hesitate_window_s` for `hesitate_duration_s`, clamped so it lands before the last 0.6 s. The halt is a raised-cosine ramp of `halt_ramp_s` (0.40 s) *inside* the window — a hard 0 froze optical flow in one frame. Gaze stays the road tangent; sidestep is a sway, not a yaw.
 
 **`hasty`.** Not in `mode_weights` (auto never draws it). `hasty_look` sets `force_ego_mode="hasty"`. Body still walks the gait; look is a faster Perlin at \(U(2.5,6)\) Hz with yaw/pitch/roll amps from `cfg['ego']['hasty']`, plus extra vertical bob `hasty_bob_m`.
 
@@ -560,7 +560,7 @@ Constructor arguments: Blender camera object, road `PathSpline` (duck-typed: `ev
 - Seated: lateral += `copysign(0.35, lateral)`.
 - Builds the arc table if needed.
 
-**`speed_at(t)`** is the single source of truth for “is the ego moving”. Arc table, gait amplitude, and exported `walk_speed` all read it. Seated → 0. Halt window → 0. Else `walk_speed * (1 + wobble * fBm(t*0.45))`, never negative.
+**`speed_at(t)`** is the single source of truth for “is the ego moving”. Arc table, gait amplitude, and exported `walk_speed` all read it. Seated → 0. Else `walk_speed * (1 + wobble * fBm(t*0.45))`, never negative, then multiplied by `halt_speed_gain` (1 outside a halt, raised-cosine 1→0→1 inside `[t0,t1]`, C1 at the joints).
 
 **`_build_arc_table`** — cumulative trapezoid of `speed_at` at `_arc_dt=1/120` s over 90 s (~10k floats). Skipped entirely for `walk` and `seated` (closed form \(s=vt\)). Only modulated modes pay for it.
 
@@ -568,7 +568,7 @@ Constructor arguments: Blender camera object, road `PathSpline` (duck-typed: `ev
 
 **`arc_length_at(t)`** — `sidewalk_s0 + travelled(t)`, clamped to `(0.05, length-0.05)`. `sidewalk_s0` is **3.0 m**. That keeps the first frame from sitting inside a building that starts at s=0, and it is the origin injectors use as “now”.
 
-**`lateral_at(t)`** — walk/seated: constant (then clamp). `diagonal_cross` / `crosswalk`: smootherstep \(u^3(u(6u-15)+10)\) toward the far kerb. Erratic: base + `sidestep_amp * fBm(t * rate)`. Then `_clamp_lateral`.
+**`lateral_at(t)`** — walk/seated: constant (then clamp). `diagonal_cross` / `crosswalk`: smootherstep \(u^3(u(6u-15)+10)\) toward the far kerb. Erratic: base + `sidestep_amp * fBm(travelled(t) * rate / v)`. Then `_clamp_lateral`.
 
 **`max_time()`** — remaining = `length - s0 - 2`. Seated → `1e6`. No table → `remaining / max(v, 1e-3)`. With table → first sample whose travelled ≥ remaining. Never divides by a halted speed.
 
@@ -587,7 +587,7 @@ Constructor arguments: Blender camera object, road `PathSpline` (duck-typed: `ev
 **`update(t, dt)`** — the sim-loop call:
 
 1. Frenet origin at `(arc_length_at, lateral_at)`. Origin Z is **curb**, not asphalt, even when a diagonal crossing is on the road — a known simplification (the walker does not step down 12 cm in the integrator). Park curb is 0, so it is exact there.
-2. `look = _look_direction(t, path_tan)`: road tangent when lateral rate is ~0; otherwise `normalize(tan·ds + right·dlat)`, clamped to 50° off the road. `right = look × world_up`, `up = right × look`.
+2. `look = _look_direction(t, path_tan)`: **road tangent** for walk / seated / hasty / erratic. Crosswalk / diagonal only: `normalize(tan·max(ds,0.45) + right·dlat)`, clamped to 50° off the road. Feeding sidestep `dlat` into gaze on a halt used to yaw the world ~90° in one frame. `right = look × world-up`, `up = right × look`.
 3. Add gait height.
 4. Sample jitter + pitch bob.
 5. `_compose_matrix`: columns `(right, up, −look)` so local −Z = +look. Jitter is Euler XYZ **in camera space**, then `rot_base @ rot_jitter`.
@@ -712,7 +712,7 @@ On the inside of a tight corner, a large lateral offset lands back on the paveme
 
 `max_abs_lateral` is set at build time to `road_half + sidewalk_w - corridor_margin` (margin 0.22 m). Facades sit further out at `road_half + sidewalk_w + building_setback`.
 
-`ground_z(lat)` — curb on the sidewalk band, 0 on asphalt.
+`ground_z(lat)` — curb on the sidewalk band, 0 on asphalt, raised-cosine blend over ~0.35 m of lateral so a through-crosser does not pop 12 cm at the kerb.
 
 `world_to_sl` / `world` — project / offset convenience.
 
@@ -890,8 +890,8 @@ See the field table in §11.19. `update(t, dt, corridor)`:
    - Integrate `s += ds*dt`. Integrate lateral toward target without overshoot. Then add `_wander_rate*dt` (differenced displacement; first sample returns 0 so frame 0 does not teleport).
    - `corridor.confine`.
    - `location = p + right*lat`, Z = `origin_z + ground_z(lat)`.
-   - `velocity = tan*ds + right*(vlat + v_wander)` — wander is in the **reported** velocity so TTC sees the true instantaneous motion.
-   - `look_along` on the horizontal heading (or `±tan` if stopped in s).
+   - `velocity` is the **actual** \(\Delta s,\Delta\mathrm{lat}\) after confine, not the command. A wall used to freeze the mesh while TTC still saw a slide, and heading snapped 90°.
+   - Heading follows velocity when \(\lVert v\rVert > 0.12\,\mathrm{m/s}\); otherwise the last yaw is kept (no snap to the road). `look_flip` still reverses a backing car.
    - **Then** `_tick_visuals` (gait / wheels / foliage).
 4. Else `hold_velocity` world step (legacy; street actors should not hit this), or raw `location += velocity*dt`.
 
@@ -964,7 +964,7 @@ See the field table in §11.19. `update(t, dt, corridor)`:
 Shared helpers:
 
 - `_spawn_kind(kind, s, lat, heading_sign, cube_size, cube_z)` — person / vehicle / bicycle / shape.
-- `_bind(...)` — confine, `reserve` if composing (may flip lat / lane / nudge s), write speed / lat / turn / stop, snap location + `look_along`, `_append`.
+- `_bind(...)` — confine, `reserve` if composing (may flip lat / lane / nudge s), write speed / lat / turn / stop, snap location + `look_along`, `_append`. `lat_ease` is armed for cut-in / merge, **not** for `through` / `dart` (those enter already walking; a full-span smootherstep left them frozen on the FOV edge).
 - `_cam_s` / `_cam_sl` — prefer `rig.arc_length_at` so hesitation is in the intercept.
 - `_ego_speed` — may be 0. Never floored to 0.25.
 - `_gait_lat` — `state.sidewalk_lateral`.
@@ -974,7 +974,7 @@ Shared helpers:
 - `_frustum_half_width(depth, frac)` — `depth * tan(0.5*hfov*frac)`, min 1.20 m. Through-crossers spawn on a FOV edge, not a building face.
 - `_scale_person` — uniform scale for `child_darting` if the child mesh path is not used; the real child path uses `spawn_humanoid(child=True)`.
 - `_inject_oncoming` — spawn at \(s_0+\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},v_{\mathrm{obj}})\tau\), lateral = gait + `dlat` (or opposite sidewalk). Speed is **negative** (toward the camera) for oncoming kinds. Seated still gets \(v_{\mathrm{obj}}\tau\) ahead.
-- `_inject_through_cross` — enter one FOV/corridor edge, `lat_target` the other edge, `speed=0` (pure lateral), `behavior='through'`. Depth 3.8–7 m plus compose stride. CPA is a small lateral graze of the gait line, not a teleport.
+- `_inject_through_cross` — enter one FOV/corridor edge, `lat_target` the other edge, `speed=0` (pure lateral), `behavior='through'`. Depth 3.8–7 m plus compose stride. CPA is a small lateral graze of the gait line, not a teleport. Constant `lat_speed` (no rest-at-edge ease).
 - `_inject_jaywalk_turn` — side entry, then `turn_t` blends into along-track toward or away from the camera.
 - `_inject_static_shapes` — `n=1` one cube; `n=0` draws 2–4 mixed shapes. On gait, 2.55 m apart, lead 5.4 m + static stride.
 - `_inject_pothole` — lead from config, `dlat` 0 / 0.85 / 1.80. On-gait: pothole/crater/broken_slab. Offset may also be debris.
@@ -1273,7 +1273,7 @@ Relative motion is required. If \(\lVert V_{\mathrm{rel}}\rVert \lesssim 0.12\,\
 - \(S_{\mathrm{hit}}\) — constant-velocity **body intercept × TTC urgency**. Hulls on a collision course: a hole you will step in, a head-on car, a child cutting through the chest. A far head-on car with TTC ≈ 4 s is amber; the same car at TTC ≈ 1 s is red.
 - \(S_{\mathrm{pass}}\) — the **other body is moving**, and will pass close even if the hulls miss. A person filling the camera at ~3 m with a 1.5 m glance still warns. A parked car or lamp you walk past does **not**: they are world-static, so only \(S_{\mathrm{hit}}\) can light them, and only if you will strike.
 
-Ego motion for the solve is **`walk_speed` along `cam.tangent`**, not the jittered eye, so a pothole on the gait does not flicker as the head bobs. `cam.tangent` is `_look_direction`: road tangent for walk / seated / hasty; blended gait+lateral (capped at 50° off the road) for `crosswalk` / `diagonal_cross`. Perlin pitch/yaw/roll is applied only in the camera matrix, not here. Heat **paint** uses the camera projection, so a hasty look moves the blob with the RGB.
+Ego motion for the solve is **`walk_speed` along `cam.tangent`**, not the jittered eye, so a pothole on the gait does not flicker as the head bobs. `cam.tangent` is `_look_direction`: road tangent for walk / seated / hasty / erratic; blended gait+lateral (capped at 50° off the road) for `crosswalk` / `diagonal_cross`. Perlin pitch/yaw/roll is applied only in the camera matrix, not here. Heat **paint** uses the camera projection, so a hasty look moves the blob with the RGB.
 
 JSON `threat_label` / TTC / CPA stay the **point-mass** solve in `threat_math.py` (`relative_kinematics` + `classify_threat`). The matrix is body-aware and can disagree with the label on purpose (C2).
 
@@ -1763,6 +1763,7 @@ Add energy + elevation ranges and a weight. Teach `apply_domain_randomization` c
 | `python threat_math.py` | Parallel / diverging / head-on / seated / planar / taxonomy priority / no NaN / no ZeroDivision |
 | `python spatial_threat.py` | Fast vs far head-on; on-gait hole mid; offset hole cold; Frenet `path_lat=0` on a curve; close jaywalker; far-lane miss cold; seated 2 m ~0 / overlap high; 3 m glancing crosser warns; right-side through-crosser not mirrored; splat no bleed; no NaN |
 | `python spatial_overlay.py` | PPM header, filter graph parses |
+| `python camera_kinematics.py` | Halt gain is 1→0→1 with zero derivative at the joints; only crosswalk/diagonal blend gaze with lateral |
 | `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only |
 | `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds |
 | `./run.sh --episodes 1 --scenario safe_walk --no-render --output /tmp/btp` | `objects>0` if the street has people; `cleanup: purged` is large |

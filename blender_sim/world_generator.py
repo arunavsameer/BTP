@@ -392,10 +392,24 @@ class StreetCorridor:
         return max(0.20, float(raw) - max(0.0, float(pad)))
 
     def ground_z(self, lateral: float) -> float:
-        """Road plane is z=0; sidewalks sit on the curb."""
-        if abs(float(lateral)) >= self.road_half - 0.08:
-            return float(self.curb_height)
-        return 0.0
+        """Road plane is z=0; sidewalks sit on the curb.
+
+        The kerb is a raised-cosine over ~0.35 m of lateral so a through-
+        crosser does not pop 12 cm when they leave the asphalt.
+        """
+        curb = float(self.curb_height)
+        if curb <= 1e-6:
+            return 0.0
+        edge = float(self.road_half) - 0.08
+        blend = 0.18
+        a = abs(float(lateral))
+        if a >= edge + blend:
+            return curb
+        if a <= edge - blend:
+            return 0.0
+        u = (a - (edge - blend)) / max(2.0 * blend, 1e-3)
+        u = u * u * (3.0 - 2.0 * u)
+        return curb * u
 
     def confine(
         self,
@@ -1051,6 +1065,8 @@ class Actor:
         if self.follow_spline is not None:
             ds, vlat = self._commanded_rates(t)
             ds *= self._speed_scale(t)
+            s_prev = self.s
+            lat_prev = self.lateral
             self.s = self.s + ds * dt
             if abs(vlat) > 1e-8:
                 step = vlat * dt
@@ -1089,6 +1105,17 @@ class Actor:
             else:
                 self.s = min(max(0.05, self.s), max(0.10, self.follow_spline.length - 0.05))
 
+            # Velocity is the pose that actually stuck, not the command.
+            # Confine used to zero the step then leave vlat in velocity —
+            # the mesh froze against the kerb while TTC thought it was
+            # still sliding, and heading snapped 90°.
+            if dt > 1e-8:
+                ds_act = (self.s - s_prev) / dt
+                vlat_act = (self.lateral - lat_prev) / dt
+            else:
+                ds_act = ds
+                vlat_act = vlat + v_wander
+
             p, tan, right = self.follow_spline.frame(self.s)
             loc = p + right * self.lateral
             if corridor is not None:
@@ -1096,13 +1123,17 @@ class Actor:
             else:
                 loc.z = self.origin_z
             self.obj.location = loc
-            self.velocity = tan * ds + right * (vlat + v_wander)
-            heading = self.velocity if self.velocity.length > 1e-4 else (
-                tan if ds >= 0.0 else -tan
-            )
-            if self.look_flip:
-                heading = Vector((-heading.x, -heading.y, -heading.z))
-            self._apply_heading(Vector((heading.x, heading.y, 0.0)), dt)
+            self.velocity = tan * ds_act + right * vlat_act
+            if self.velocity.length > 0.12:
+                heading = self.velocity
+            elif self._heading_yaw is None:
+                heading = tan if ds_act >= 0.0 else -tan
+            else:
+                heading = None
+            if heading is not None:
+                if self.look_flip:
+                    heading = Vector((-heading.x, -heading.y, -heading.z))
+                self._apply_heading(Vector((heading.x, heading.y, 0.0)), dt)
             self._tick_visuals(t, dt)
             return
 
@@ -5019,7 +5050,10 @@ class WorldGenerator:
         actor.post_speed = post_speed
         actor.post_lat_speed = abs(float(post_lat_speed))
         actor.post_lat_target = post_lat_target
-        if lat_target is not None:
+        if lat_target is not None and behavior not in ("through", "dart"):
+            # Full-span smootherstep starts at rest. A through-crosser on the
+            # FOV edge would sit still for a second then lurch — skip it so
+            # they enter already walking. Cut-in / merge still ease.
             actor.lat_ease_from = float(actor.lateral)
             actor.lat_ease_t0 = float(swerve_t) if swerve_t is not None else 0.0
             dist = abs(float(lat_target) - float(actor.lateral))

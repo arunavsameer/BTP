@@ -118,6 +118,9 @@ CONFIG: dict[str, Any] = {
         "hesitate_prob": 0.55,
         "hesitate_window_s": (0.9, 2.6),
         "hesitate_duration_s": (0.5, 1.6),
+        # Raised-cosine ramps inside the halt window so optical flow does
+        # not freeze in a single frame (a hard 0 looks like a cut).
+        "halt_ramp_s": 0.40,
         # Diagonal: fraction of the way to the opposite kerb (1.0 = all the
         # way across), and when the crossing starts / ends as a fraction of
         # the episode.

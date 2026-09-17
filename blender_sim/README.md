@@ -234,7 +234,7 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `walk` | Constant-speed sidewalk traverse (stroll / walk / hurry pace) |
 | `diagonal_cross` | Cuts from one kerb toward the other |
 | `crosswalk` | Full kerb-to-kerb turn; gaze follows Frenet motion |
-| `erratic` | Sidesteps + speed wobble; may stop |
+| `erratic` | Sidesteps + speed wobble; may ease to a stop (gaze stays down the path) |
 | `hasty` | Large high-frequency yaw/pitch/roll (look only; gait path is unchanged) |
 | `seated` | `walk_speed = 0`, lower eye, bench behind the HMD |
 | `auto` | Weighted draw (`walk` 0.44, `erratic` 0.22, `seated` 0.14, `crosswalk` 0.12, `diagonal_cross` 0.08) |
