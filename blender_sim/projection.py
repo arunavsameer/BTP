@@ -217,6 +217,17 @@ class LocalBoundCache:
             sets.append([mw @ c for c in inset])
         return sets
 
+    def part_world_corners(
+        self,
+        only_obj: Any = None,
+        scale: float = 1.0,
+    ) -> list[Vector]:
+        """World corners of one mesh (no children). ``scale=1`` is the raw AABB."""
+        out: list[Vector] = []
+        for corners in self.inner_world_corner_sets(scale=scale, only_obj=only_obj):
+            out.extend(corners)
+        return out
+
 
 _BOUND_BY_PTR: dict[int, LocalBoundCache] = {}
 
@@ -309,6 +320,24 @@ def threat_point(obj: Any, cam_z: float, mode: str = "volume") -> Vector:
     return threat_point_from_corners(world_aabb_corners(obj), cam_z, mode)
 
 
+def _cam_to_pixel(
+    cam: Vector,
+    proj: Matrix,
+    res_x: int,
+    res_y: int,
+) -> tuple[float, float] | None:
+    clip = proj @ cam
+    if clip.w <= 1e-8:
+        return None
+    ndc_x = clip.x / clip.w
+    ndc_y = clip.y / clip.w
+    u = (ndc_x + 1.0) * (res_x * 0.5)
+    v = (1.0 - ndc_y) * (res_y * 0.5)
+    if not (math.isfinite(u) and math.isfinite(v)):
+        return None
+    return (u, v)
+
+
 def project_corners(
     corners_world: list[Vector],
     view: Matrix,
@@ -318,25 +347,59 @@ def project_corners(
 ) -> tuple[list[tuple[float, float]], int]:
     """Project world corners. Returns (pixel list, n_front).
 
-    A corner is discarded when it is behind the camera (cam-space Z ≥ 0) or
-    when the homogeneous w is non-positive after projection (degenerate).
+    A corner behind the camera (cam-space Z ≥ 0) is not projected raw —
+    that leftover AABB explodes to half the frame. Edges that straddle
+    the near plane are clipped to Z = −ε, then projected.
     """
-    pixels: list[tuple[float, float]] = []
+    cams: list[Vector] = []
     n_front = 0
     for p in corners_world:
         cam = view @ Vector((p.x, p.y, p.z, 1.0))
-        # Visible half-space: camera-space Z < 0.
-        if cam.z >= 0.0:
-            continue
-        n_front += 1
-        clip = proj @ cam
-        if clip.w <= 1e-8:
-            continue
-        ndc_x = clip.x / clip.w
-        ndc_y = clip.y / clip.w
-        u = (ndc_x + 1.0) * (res_x * 0.5)
-        v = (1.0 - ndc_y) * (res_y * 0.5)
-        pixels.append((u, v))
+        cams.append(cam)
+        if cam.z < 0.0:
+            n_front += 1
+    if n_front == 0:
+        return [], 0
+
+    pixels: list[tuple[float, float]] = []
+    z_clip = -1e-4
+    if n_front == len(cams):
+        for cam in cams:
+            pix = _cam_to_pixel(cam, proj, res_x, res_y)
+            if pix is not None:
+                pixels.append(pix)
+        return pixels, n_front
+
+    # Clip every straddling pair onto the near plane so a pole you just
+    # passed cannot paint a leftover AABB from the 2–3 corners still in
+    # front of the lens.
+    n = len(cams)
+    for i in range(n):
+        if cams[i].z < 0.0:
+            pix = _cam_to_pixel(cams[i], proj, res_x, res_y)
+            if pix is not None:
+                pixels.append(pix)
+        for j in range(i + 1, n):
+            a, b = cams[i], cams[j]
+            a_f = a.z < 0.0
+            b_f = b.z < 0.0
+            if a_f == b_f:
+                continue
+            denom = b.z - a.z
+            if abs(denom) < 1e-12:
+                continue
+            t = (z_clip - a.z) / denom
+            if t < 0.0 or t > 1.0:
+                continue
+            clip_pt = Vector((
+                a.x + t * (b.x - a.x),
+                a.y + t * (b.y - a.y),
+                a.z + t * (b.z - a.z),
+                a.w + t * (b.w - a.w),
+            ))
+            pix = _cam_to_pixel(clip_pt, proj, res_x, res_y)
+            if pix is not None:
+                pixels.append(pix)
     return pixels, n_front
 
 

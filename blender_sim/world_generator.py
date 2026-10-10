@@ -389,7 +389,8 @@ class StreetCorridor:
 
     def lateral_limit(self, pad: float, allow_sidewalk: bool) -> float:
         raw = self.max_abs_lateral if allow_sidewalk else (self.road_half - 0.05)
-        return max(0.20, float(raw) - max(0.0, float(pad)))
+        # Negative pad widens the ribbon (forked misses onto the verge).
+        return max(0.20, float(raw) - float(pad))
 
     def ground_z(self, lateral: float) -> float:
         """Road plane is z=0; sidewalks sit on the curb.
@@ -922,9 +923,115 @@ class Actor:
     wind: Any = None
     # Backing vehicle: mesh faces −velocity so the boot, not the bumper, leads.
     look_flip: bool = False
+    # Outcome groups: injected threat (not background scatter).
+    is_threat: bool = False
+    fork_t: Optional[float] = None
+    fork_lat_target: Optional[float] = None
+    fork_lat_speed: float = 0.0
+    fork_speed: Optional[float] = None
+    _fork_applied: bool = field(default=False, repr=False)
+    _spawn_snap: Optional[dict] = field(default=None, repr=False)
 
     def world_location(self) -> Vector:
         return self.obj.matrix_world.translation.copy()
+
+    def capture_spawn(self) -> None:
+        """Snapshot Frenet + behavior so an outcome group can rewind to t=0."""
+        loc = self.obj.location.copy() if self.obj is not None else None
+        rot = None
+        if self.obj is not None and hasattr(self.obj, "rotation_euler"):
+            rot = tuple(float(a) for a in self.obj.rotation_euler)
+        hold = self.hold_velocity.copy() if self.hold_velocity is not None else None
+        self._spawn_snap = {
+            "s": float(self.s),
+            "lateral": float(self.lateral),
+            "speed": float(self.speed),
+            "lat_speed": float(self.lat_speed),
+            "lat_target": self.lat_target,
+            "stop_t": self.stop_t,
+            "swerve_t": self.swerve_t,
+            "stopped": bool(self.stopped),
+            "category": str(self.category),
+            "behavior": str(self.behavior),
+            "turn_t": self.turn_t,
+            "turn_dt": float(self.turn_dt),
+            "post_speed": self.post_speed,
+            "post_lat_speed": float(self.post_lat_speed),
+            "post_lat_target": self.post_lat_target,
+            "lat_ease_t0": self.lat_ease_t0,
+            "lat_ease_dur": float(self.lat_ease_dur),
+            "lat_ease_from": self.lat_ease_from,
+            "heading_yaw": self._heading_yaw,
+            "wander_prev": self._wander_prev,
+            "look_flip": bool(self.look_flip),
+            "corridor_pad": float(self.corridor_pad),
+            "location": loc,
+            "rotation": rot,
+            "hold_velocity": hold,
+            "wheel_rots": [
+                tuple(float(a) for a in wheel.rotation_euler) for wheel, _r in self.wheels
+            ],
+        }
+        self.fork_t = None
+        self.fork_lat_target = None
+        self.fork_lat_speed = 0.0
+        self.fork_speed = None
+        self._fork_applied = False
+
+    def restore_spawn(self, corridor: Optional["StreetCorridor"] = None) -> None:
+        snap = self._spawn_snap
+        if not snap:
+            return
+        self.s = float(snap["s"])
+        self.lateral = float(snap["lateral"])
+        self.speed = float(snap["speed"])
+        self.lat_speed = float(snap["lat_speed"])
+        self.lat_target = snap["lat_target"]
+        self.stop_t = snap["stop_t"]
+        self.swerve_t = snap["swerve_t"]
+        self.stopped = bool(snap["stopped"])
+        self.category = str(snap["category"])
+        self.behavior = str(snap["behavior"])
+        self.turn_t = snap["turn_t"]
+        self.turn_dt = float(snap["turn_dt"])
+        self.post_speed = snap["post_speed"]
+        self.post_lat_speed = float(snap["post_lat_speed"])
+        self.post_lat_target = snap["post_lat_target"]
+        self.lat_ease_t0 = snap["lat_ease_t0"]
+        self.lat_ease_dur = float(snap["lat_ease_dur"])
+        self.lat_ease_from = snap["lat_ease_from"]
+        self._heading_yaw = snap["heading_yaw"]
+        self._wander_prev = snap["wander_prev"]
+        self.look_flip = bool(snap["look_flip"])
+        if "corridor_pad" in snap:
+            self.corridor_pad = float(snap["corridor_pad"])
+        self.fork_t = None
+        self.fork_lat_target = None
+        self.fork_lat_speed = 0.0
+        self.fork_speed = None
+        self._fork_applied = False
+        self._prev_loc = None
+        self.velocity = Vector((0.0, 0.0, 0.0))
+        hold = snap.get("hold_velocity")
+        self.hold_velocity = hold.copy() if hold is not None else None
+        loc = snap.get("location")
+        rot = snap.get("rotation")
+        if loc is not None and self.obj is not None:
+            self.obj.location = loc.copy()
+        elif self.follow_spline is not None and self.obj is not None:
+            p, _tan, right = self.follow_spline.frame(self.s)
+            pos = p + right * self.lateral
+            if corridor is not None:
+                pos.z = self.origin_z + corridor.ground_z(self.lateral)
+            else:
+                pos.z = self.origin_z
+            self.obj.location = pos
+        if rot is not None and self.obj is not None and hasattr(self.obj, "rotation_euler"):
+            self.obj.rotation_euler = rot
+        wheel_rots = snap.get("wheel_rots") or []
+        for (wheel, _r), wr in zip(self.wheels, wheel_rots):
+            if wr is not None:
+                wheel.rotation_euler = wr
 
     def _tick_visuals(self, t: float, dt: float) -> None:
         if self.gait is not None:
@@ -1051,6 +1158,33 @@ class Actor:
         return ds, dlat
 
     def update(self, t: float, dt: float, corridor: Optional[StreetCorridor] = None) -> None:
+        if (
+            not self._fork_applied
+            and self.fork_t is not None
+            and t >= float(self.fork_t)
+        ):
+            self._fork_applied = True
+            self.stopped = False
+            if self.category == "static":
+                self.category = "dynamic"
+            if self.fork_lat_target is not None:
+                self.lat_target = float(self.fork_lat_target)
+                # Rate from the pose at the fork, not spawn. Cap so a 2 s
+                # window still shows the person/car peeling instead of a
+                # 6 m/s slide off the FOV.
+                dist = abs(float(self.lat_target) - float(self.lateral))
+                hinted = max(float(self.fork_lat_speed), 1.20)
+                if self.class_name in ("vehicle", "bicycle"):
+                    # A car still closing at 6 m/s has ~2 s to clear the gait.
+                    self.lat_speed = max(2.40, min(5.40, hinted, dist / 0.90 if dist > 0.20 else 2.40))
+                else:
+                    self.lat_speed = max(1.25, min(2.15, hinted, dist / 1.55 if dist > 0.15 else 1.25))
+                self.lat_ease_dur = 0.0
+                self.lat_ease_from = None
+                self.swerve_t = None
+            if self.fork_speed is not None:
+                self.speed = float(self.fork_speed)
+
         if self.category == "static" or self.stopped:
             self.velocity = Vector((0.0, 0.0, 0.0))
             self._tick_visuals(t, dt)
@@ -1126,6 +1260,16 @@ class Actor:
             self.velocity = tan * ds_act + right * vlat_act
             if self.velocity.length > 0.12:
                 heading = self.velocity
+            elif (
+                self.lat_target is not None
+                and abs(float(self.lat_target) - float(self.lateral)) > 0.12
+            ):
+                # Wait-at-kerb / pre-dart: face the crossing, not the road
+                # tangent. Using `tan` here put a child's back to the camera
+                # for 12 s while they stood in the carriageway.
+                heading = right * math.copysign(
+                    1.0, float(self.lat_target) - float(self.lateral)
+                )
             elif self._heading_yaw is None:
                 heading = tan if ds_act >= 0.0 else -tan
             else:
@@ -1269,37 +1413,85 @@ def _weighted_choice(rng: random.Random, weights: dict[str, float]) -> str:
     return keys[-1]
 
 
-def choose_environment(cfg: dict, rng: random.Random) -> dict:
+def choose_environment(
+    cfg: dict,
+    rng: random.Random,
+    *,
+    bg_rng: Optional[random.Random] = None,
+    lighting: Optional[str] = None,
+) -> dict:
     """Draw the episode's lighting, weather, dappling, and chaos dial.
 
     Six lighting states, not four. ``harsh_glare`` and ``overcast`` are the
     two that break a detector trained only on pleasant weather: one destroys
     contrast by saturating it, the other by removing it.
+
+    When ``bg_rng`` is given (outcome-group packs), lighting / weather / sun
+    / dappled come from it so ``bg_YY`` variants can change time of day.
+    Chaos and wind stay on ``rng`` so threat clothes and leaf kinematics
+    do not retint across backgrounds of the same sample. ``lighting`` pins
+    a group-plan slot; ``BTP_LIGHTING`` still wins for debug.
     """
     import os
 
     dr = cfg["domain_randomization"]
     forced = os.environ.get("BTP_LIGHTING", "").strip().lower()
-    if forced in dr["lighting_weights"]:
-        lighting = forced
-    else:
-        lighting = _weighted_choice(rng, dr["lighting_weights"])
-    weather = _weighted_choice(rng, dr["weather_weights"])
+    slot = str(lighting or "").strip().lower()
     c_lo, c_hi = dr.get("material_chaos", (0.0, 0.0))
     wind_weights = dict(dr.get("wind_weights") or {"breeze": 1.0})
     forced_wind = os.environ.get("BTP_WIND", "").strip().lower()
+
+    if bg_rng is None:
+        # Mixed episodes: one RNG stream, original draw order.
+        if forced in dr["lighting_weights"]:
+            lighting_name = forced
+        else:
+            lighting_name = _weighted_choice(rng, dr["lighting_weights"])
+        weather = _weighted_choice(rng, dr["weather_weights"])
+        if forced_wind in wind_weights:
+            wind = forced_wind
+        else:
+            wind = _weighted_choice(rng, wind_weights)
+        w_lo, w_hi = (dr.get("wind_strength") or {}).get(wind, (0.28, 0.55))
+        return {
+            "lighting": lighting_name,
+            "weather": weather,
+            "elev_deg": rng.uniform(*dr["sun_elevation_deg"][lighting_name]),
+            "azim_deg": rng.uniform(*dr["sun_azimuth_deg"]),
+            "energy": rng.uniform(*dr["sun_energy"][lighting_name]),
+            "dappled": rng.random() < float(dr.get("dappled_prob", 0.0)),
+            "chaos": float(rng.uniform(float(c_lo), float(c_hi))),
+            "wind": wind,
+            "wind_strength": float(rng.uniform(float(w_lo), float(w_hi))),
+            "wind_dir_deg": float(rng.uniform(0.0, 360.0)),
+        }
+
+    # Group packs: time of day on bg_rng; clothes / wind on scene rng.
+    if forced in dr["lighting_weights"]:
+        lighting_name = forced
+    elif slot in dr["lighting_weights"]:
+        lighting_name = slot
+    else:
+        lighting_name = _weighted_choice(bg_rng, dr["lighting_weights"])
+    from outcome_groups import weather_choices_for
+
+    choices = weather_choices_for(lighting_name)
+    weather = bg_rng.choice(choices) if choices else "clear"
     if forced_wind in wind_weights:
         wind = forced_wind
     else:
         wind = _weighted_choice(rng, wind_weights)
     w_lo, w_hi = (dr.get("wind_strength") or {}).get(wind, (0.28, 0.55))
+    dappled = bg_rng.random() < float(dr.get("dappled_prob", 0.0))
+    if lighting_name in ("night", "overcast"):
+        dappled = False
     return {
-        "lighting": lighting,
+        "lighting": lighting_name,
         "weather": weather,
-        "elev_deg": rng.uniform(*dr["sun_elevation_deg"][lighting]),
-        "azim_deg": rng.uniform(*dr["sun_azimuth_deg"]),
-        "energy": rng.uniform(*dr["sun_energy"][lighting]),
-        "dappled": rng.random() < float(dr.get("dappled_prob", 0.0)),
+        "elev_deg": bg_rng.uniform(*dr["sun_elevation_deg"][lighting_name]),
+        "azim_deg": bg_rng.uniform(*dr["sun_azimuth_deg"]),
+        "energy": bg_rng.uniform(*dr["sun_energy"][lighting_name]),
+        "dappled": dappled,
         "chaos": float(rng.uniform(float(c_lo), float(c_hi))),
         "wind": wind,
         "wind_strength": float(rng.uniform(float(w_lo), float(w_hi))),
@@ -1452,6 +1644,19 @@ def apply_domain_randomization(
     return {"lighting": lighting, "weather": weather}
 
 
+def _lamp_lens_materials() -> tuple[bpy.types.Material, bpy.types.Material]:
+    """Shared on/off lens shaders. Lit = emission; dead/day = dark glass."""
+    from materials import make_emissive
+
+    on = bpy.data.materials.get("lamp_lens_on")
+    if on is None:
+        on = make_emissive("lamp_lens_on", (1.0, 0.84, 0.52), 28.0)
+    off = bpy.data.materials.get("lamp_lens_off")
+    if off is None:
+        off = make_principled("lamp_lens_off", (0.07, 0.07, 0.08), 0.22)
+    return on, off
+
+
 def apply_streetlamp_state(
     lamp_objects: list[bpy.types.Object],
     cfg: dict,
@@ -1463,8 +1668,12 @@ def apply_streetlamp_state(
     spawn time and stored on the object, because this runs twice per episode
     (once inside the lighting pass, once after `reveal_view_layer` un-hides
     everything) and the two calls must agree exactly.
+
+    The SPOT hides when unlit; the luminaire mesh stays so a burned-out
+    lamp still reads as a fixture, not a missing blob.
     """
     base = float(cfg["world"]["streetlamp_energy_night"]) if night else 0.0
+    lens_on, lens_off = _lamp_lens_materials()
     for i, lamp in enumerate(lamp_objects):
         if lamp.data is None or lamp.type != "LIGHT":
             continue
@@ -1477,6 +1686,10 @@ def apply_streetlamp_state(
             lamp.data.use_shadow = lit and (i % 2 == 0)
         lamp.hide_render = not lit
         lamp.hide_viewport = not lit
+        bulb_name = lamp.get("btp_lamp_bulb", "")
+        bulb = bpy.data.objects.get(str(bulb_name)) if bulb_name else None
+        if bulb is not None:
+            assign_mat(bulb, lens_on if lit else lens_off)
 
 
 def _setup_world_shader(
@@ -1766,11 +1979,58 @@ def configure_eevee(scene: bpy.types.Scene, rcfg: dict) -> None:
     scene.render.image_settings.color_depth = str(rcfg["color_depth"])
     scene.render.film_transparent = bool(rcfg["film_transparent"])
     scene.render.use_file_extension = True
+    # EEVEE 5.2 keeps GPU buffers across animation frames. Combined pixels
+    # are unchanged; turning this off only adds shader/setup cost per frame.
     scene.render.use_persistent_data = True
     scene.render.use_lock_interface = True
     scene.render.use_overwrite = True
     scene.render.use_placeholder = False
     prepare_still_render(scene, png_compression=int(rcfg.get("png_compression", 1)))
+    # Beauty only. Default compositor is ON in 5.x (prepare_still_render
+    # already clears it). Extra AOVs would allocate GPU buffers per frame
+    # without changing Combined. Blender 5.2 EEVEE has no viewport-denoise
+    # toggle; compositor denoise is unused because use_compositing is False.
+    for layer in scene.view_layers:
+        if hasattr(layer, "use_pass_combined"):
+            try:
+                layer.use_pass_combined = True
+            except Exception:
+                pass
+        for attr in (
+            "use_pass_z",
+            "use_pass_mist",
+            "use_pass_normal",
+            "use_pass_position",
+            "use_pass_vector",
+            "use_pass_uv",
+            "use_pass_object_index",
+            "use_pass_material_index",
+            "use_pass_shadow",
+            "use_pass_ambient_occlusion",
+            "use_pass_emit",
+            "use_pass_environment",
+            "use_pass_diffuse_direct",
+            "use_pass_diffuse_indirect",
+            "use_pass_diffuse_color",
+            "use_pass_glossy_direct",
+            "use_pass_glossy_indirect",
+            "use_pass_glossy_color",
+            "use_pass_transmission_direct",
+            "use_pass_transmission_indirect",
+            "use_pass_transmission_color",
+            "use_pass_subsurface_direct",
+            "use_pass_subsurface_indirect",
+            "use_pass_subsurface_color",
+            "use_pass_cryptomatte_object",
+            "use_pass_cryptomatte_material",
+            "use_pass_cryptomatte_asset",
+            "use_pass_grease_pencil",
+        ):
+            if hasattr(layer, attr):
+                try:
+                    setattr(layer, attr, False)
+                except Exception:
+                    pass
 
     eevee = getattr(scene, "eevee", None)
     if eevee is None:
@@ -1802,7 +2062,7 @@ def configure_eevee(scene: bpy.types.Scene, rcfg: dict) -> None:
     _set("indirect_light_intensity", 1.35)
     # Dense scatter (trees / grass) lives in the first tens of metres of
     # the walk. Cascades still have to reach a 10 s oncoming car (~40–70 m).
-    _set("cascade_max_distance", float(rcfg.get("cascade_max_distance", 80.0)))
+    _set("cascade_max_distance", float(rcfg.get("cascade_max_distance", 140.0)))
     _set("cascade_exponent", 0.85)
     _set("cascade_fade", 0.12)
     _set("shadow_max_resolution", "512")
@@ -2825,6 +3085,25 @@ def spawn_tree(
     )
 
 
+def _parent_local(
+    child: bpy.types.Object,
+    parent: bpy.types.Object,
+    location: Vector,
+    rotation: Optional[tuple[float, float, float]] = None,
+) -> None:
+    """Parent ``child`` so ``location`` is in the parent's local frame.
+
+    Direct ``Object.parent`` assignment leaves ``matrix_parent_inverse``
+    as identity; we force that so a leftover inverse cannot float the mesh.
+    """
+    child.parent = parent
+    child.matrix_parent_inverse.identity()
+    child.location = location
+    if rotation is not None:
+        child.rotation_mode = "XYZ"
+        child.rotation_euler = rotation
+
+
 def spawn_streetlamp(
     loc: Vector,
     heading: float,
@@ -2834,34 +3113,117 @@ def spawn_streetlamp(
     with_arm: bool = True,
     arm_sign: float = 1.0,
 ) -> Actor:
-    """Annotatable lamp pole. TTC / splat use the pole, not the arm."""
+    """Annotatable lamp pole. TTC / splat use the pole, not the arm.
+
+    After ``heading`` (local +Y = path tangent, local +X = ``road.right``),
+    ``arm_sign`` is the pole's lateral sign, so the arm cantilevers toward
+    the carriageway along local ``-X * arm_sign``. Collar, arm, housing,
+    and lens are parented to the pole with overlap so the fixture is one
+    welded piece. The lens starts dark; :func:`apply_streetlamp_state`
+    swaps in emission for live night lamps. Custom props
+    ``btp_luminaire_local`` / ``btp_lamp_lens`` tell the SPOT where to sit.
+    """
     from materials import make_metal_paint
 
     instance_id = counters.next_id("streetlamp")
     h = max(2.4, float(height))
+    pole_xy = 0.10
+    sx = -float(arm_sign)
     mat = bpy.data.materials.get("lamp_pole")
     if mat is None:
         mat = make_principled("lamp_pole", (0.10, 0.10, 0.11), 0.55)
+    arm_mat = bpy.data.materials.get("lamp_arm")
+    if arm_mat is None:
+        arm_mat = make_metal_paint("lamp_arm", (0.12, 0.12, 0.13), 0.45)
+    head_mat = bpy.data.materials.get("lamp_head")
+    if head_mat is None:
+        head_mat = make_metal_paint("lamp_head", (0.16, 0.16, 0.17), 0.38)
+    _lens_on, lens_off = _lamp_lens_materials()
+
     pole = create_box(
         instance_id,
-        (0.10, 0.10, h),
+        (pole_xy, pole_xy, h),
         loc + Vector((0.0, 0.0, h * 0.5)),
         collection,
         mat,
     )
     pole.rotation_mode = "XYZ"
     pole.rotation_euler = (0.0, 0.0, float(heading))
+
+    top_z = h * 0.5
+    lens_local = Vector((0.0, 0.0, top_z + 0.04))
     if with_arm:
-        arm_mat = make_metal_paint("lamp_arm", (0.12, 0.12, 0.13), 0.45)
-        arm = create_box(
-            instance_id + "_arm",
-            (0.08, 0.85, 0.08),
+        # Collar welded to the pole top — the arm plugs into this, not a
+        # floating cap sitting beside the shaft.
+        collar = create_box(
+            instance_id + "_collar",
+            (0.16, 0.16, 0.14),
             Vector((0.0, 0.0, 0.0)),
             collection,
             arm_mat,
         )
-        arm.parent = pole
-        arm.location = Vector((-float(arm_sign) * 0.40, 0.0, h * 0.5 - 0.04))
+        _parent_local(collar, pole, Vector((0.0, 0.0, top_z - 0.03)))
+
+        # Long axis = local X (toward the road). Overlap the collar so
+        # there is no air gap between shaft and cantilever.
+        arm_len, arm_t = 0.88, 0.08
+        arm_x = sx * (pole_xy * 0.5 + arm_len * 0.5 - 0.04)
+        arm_z = top_z - 0.04
+        arm = create_box(
+            instance_id + "_arm",
+            (arm_len, arm_t, arm_t),
+            Vector((0.0, 0.0, 0.0)),
+            collection,
+            arm_mat,
+        )
+        _parent_local(arm, pole, Vector((arm_x, 0.0, arm_z)))
+
+        # Cobra-head housing at the arm tip, hanging slightly under the arm.
+        head_size = (0.36, 0.22, 0.11)
+        arm_tip = arm_x + sx * (arm_len * 0.5)
+        head_x = arm_tip - sx * (head_size[0] * 0.5 - 0.02)
+        head_z = arm_z - arm_t * 0.5 - head_size[2] * 0.5 + 0.03
+        head = create_box(
+            instance_id + "_head",
+            head_size,
+            Vector((0.0, 0.0, 0.0)),
+            collection,
+            head_mat,
+        )
+        _parent_local(head, pole, Vector((head_x, 0.0, head_z)))
+
+        # Lens in the underside of the housing (the glow), not a cap on the pole.
+        lens_size = (0.28, 0.16, 0.04)
+        lens_z = head_z - head_size[2] * 0.5 + lens_size[2] * 0.30
+        lens = create_box(
+            instance_id + "_bulb",
+            lens_size,
+            Vector((0.0, 0.0, 0.0)),
+            collection,
+            lens_off,
+        )
+        _parent_local(lens, pole, Vector((head_x, 0.0, lens_z)))
+        if hasattr(lens, "visible_shadow"):
+            lens.visible_shadow = False
+        # SPOT sits in the opening just below the lens so the housing
+        # does not self-shadow the pool when this lamp casts.
+        lens_local = Vector((head_x, 0.0, lens_z - 0.04))
+    else:
+        globe = create_box(
+            instance_id + "_bulb",
+            (0.22, 0.22, 0.16),
+            Vector((0.0, 0.0, 0.0)),
+            collection,
+            lens_off,
+        )
+        _parent_local(globe, pole, Vector((0.0, 0.0, top_z + 0.04)))
+        if hasattr(globe, "visible_shadow"):
+            globe.visible_shadow = False
+        lens = globe
+        lens_local = Vector((0.0, 0.0, top_z + 0.02))
+
+    pole["btp_luminaire_local"] = [float(lens_local.x), float(lens_local.y), float(lens_local.z)]
+    pole["btp_lamp_lens"] = lens.name
     _tag(pole, instance_id, "streetlamp")
     return Actor(
         obj=pole,
@@ -3633,9 +3995,20 @@ class WorldState:
 # ===========================================================================
 
 class WorldGenerator:
-    def __init__(self, cfg: dict, rng: random.Random) -> None:
+    def __init__(
+        self,
+        cfg: dict,
+        rng: random.Random,
+        bg_rng: Optional[random.Random] = None,
+    ) -> None:
         self.cfg = cfg
         self.rng = rng
+        self.bg_rng = bg_rng if bg_rng is not None else rng
+        self.group_mode = False
+        self.force_critical = False
+        self.bg_style = "full"
+        self.bg_lighting = ""
+        self._injecting = False
         self.state: Optional[WorldState] = None
         self._scenario = "safe_walk"
         self._building_gaps: list[tuple[float, float]] = []
@@ -3771,9 +4144,9 @@ class WorldGenerator:
             self.force_ego_mode = ""
         n_cross = sum(1 for n in names if n in CROSS_GAP_SCENARIOS)
         if n_cross:
-            # One crosser: window covers a 10 s meet (~6–18 m). Compounds
+            # One crosser: window covers a 15 s meet (~8–28 m). Compounds
             # stagger extra crossers further down the ribbon.
-            hi = 34.0 if n_cross <= 1 else 44.0
+            hi = 50.0 if n_cross <= 1 else 62.0
             self._building_gaps.append((4.0, hi))
         if any(n in SPARSE_SCENARIOS for n in names):
             self.cfg["world"]["n_background_pedestrians"] = (0, 0)
@@ -3812,6 +4185,15 @@ class WorldGenerator:
         wcfg = self.cfg["world"]
         dr = self.cfg["domain_randomization"]
         rng = self.rng
+        prop_rng = self.bg_rng
+        if self.group_mode:
+            from outcome_groups import apply_bg_style
+            apply_bg_style(self.cfg, self.bg_style)
+            wcfg = self.cfg["world"]
+            # Background movers would occupy the threat tube and nudge it
+            # across bg variants. Groups only vary static scatter.
+            wcfg["n_background_pedestrians"] = (0, 0)
+            wcfg["n_background_vehicles"] = (0, 0)
         # A fresh library per episode: the previous one's datablocks were
         # just freed by reset_blender_scene, so holding them would be a
         # use-after-free waiting to happen.
@@ -3845,7 +4227,15 @@ class WorldGenerator:
             chaos_albedo, make_asphalt, make_concrete_tiles, make_grass, make_simple,
         )
 
-        env_choice = choose_environment(self.cfg, rng)
+        if self.group_mode:
+            env_choice = choose_environment(
+                self.cfg,
+                rng,
+                bg_rng=self.bg_rng,
+                lighting=self.bg_lighting or None,
+            )
+        else:
+            env_choice = choose_environment(self.cfg, rng)
         night = env_choice["lighting"] == "night"
         if env_choice["lighting"] == "harsh_glare":
             # Aim the disc down the walker's line of sight; a blinding sun
@@ -3963,10 +4353,10 @@ class WorldGenerator:
                 dash_s += 6.0
 
         if bool(wcfg.get("buildings", True)):
-            bldg_rough = rng.uniform(*dr["roughness"])
+            bldg_rough = prop_rng.uniform(*dr["roughness"])
             for side in tuple(wcfg.get("building_sides", (-1.0, 1.0))):
                 _extrude_buildings(
-                    road, float(side), road_half, sw, wcfg, rng, col_world, bldg_rough,
+                    road, float(side), road_half, sw, wcfg, prop_rng, col_world, bldg_rough,
                     night=night, gaps=self._building_gaps,
                 )
 
@@ -3976,13 +4366,13 @@ class WorldGenerator:
         lamp_objects, lamp_actors = self._spawn_streetlamps(
             road, road_half, sw, col_world, col_lights, counters,
         )
-        n_grass = self.rng.randint(*[int(v) for v in wcfg.get("n_grass_clumps", (0, 0))])
+        n_grass = self.bg_rng.randint(*[int(v) for v in wcfg.get("n_grass_clumps", (0, 0))])
         if n_grass > 0:
             # Grass stays on the verge (and park fields), never the asphalt
             # or the walking slab.
             exclude = road_half + (0.12 if ground_kind == "grass" else sw + 0.08)
             scatter_grass(
-                self.lib, rng, self.cfg, col_world, road,
+                self.lib, prop_rng, self.cfg, col_world, road,
                 lat_lo=-(road_half + sw + verge_w * 0.95),
                 lat_hi=(road_half + sw + verge_w * 0.95),
                 n=n_grass, ground_z=0.02, chaos=chaos,
@@ -4358,13 +4748,14 @@ class WorldGenerator:
             raise ValueError(f"unknown scenario {unknown!r}. Known: {known}")
 
         s0 = self._cam_s(rig, 0.0)
-        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 72.0))
+        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 130.0))
         s_hi = min(self.state.road.length - 5.0, s0 + max(28.0, look))
         session = ComposeSession.from_cfg(
             resolved, s_lo=s0 + 3.2, s_hi=s_hi, cfg=self.cfg,
         )
         session.seed_from_actors(self.state.actors, s0)
         self._compose = session
+        self._injecting = True
         try:
             for key in sort_for_inject(resolved):
                 session.begin(key)
@@ -4372,8 +4763,64 @@ class WorldGenerator:
                     continue
                 handlers[key](rig)
         finally:
+            self._injecting = False
             self._compose = None
         return compose_slug(resolved)
+
+    def snapshot_actors(self) -> None:
+        assert self.state is not None
+        for actor in self.state.actors:
+            actor.capture_spawn()
+
+    def restore_actors(self) -> None:
+        assert self.state is not None
+        for actor in self.state.actors:
+            actor.restore_spawn(self.state.corridor)
+
+    def apply_outcome_fork(self, outcome: str, diverge_t: float, gait_lat: float) -> None:
+        """Steer injected threats after ``diverge_t``. Collision is a no-op."""
+        from outcome_groups import miss_target_lat
+
+        assert self.state is not None
+        name = str(outcome or "collision").strip().lower()
+        if name in ("collision", "hit", "collide"):
+            return
+        lim = float(self.state.corridor.lateral_limit(0.35, True))
+        verge = float(self.cfg["world"].get("verge_width", 4.5) or 0.0) * 0.40
+        miss_lim = lim + max(0.0, verge)
+        clearance = float(self.cfg["scenarios"].get("outcome_miss_clearance_m", 2.40))
+        lane = self._drive_lane_abs()
+        for actor in self.state.actors:
+            if not getattr(actor, "is_threat", False):
+                continue
+            is_car = actor.class_name in ("vehicle", "bicycle")
+            pad = max(
+                clearance,
+                3.40 if actor.class_name == "vehicle" else (
+                    2.20 if actor.class_name == "bicycle" else clearance
+                ),
+            )
+            target = miss_target_lat(
+                float(gait_lat), name, clearance_m=pad, corridor_lim=miss_lim,
+                road_lane_m=lane,
+                min_clearance_m=2.50 if is_car else 1.55,
+            )
+            if target is None:
+                continue
+            # Allow the peel onto the verge if that is the only clear side.
+            need = abs(float(target)) + 0.18
+            max_abs = float(self.state.corridor.max_abs_lateral)
+            if need > max_abs:
+                actor.corridor_pad = max_abs - need
+            actor.fork_t = float(diverge_t)
+            actor.fork_lat_target = float(target)
+            actor.fork_lat_speed = 4.60 if is_car else 1.85
+            # Through-crossers that still have speed=0 would otherwise freeze
+            # at the kerb when the peel retargets. Do not overwrite a dart /
+            # closing speed — that cancelled the titled action.
+            if abs(float(actor.speed)) < 0.20:
+                actor.fork_speed = max(0.90, 0.60 * float(self.state.walk_speed) + 0.40)
+            actor._fork_applied = False
 
     # -- internals: scatter / background ----------------------------------
 
@@ -4421,7 +4868,7 @@ class WorldGenerator:
         if hi <= 0:
             return 0
         lo = max(0, min(lo, hi))
-        return self.rng.randint(lo, hi)
+        return self.bg_rng.randint(lo, hi)
 
     def _scatter_ground(
         self,
@@ -4435,14 +4882,14 @@ class WorldGenerator:
         """Shop-front furniture only. Trip holes stay scenario injectors."""
         wcfg = self.cfg["world"]
         n_lo, n_hi = wcfg["poisson"]["n_ground_static"]
-        n = self.rng.randint(int(n_lo), int(n_hi))
+        n = self.bg_rng.randint(int(n_lo), int(n_hi))
         if n <= 0:
             return []
         samples = poisson_disk_strip(
             length=road.length,
             half_width=sidewalk_w * 0.12,
             radius=float(wcfg["poisson"]["static_radius"]),
-            rng=self.rng,
+            rng=self.bg_rng,
             n_max=n,
             k_candidates=int(wcfg["poisson"]["k_candidates"]),
             s_min=8.0,
@@ -4457,12 +4904,12 @@ class WorldGenerator:
             lat = furniture_lat + dlat
             if not self._site_free(s, lat, 1.1):
                 continue
-            cls_name = self.rng.choice(FURNITURE_CLASSES)
+            cls_name = self.bg_rng.choice(FURNITURE_CLASSES)
             gz = curb if abs(lat) >= road_half - 0.08 else 0.0
             loc = road.offset_point(s, lat, z=gz)
             heading = heading_from_tangent(road.tangent(s))
             actor = spawn_ground_hazard(
-                cls_name, loc, heading, collection, self.rng, counters,
+                cls_name, loc, heading, collection, self.bg_rng, counters,
                 roughness, self.chaos,
             )
             actor.s = s
@@ -4482,12 +4929,12 @@ class WorldGenerator:
         """Head-level hazards sit on the *walker's* column (1.2–1.8 m AGL)."""
         wcfg = self.cfg["world"]
         n_lo, n_hi = wcfg["poisson"]["n_head_hazards"]
-        n = self.rng.randint(int(n_lo), int(n_hi))
+        n = self.bg_rng.randint(int(n_lo), int(n_hi))
         samples = poisson_disk_strip(
             length=road.length,
             half_width=0.35,
             radius=float(wcfg["poisson"]["head_hazard_radius"]),
-            rng=self.rng,
+            rng=self.bg_rng,
             n_max=n,
             k_candidates=int(wcfg["poisson"]["k_candidates"]),
             s_min=12.0,
@@ -4497,13 +4944,13 @@ class WorldGenerator:
         curb = float(wcfg["curb_height"])
         actors: list[Actor] = []
         for s, dlat in samples:
-            cls_name = self.rng.choice([c[0] for c in HEAD_CLASSES])
+            cls_name = self.bg_rng.choice([c[0] for c in HEAD_CLASSES])
             loc = road.offset_point(s, sidewalk_lateral + dlat, z=0.0)
-            height = self.rng.uniform(hlo, hhi) + curb
+            height = self.bg_rng.uniform(hlo, hhi) + curb
             heading = heading_from_tangent(road.tangent(s))
             actors.append(
                 spawn_head_hazard(
-                    cls_name, loc, heading, height, collection, self.rng, counters,
+                    cls_name, loc, heading, height, collection, self.bg_rng, counters,
                     roughness, self.chaos,
                 )
             )
@@ -4563,30 +5010,30 @@ class WorldGenerator:
         for role in roles:
             placed = False
             for _attempt in range(16):
-                s = self.rng.uniform(s_lo, s_hi)
+                s = self.bg_rng.uniform(s_lo, s_hi)
                 if role == "plant" and have_buildings:
                     sides = tuple(wcfg.get("building_sides", (-1.0, 1.0)))
-                    sign = float(self.rng.choice(sides))
+                    sign = float(self.bg_rng.choice(sides))
                 else:
-                    sign = self.rng.choice((-1.0, 1.0))
+                    sign = self.bg_rng.choice((-1.0, 1.0))
                 if role == "plant":
                     if open_ground:
                         inner = road_half + max(0.45, sw * 0.55)
                         outer = road_half + sw + max(0.5, verge_w * 0.92)
-                        lat = self.rng.uniform(inner, outer) * sign
+                        lat = self.bg_rng.uniform(inner, outer) * sign
                         max_c = 2.8
                     elif have_buildings:
                         # Sit in the planting strip, crown just shy of the wall.
-                        canopy_guess = self.rng.uniform(1.0, 2.4)
+                        canopy_guess = self.bg_rng.uniform(1.0, 2.4)
                         lat_abs = facade - canopy_guess - 0.40
                         min_lat = road_half + sw + 0.50
                         if lat_abs < min_lat:
                             canopy_guess = max(0.55, facade - 0.40 - min_lat)
                             lat_abs = min_lat
-                        lat = sign * (lat_abs + self.rng.uniform(-0.12, 0.12))
+                        lat = sign * (lat_abs + self.bg_rng.uniform(-0.12, 0.12))
                         max_c = canopy_guess
                     else:
-                        lat = sign * (road_half + sw + self.rng.uniform(0.6, 1.8))
+                        lat = sign * (road_half + sw + self.bg_rng.uniform(0.6, 1.8))
                         max_c = 2.2
                     if offset_folds(
                         road, s, lat, lat, max(0.7, max_c * 0.55),
@@ -4598,7 +5045,7 @@ class WorldGenerator:
                     # Planting strip, sidewalk-adjacent — not the carriageway.
                     if setback < 1.05 and have_buildings:
                         continue
-                    lat = sign * (road_half + sw + self.rng.uniform(0.35, min(1.15, max(0.45, setback * 0.45))))
+                    lat = sign * (road_half + sw + self.bg_rng.uniform(0.35, min(1.15, max(0.45, setback * 0.45))))
                     max_c = 1.35
                     along = 8.0
                     if offset_folds(
@@ -4608,14 +5055,14 @@ class WorldGenerator:
                         continue
                 elif role == "path":
                     # Park: off the gravel gait, in the verge.
-                    lat = sign * (road_half + self.rng.uniform(0.70, max(1.4, verge_w * 0.55)))
+                    lat = sign * (road_half + self.bg_rng.uniform(0.70, max(1.4, verge_w * 0.55)))
                     max_c = 1.55
                     along = 6.0
                 else:
                     if not have_median:
                         continue
                     half = 0.5 * median_w
-                    lat = self.rng.uniform(-max(0.08, half - 0.35), max(0.08, half - 0.35))
+                    lat = self.bg_rng.uniform(-max(0.08, half - 0.35), max(0.08, half - 0.35))
                     max_c = min(1.35, half - 0.15)
                     along = 10.0
                 if _on_drive_or_walk(lat, role):
@@ -4626,7 +5073,7 @@ class WorldGenerator:
                 loc = road.offset_point(s, lat, z=z)
                 heading = heading_from_tangent(road.tangent(s))
                 actor = spawn_tree(
-                    self.lib, self.rng, self.cfg, collection, loc, counters,
+                    self.lib, self.bg_rng, self.cfg, collection, loc, counters,
                     self.chaos,
                     max_canopy=max_c,
                     heading=heading,
@@ -4662,9 +5109,10 @@ class WorldGenerator:
         """
         from materials import make_canopy_gobo
 
-        mat = make_canopy_gobo("canopy_gobo", self.rng, self.chaos)
-        z = self.rng.uniform(6.5, 10.5)
-        w = max(6.0, float(half_width) * self.rng.uniform(1.1, 1.8))
+        gobo_rng = self.bg_rng
+        mat = make_canopy_gobo("canopy_gobo", gobo_rng, self.chaos)
+        z = gobo_rng.uniform(6.5, 10.5)
+        w = max(6.0, float(half_width) * gobo_rng.uniform(1.1, 1.8))
         obj = _ribbon_mesh("canopy_gobo", road, -w, w, z, collection, mat)
         for attr in ("visible_camera", "visible_diffuse", "visible_glossy"):
             if hasattr(obj, attr):
@@ -4691,7 +5139,6 @@ class WorldGenerator:
         actors: list[Actor] = []
         if n <= 0:
             return lamps, actors
-        from materials import make_emissive
         for i in range(n):
             s = (i + 0.5) * road.length / n
             sign = -1.0 if i % 2 == 0 else 1.0
@@ -4699,7 +5146,6 @@ class WorldGenerator:
             if not self._site_free(s, lat, 1.6):
                 continue
             tan = road.tangent(s)
-            right = road.right(s)
             base = road.offset_point(s, lat, z=float(self.cfg["world"]["curb_height"]))
             self._occupy(s, lat, 1.4)
             actor = spawn_streetlamp(
@@ -4715,35 +5161,30 @@ class WorldGenerator:
             actor.lateral = lat
             actors.append(actor)
             pole = actor.obj
-            bulb_world = base + right * (-sign * 0.70) + Vector((0.0, 0.0, h + 0.02))
-            create_box(
-                f"{actor.instance_id}_bulb",
-                (0.26, 0.26, 0.12),
-                bulb_world,
-                world_col,
-                make_emissive(f"{actor.instance_id}_bulb", (1.0, 0.84, 0.52), 28.0),
-            )
+            local = Vector(tuple(float(v) for v in pole.get("btp_luminaire_local", (0.0, 0.0, h * 0.5))))
             light = bpy.data.lights.new(f"lamp_{i:02d}", type="SPOT")
             light.energy = 0.0
-            light.color = self.rng.choice((
+            light.color = self.bg_rng.choice((
                 (1.00, 0.72, 0.34),
                 (1.00, 0.84, 0.58),
                 (0.78, 0.86, 1.00),
                 (0.96, 0.97, 1.00),
                 (0.62, 1.00, 0.78),
             ))
-            light.spot_size = math.radians(self.rng.uniform(58.0, 96.0))
-            light.spot_blend = self.rng.uniform(0.28, 0.62)
+            light.spot_size = math.radians(self.bg_rng.uniform(58.0, 96.0))
+            light.spot_blend = self.bg_rng.uniform(0.28, 0.62)
             if hasattr(light, "shadow_soft_size"):
                 light.shadow_soft_size = 0.45
             if hasattr(light, "use_shadow"):
                 light.use_shadow = False
             lobj = bpy.data.objects.new(f"lamp_{i:02d}", light)
-            lobj["btp_lamp_dead"] = int(self.rng.random() < 0.28)
-            lobj["btp_lamp_gain"] = float(self.rng.uniform(0.55, 1.5))
-            lobj.location = bulb_world
-            lobj.rotation_euler = (0.0, 0.0, 0.0)
+            lobj["btp_lamp_dead"] = int(self.bg_rng.random() < 0.28)
+            lobj["btp_lamp_gain"] = float(self.bg_rng.uniform(0.55, 1.5))
+            lobj["btp_lamp_bulb"] = str(pole.get("btp_lamp_lens", ""))
+            # Identity local euler: Blender SPOTs emit along -Z, which is
+            # still world-down after the pole's Z-only heading.
             _link(lobj, lights_col)
+            _parent_local(lobj, pole, local, rotation=(0.0, 0.0, 0.0))
             lamps.append(lobj)
         return lamps, actors
 
@@ -5067,6 +5508,7 @@ class WorldGenerator:
             actor.lat_ease_dur = max(1.50, float(dur))
         if look_flip:
             actor.look_flip = True
+        actor.is_threat = bool(self._injecting)
         loc = self.state.road.offset_point(
             actor.s, actor.lateral, actor.origin_z + self.state.corridor.ground_z(actor.lateral)
         )
@@ -5084,6 +5526,8 @@ class WorldGenerator:
         if actor.look_flip:
             heading = -heading
         look_along(actor.obj, heading)
+        actor._heading_yaw = float(actor.obj.rotation_euler[2])
+        actor.capture_spawn()
         return self._append(actor)
 
     def _inject_none(self, rig: Any) -> None:
@@ -5125,34 +5569,105 @@ class WorldGenerator:
         half = math.radians(max(28.0, hfov) * 0.5)
         return max(1.20, float(depth_m) * math.tan(half * float(frac)))
 
-    def _visible_lead(self, preferred: float, *, near: float = 5.0, far: float = 28.0) -> float:
+    def _ahead_depth(self, rig: Any, s0: float, speed: float, t: float) -> float:
+        """Along-track gap between an actor spawned at ``s0`` and the ego at ``t``."""
+        return (float(s0) + float(speed) * float(t)) - self._cam_s(rig, t)
+
+    def _prefer_cross_from_left(
+        self, gait_lat: float, lim: float, from_left: bool, *, min_room: float = 1.70,
+    ) -> bool:
+        """Keep the start on the side with room (road, not a 0.6 m wall strip)."""
+        L = float(gait_lat)
+        lim = abs(float(lim))
+        room_neg = L + lim
+        room_pos = lim - L
+        need = float(min_room)
+        if from_left and room_neg < need and room_pos > room_neg:
+            return False
+        if (not from_left) and room_pos < need and room_neg > room_pos:
+            return True
+        return bool(from_left)
+
+    def _visible_entry_lat(
+        self,
+        rig: Any,
+        s0: float,
+        speed: float,
+        gait_lat: float,
+        *,
+        from_left: bool,
+        pad: float,
+        t_ref: float,
+        frac: float = 0.68,
+        min_off: float = 1.55,
+        max_off: float = 4.40,
+    ) -> float:
+        """Start lateral on the requested side that is inside the HFOV at ``t_ref``.
+
+        Corridor-edge waits sit ~8 m off a sidewalk walker. At 50° HFOV that is
+        already outside the frustum by t≈8 s, so the titled actor is empty road
+        until the last 0.3 s. This parks them on the *image* edge instead.
+        """
+        assert self.state is not None
+        L = float(gait_lat)
+        depth = max(1.20, self._ahead_depth(rig, s0, speed, t_ref))
+        half = self._frustum_half_width(depth, frac=frac)
+        lim = self.state.corridor.lateral_limit(pad, True)
+        sign = -1.0 if from_left else 1.0
+        room = (L + lim) if from_left else (lim - L)
+        off = min(max(float(min_off), half), float(max_off), max(0.90, room * 0.92))
+        lat = L + sign * off
+        return max(-lim, min(lim, lat))
+
+    def _visible_lead(self, preferred: float, *, near: float = 5.0, far: Optional[float] = None) -> float:
         """Clamp along-track spawn into the episode look-ahead.
 
         Far cars are supposed to start as specks and grow. Do not pin them
         to the walking VFOV — that is what made 5 s clips jump to danger.
+        Default ``far`` is the compose look-ahead, not a 10 s clip window.
         """
-        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 72.0))
-        hi = min(float(far), max(float(near) + 1.0, look * 0.90))
+        look = float(self.cfg.get("scenarios", {}).get("compose", {}).get("look_ahead_m", 130.0))
+        cap = float(far) if far is not None else look * 0.90
+        hi = min(cap, max(float(near) + 1.0, look * 0.90))
         return min(max(float(preferred), float(near)), hi)
+
+    def _gait_meet_lead(self, rig: Any, configured: float) -> float:
+        """Along-track lead so a static on the gait is reached near hit_s.
+
+        Uses the actual ego pace. A fixed 18 m lead is ~13 s at 1.4 m/s but
+        only ~9 s at a hurry, and never reached in 15 s at a stroll.
+        """
+        v = float(self._ego_speed(rig))
+        hit = float(self.cfg["scenarios"].get("outcome_hit_s", 13.0))
+        if v < 0.20:
+            return float(configured)
+        return self._visible_lead(v * hit, near=8.0, far=36.0)
+
+    def _along_meet_depth(self, rig: Any, obj_speed: float, tau: float, *, near: float = 12.0) -> float:
+        """Spawn depth for an oncoming actor that occupies the gait at ``tau``."""
+        v_obj = abs(float(obj_speed))
+        v_close = float(self._ego_speed(rig)) + v_obj
+        preferred = max(v_close, v_obj) * float(tau)
+        return self._visible_lead(preferred, near=near, far=125.0)
 
     def _cross_kind_params(self, kind: str) -> tuple[float, float, float, tuple[float, float]]:
         """meet_s, near_lead, far_lead, (vmin, vmax) for a through-crosser."""
         sc = self.cfg["scenarios"]
         wcfg = self.cfg["world"]
         if kind == "vehicle":
-            meet = float(sc.get("cross_car_meet_s", 6.6))
+            meet = float(sc.get("cross_car_meet_s", 13.0))
             lo, hi = wcfg["cross_car_speed"]
-            return meet, 12.0, 24.0, (float(lo), float(hi))
+            return meet, 14.0, 36.0, (float(lo), float(hi))
         if kind == "bicycle":
-            meet = float(sc.get("cross_bike_meet_s", 5.6))
-            return meet, 8.0, 18.0, (1.40, 2.80)
+            meet = float(sc.get("cross_bike_meet_s", 12.4))
+            return meet, 10.0, 24.0, (1.40, 2.80)
         if kind in ("cube", "shape"):
-            meet = float(sc.get("cross_cube_meet_s", 5.8))
+            meet = float(sc.get("cross_cube_meet_s", 12.6))
             lo, hi = wcfg.get("cube_speed", (1.15, 2.20))
-            return meet, 7.0, 16.0, (float(lo), float(hi))
-        meet = float(sc.get("jaywalker_ttc", 6.4))
+            return meet, 8.0, 22.0, (float(lo), float(hi))
+        meet = float(sc.get("jaywalker_ttc", 12.8))
         lo, hi = sc["cross_person_speed"]
-        return meet, 6.0, 18.0, (float(lo), float(hi))
+        return meet, 8.0, 24.0, (float(lo), float(hi))
 
     def _lat_speed_for_meet(
         self, dist: float, meet_s: float, natural: float, *, vmin: float, vmax: float,
@@ -5178,11 +5693,13 @@ class WorldGenerator:
         cube_size: float = 0.45,
         cube_z: Optional[float] = None,
     ) -> None:
-        """Enter the corridor edge and walk/roll all the way out the other.
+        """Cross the gait in view and occupy it near ``meet``.
 
-        Starts at the building-line / kerb, not an in-frame FOV edge, and
-        sits far enough ahead that the walker spends the first half of a
-        10 s clip approaching a still-distant crosser.
+        People start on the camera HFOV edge (not the far building-line) and
+        begin walking while that pose is still on-screen. A kerb wait outside
+        a 50° lens is empty road until the last 0.3 s, then a truncated blob.
+        Vehicles still enter from a corridor edge: they are wide and already
+        sit on the carriageway.
         """
         assert self.state is not None
         pad = self._kind_pad(kind)
@@ -5190,27 +5707,54 @@ class WorldGenerator:
         L = self._gait_lat()
         lim = self.state.corridor.lateral_limit(pad, True)
         meet, near, far, (vmin, vmax) = self._cross_kind_params(kind)
+        if self.force_critical:
+            cpa = float(self.cfg["scenarios"]["critical_cpa_target"])
         natural = max(vmin, min(vmax, float(speed)))
+        walk = max(vmin, min(vmax, natural))
         v_ego = self._ego_speed(rig)
-        depth = max(near, float(v_ego) * meet)
+        personish = kind not in ("vehicle",)
+        v_along = 0.0
+        if kind == "person":
+            # Walk toward the camera so they occupy FOV for seconds and the
+            # gait cycle does not idle after the lateral burst.
+            v_along = -self.rng.uniform(0.40, 0.75)
+        closing = float(v_ego) + abs(v_along)
+        depth = max(near, closing * float(meet))
         depth = depth + 1.1 * max(0.0, float(cpa) - 0.25)
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
             depth = depth + extra
-        depth = self._visible_lead(depth, near=near, far=far)
-        # Corridor edge, not the frustum edge — they walk into the picture
-        # and continue out the far side. Pace is timed to the gait, not the
-        # far kerb, so a 10 s clip can watch them arrive.
+        # Keep the physics lead: clipping it to a 10 s window made crossers
+        # occupy the gait in the first half of a 15 s clip.
+        depth = self._visible_lead(depth, near=near, far=max(far, depth + 1.0))
+        s = s0 + depth
+        if personish:
+            from_left = self._prefer_cross_from_left(L, lim, from_left)
+            visible_t = 6.0
+            lat_start = self._visible_entry_lat(
+                rig, s, v_along, L, from_left=from_left, pad=pad, t_ref=visible_t,
+            )
+            dist_gait = abs(lat_start - L)
+            t_cross = dist_gait / max(walk, 0.08)
+            # Start by ~6 s so frames 6/8 already show a walking person, and
+            # never later than meet - t_cross (arrive around meet).
+            swerve_t = max(0.0, min(visible_t, float(meet) - t_cross))
+        else:
+            if from_left:
+                lat_start = -lim
+            else:
+                lat_start = lim
+            dist_gait = abs(lat_start - L)
+            t_cross = dist_gait / max(walk, 0.08)
+            swerve_t = max(0.0, float(meet) - t_cross)
         if from_left:
-            lat_start = -lim
             lat_end = lim
         else:
-            lat_start = lim
             lat_end = -lim
-        walk = self._lat_speed_for_meet(
-            abs(lat_start - L), meet, natural, vmin=vmin, vmax=vmax,
-        )
-        s = s0 + depth
+        if self.force_critical:
+            # Collision course: occupy the gait, not the far kerb.
+            lat_end = L + math.copysign(float(cpa), 1.0 if from_left else -1.0)
+            lat_end = max(-lim, min(lim, lat_end))
         heading_sign = 1.0 if from_left else -1.0
         actor = self._spawn_kind(
             kind, s, lat_start, heading_sign=heading_sign,
@@ -5218,9 +5762,10 @@ class WorldGenerator:
         )
         self._bind(
             actor, s, lat_start,
-            speed=0.0,
+            speed=float(v_along),
             lat_speed=walk,
             lat_target=lat_end,
+            swerve_t=swerve_t,
             behavior="through",
             allow_sidewalk=True,
             pad=pad,
@@ -5240,11 +5785,9 @@ class WorldGenerator:
         lim = self.state.corridor.lateral_limit(pad, True)
         walk = self.rng.uniform(*self.cfg["scenarios"]["cross_person_speed"])
         from_left = self.rng.random() < 0.5
-        depth = 10.0
+        extra = 0.0
         if self._compose is not None:
             extra, from_left = self._compose.take_cross_layout(from_left)
-            depth = depth + extra
-        depth = self._visible_lead(depth, near=7.0, far=18.0)
         lat_start = -lim if from_left else lim
         lat_start = max(-lim, min(lim, lat_start))
         # Merge onto the gait line, with a small CPA offset.
@@ -5259,7 +5802,22 @@ class WorldGenerator:
         lat_merge = max(-lim, min(lim, lat_merge))
         dist = abs(lat_merge - lat_start)
         t_arrive = dist / max(walk, 0.08)
-        turn_t = max(0.25, t_arrive - 0.40)
+        hit = float(self.cfg["scenarios"].get("outcome_hit_s", 13.0))
+        v_ego = float(self._ego_speed(rig))
+        if toward:
+            # Wait at the kerb if the lateral merge would finish too early,
+            # then walk toward the camera so the meet is at hit_s.
+            approach = 4.20
+            t_merge = max(t_arrive, hit - approach)
+            swerve_t = max(0.0, t_merge - t_arrive)
+            turn_t = max(swerve_t + 0.25, t_merge - 0.40)
+            depth = (v_ego + walk) * hit - walk * turn_t
+        else:
+            swerve_t = 0.0
+            turn_t = max(0.25, t_arrive - 0.40)
+            depth = max(10.0, v_ego * min(hit, 8.0) + 4.0)
+        depth = depth + extra
+        depth = self._visible_lead(depth, near=12.0, far=48.0)
         s = s0 + depth
         heading_sign = 1.0 if from_left else -1.0
         actor = self._spawn_kind("person", s, lat_start, heading_sign=heading_sign)
@@ -5268,6 +5826,7 @@ class WorldGenerator:
             speed=0.0,
             lat_speed=walk,
             lat_target=lat_merge,
+            swerve_t=swerve_t if toward else None,
             behavior="turn_toward" if toward else "turn_away",
             allow_sidewalk=True,
             pad=pad,
@@ -5295,6 +5854,8 @@ class WorldGenerator:
         assert self.state is not None
         use_pad = float(pad) if pad is not None else self._kind_pad(kind)
         s0, L = self._cam_sl(rig, 0.0)
+        if self.force_critical and dlat != "opposite":
+            dlat = float(self.cfg["scenarios"]["critical_cpa_target"])
         lat = self._resolve_lat(dlat, L, use_pad)
         v_close = float(self._ego_speed(rig)) + float(obj_speed)
         tau = float(tau)
@@ -5346,7 +5907,7 @@ class WorldGenerator:
         """Parked car on the near gutter; an open door occupies the gait."""
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
-        s = s0 + self._visible_lead(10.5, near=8.0, far=16.0)
+        s = s0 + self._gait_meet_lead(rig, 16.0)
         if self._compose is not None:
             s = s + self._compose.take_group_offset("static")
         lat_car = self._resolve_lat(1.25, L, 1.05)
@@ -5378,7 +5939,8 @@ class WorldGenerator:
         s0, _L = self._cam_sl(rig, 0.0)
         lat = self._near_lane()
         v = self.rng.uniform(1.4, 2.4)
-        s = s0 + self._visible_lead(12.5, near=9.0, far=20.0)
+        tau = float(self.cfg["scenarios"].get("outcome_hit_s", 13.0))
+        s = s0 + self._along_meet_depth(rig, v, tau, near=12.0)
         if self._compose is not None:
             s = s + self._compose.take_group_offset("along")
         actor = self._spawn_kind("vehicle", s, lat, heading_sign=1.0)
@@ -5434,13 +5996,15 @@ class WorldGenerator:
         lat = self._far_lane()
         v = float(self.rng.uniform(*self.cfg["world"]["vehicle_speed"]))
         oncoming = self.rng.random() < 0.75
+        tau = float(self.cfg["scenarios"].get("car_pass_tau", 13.2))
         if oncoming:
-            # Far enough to stay in frame for most of a 10 s clip, close
-            # enough that the hull sits on a FOV side — not a vanishing-point speck.
-            depth = self._visible_lead(24.0, near=18.0, far=32.0)
+            # Stay in the far lane for the whole clip: they grow on the FOV
+            # edge and never occupy the gait. A 32 m spawn at 6 m/s passed
+            # at ~4 s on a 15 s episode.
+            depth = self._along_meet_depth(rig, v, tau, near=28.0)
             sign = -1.0
         else:
-            depth = self._visible_lead(14.0, near=10.0, far=20.0)
+            depth = self._visible_lead(max(20.0, float(self._ego_speed(rig)) * 8.0), near=14.0, far=40.0)
             sign = 1.0
         if self._compose is not None:
             depth = depth + min(2.2, abs(self._compose.take_group_offset("along")))
@@ -5457,7 +6021,7 @@ class WorldGenerator:
     def _inject_periph_parked(self, rig: Any) -> None:
         """Parked car in a gutter — visible beside the empty sidewalk."""
         s0, _L = self._cam_sl(rig, 0.0)
-        depth = self._visible_lead(12.0, near=8.0, far=18.0)
+        depth = self._gait_meet_lead(rig, 18.0)
         if self._compose is not None:
             depth = depth + self._compose.take_group_offset("along")
         s = s0 + depth
@@ -5476,7 +6040,7 @@ class WorldGenerator:
         """Person on the opposite sidewalk — never on the gait line."""
         s0, L = self._cam_sl(rig, 0.0)
         lat = self._resolve_lat("opposite", L, 0.35)
-        depth = self._visible_lead(12.0, near=8.0, far=18.0)
+        depth = self._gait_meet_lead(rig, 18.0)
         if self._compose is not None:
             depth = depth + self._compose.take_group_offset("along")
         s = s0 + depth
@@ -5504,13 +6068,18 @@ class WorldGenerator:
         v_car = (
             self.rng.uniform(5.8, 7.6) if runoff else self.rng.uniform(5.0, 6.6)
         )
-        depth = self._visible_lead(22.0, near=16.0, far=30.0)
+        sc = self.cfg["scenarios"]
+        if runoff:
+            lo, hi = sc.get("run_off_hit_s", (12.2, 13.6))
+            t_hit = self.rng.uniform(float(lo), float(hi))
+        else:
+            t_hit = float(sc.get("outcome_hit_s", 13.0))
+        closing = float(v_car) + float(self._ego_speed(rig))
+        depth = self._along_meet_depth(rig, v_car, t_hit, near=36.0)
         if self._compose is not None:
             depth = depth + min(2.2, abs(self._compose.take_group_offset("along")))
         s = min(max(2.0, s0 + depth), self.state.road.length - 5.0)
-        t0 = self.rng.uniform(1.6, 2.8)
-        closing = float(v_car) + float(self._ego_speed(rig))
-        t_hit = max(t0 + 2.40, min(6.80, depth / max(closing, 1.0)))
+        t_hit = max(4.0, (s - s0) / max(closing, 1.0))
         if runoff:
             lim = self.state.corridor.lateral_limit(1.05, True)
             lat_target = math.copysign(lim, L if L else 1.0)
@@ -5519,7 +6088,7 @@ class WorldGenerator:
             cpa = float(self.cfg["scenarios"]["critical_cpa_target"])
             lat_target = L + math.copysign(cpa, 1.0 if L >= 0.0 else -1.0)
             behavior = "cut_in"
-        ease = max(2.00, min(3.40, t_hit - t0))
+        ease = max(2.00, min(3.40, t_hit - 0.80))
         t0 = max(0.20, t_hit - ease)
         rate = abs(lat_target - lane) / max(0.35, ease)
         actor = self._spawn_kind("vehicle", s, lane, heading_sign=-1.0)
@@ -5549,9 +6118,7 @@ class WorldGenerator:
         lat = self._far_lane() if far else self._near_lane()
         v = float(self.rng.uniform(*self.cfg["world"]["vehicle_speed"]))
         tau = float(self.cfg["scenarios"]["cross_car_tau"])
-        v_close = float(self._ego_speed(rig)) + v
-        depth = max(v_close, v) * tau
-        depth = self._visible_lead(depth, near=12.0, far=36.0)
+        depth = self._along_meet_depth(rig, v, tau, near=24.0)
         if self._compose is not None:
             depth = depth + min(2.4, abs(self._compose.take_group_offset("along")))
         s = min(max(2.0, s0 + depth), self.state.road.length - 6.0)
@@ -5617,7 +6184,9 @@ class WorldGenerator:
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
         count = int(n) if int(n) > 0 else self.rng.randint(2, 4)
-        lead0 = float(self.cfg["scenarios"].get("static_shape_lead_m", 8.8))
+        lead0 = self._gait_meet_lead(
+            rig, float(self.cfg["scenarios"].get("static_shape_lead_m", 16.0)),
+        )
         if self._compose is not None:
             lead0 = lead0 + self._compose.take_group_offset("static")
         for i in range(count):
@@ -5640,7 +6209,7 @@ class WorldGenerator:
     def _inject_pothole(self, rig: Any, lead: float, dlat: float) -> None:
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
-        lead = float(lead)
+        lead = self._gait_meet_lead(rig, float(lead))
         if self._compose is not None:
             lead = lead + self._compose.take_group_offset("static")
         s = s0 + lead
@@ -5682,7 +6251,7 @@ class WorldGenerator:
         """Trunk on (or just off) the gait. Background scatter still stays off-slab."""
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
-        lead = float(lead)
+        lead = self._gait_meet_lead(rig, float(lead))
         if self._compose is not None:
             lead = lead + self._compose.take_group_offset("static")
         s = s0 + lead
@@ -5711,7 +6280,7 @@ class WorldGenerator:
         """Pole on (or just off) the gait — same TTC path as a bollard."""
         assert self.state is not None
         s0, L = self._cam_sl(rig, 0.0)
-        lead = float(lead)
+        lead = self._gait_meet_lead(rig, float(lead))
         if self._compose is not None:
             lead = lead + self._compose.take_group_offset("static")
         s = s0 + lead
@@ -5787,6 +6356,8 @@ class WorldGenerator:
             tau_extra = self._compose.take_group_offset("along") / max(float(v_car), 1.0)
         s_car0 = s_hit + float(v_car) * (float(t_hit) + tau_extra)
         s_car0 = min(max(2.0, s_car0), self.state.road.length - 5.0)
+        span = max(8.0, s_car0 - s_hit)
+        v_car = max(3.20, span / max(float(t_hit) + tau_extra, 0.80))
         lat_target = L + math.copysign(float(cpa), 1.0 if L >= 0.0 else -1.0)
         ease = max(2.00, min(3.40, float(t_hit) - 0.40))
         t0 = max(0.20, float(t_hit) - ease)
@@ -5842,6 +6413,8 @@ class WorldGenerator:
         s_car0 = min(
             max(2.0, s_hit + v_car * (t_hit + tau_extra)), self.state.road.length - 5.0
         )
+        span = max(8.0, s_car0 - s_hit)
+        v_car = max(3.20, span / max(t_hit + tau_extra, 0.80))
         # Overshoot past the walker toward the facade.
         lim = self.state.corridor.lateral_limit(1.05, True)
         lat_target = math.copysign(lim, L if L else 1.0)
@@ -5909,40 +6482,51 @@ class WorldGenerator:
         """A child bolting across the walker's path.
 
         True child anthropometry (larger head fraction, ~1.1–1.3 m stature),
-        not a uniformly scaled adult. A detector tuned on 1.7 m rectangles
-        systematically underestimates the threat of a smaller, faster body.
+        not a uniformly scaled adult. Wait pose is on-screen (HFOV edge of
+        the road side), dart starts in the 8–11 s window — before the group
+        fork — and they close along-track so the run is still happening at
+        hit_s rather than a 12 s kerb statue that the camera walks past.
         """
         assert self.state is not None
         sc = self.cfg["scenarios"]
         pad = 0.24
         lo, hi = sc["child_dart_hit_s"]
         t_hit = self.rng.uniform(float(lo), float(hi))
+        diverge = float(sc.get("outcome_diverge_s", 12.15))
         rlo, rhi = sc["child_dart_run_s"]
         run = self.rng.uniform(float(rlo), float(rhi))
-        t0 = max(0.60, t_hit - run)
+        t0 = float(t_hit) - float(run)
+        t0 = min(t0, 10.4, float(diverge) - 1.70)
+        t0 = max(7.20, t0)
         s_hit, L = self._cam_sl(rig, t_hit)
+        # Toward the camera: remaining depth at t0 stays wide enough for a
+        # 50° lens, and velocity.length keeps the run cycle after the cut.
+        v_along = -self.rng.uniform(0.85, 1.35)
+        s0_cam = self._cam_s(rig, 0.0)
+        s = float(s_hit) - float(v_along) * float(t_hit)
+        s = min(max(s0_cam + 8.0, s), self.state.road.length - 5.0)
         lim = self.state.corridor.lateral_limit(pad, True)
-        speed = self.rng.uniform(1.9, 3.1)
         from_left = self.rng.random() < 0.5
         if self._compose is not None:
             _extra, from_left = self._compose.take_cross_layout(from_left)
-        # Wait at the corridor edge, then bolt so they reach the gait at t_hit.
-        dist = min(abs(lim - L) * 0.95, speed * max(0.80, t_hit - t0))
-        dist = max(2.4, dist)
-        lat_start = L - dist if from_left else L + dist
-        lat_start = max(-lim, min(lim, lat_start))
-        speed = abs(lat_start - L) / max(0.55, t_hit - t0)
-        lat_end = L + (0.55 if from_left else -0.55)
+        from_left = self._prefer_cross_from_left(L, lim, from_left, min_room=1.70)
+        lat_start = self._visible_entry_lat(
+            rig, s, v_along, L, from_left=from_left, pad=pad,
+            t_ref=min(t0, 8.0), min_off=1.70, max_off=4.60,
+        )
+        dart = self.rng.uniform(1.9, 3.1)
+        cpa = float(sc["critical_cpa_target"]) if self.force_critical else 0.55
+        sign = 1.0 if lat_start < L else -1.0
+        lat_end = L + sign * max(0.45, float(cpa))
         lat_end = max(-lim, min(lim, lat_end))
-        s = s_hit
         actor = self._spawn_kind(
             "person", s, lat_start, heading_sign=1.0 if from_left else -1.0,
             child=True,
         )
         self._bind(
             actor, s, lat_start,
-            speed=0.0,
-            lat_speed=speed,
+            speed=float(v_along),
+            lat_speed=dart,
             lat_target=lat_end,
             swerve_t=t0,
             behavior="dart",

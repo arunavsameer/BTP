@@ -83,8 +83,8 @@ Force time of day (QA; not a CLI flag): `BTP_LIGHTING=dusk ./run.sh …`
 | `--list-scenarios` | | Print pools and aliases, exit |
 | `--output DIR` | `./output` | Dataset root |
 | `--seed N` | `42` | Master RNG. Each episode then draws its own stream. |
-| `--frames N` | config `150` | Frames per episode (`0` = config). 30 fps ⇒ 150 frames = 5.0 s |
-| `--duration SEC` | config 5.0 s | `frames = round(SEC * fps)`. `--frames` wins if both are set. |
+| `--frames N` | config `450` | Frames per episode (`0` = config). 30 fps ⇒ 450 frames = 15.0 s |
+| `--duration SEC` | config 15.0 s | `frames = round(SEC * fps)`. `--frames` wins if both are set. |
 | `--media` | `both` | `frames` (keep `rgb/`), `video` (mux then delete PNGs), `both` |
 | `--no-rgb` | off | Delete `rgb/` after `preview.mp4` (and overlay) succeed. PNGs are kept if mux fails. Ignored with `--media frames`. |
 | `--no-render` | off | Skip EEVEE. Still writes JSON. |
@@ -202,7 +202,7 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 
 **What the interesting ones do**
 
-- `jaywalker` / `jaywalker_from_left` / `jaywalker_from_right` — person enters one FOV edge and walks out the other on the street ribbon (~1.0–1.35 m/s).
+- `jaywalker` / `jaywalker_from_left` / `jaywalker_from_right` — person starts on an on-screen FOV edge (not the far kerb) and walks across the street ribbon (~0.75–1.10 m/s) so they are a recognizable body for several seconds, not a last-frame splat.
 - `jaywalker_turn_toward` — comes in from the side, then turns onto the sidewalk **toward** you.
 - `jaywalker_turn_away` — turns onto the road and walks **with** you, ahead.
 - `empty_street` — almost no background traffic or clutter. In a compound it still sparsifies the street; the other names still inject.
@@ -299,6 +299,50 @@ datasets/pack_YYYYMMDD_HHMMSS_s7_n24/
 
 `--theme peripheral` (aliases `side`, `clear_center`) builds only the empty-center / side-threat catalog: ~18 % empty street, ~37 % side-stay (car / parked / opposite ped), ~45 % side-cut (car turns in, person or child cuts through). Mixed packs are unchanged.
 
+## Outcome groups (`gen_dataset.py --groups`)
+
+Each **sample** is one threat (the object that goes red on the heatmap) with three endings that share RGB until `diverge_s` (12.15 s of a 15 s clip; hit at 14.35 s):
+
+- `collision/` — the threat continues into the walker
+- `miss_left/` / `miss_right/` — it peels to the walker's left or right
+
+A vehicle miss needs ≥ 2.5 m of lateral room after the corridor clip. If that side is a facade (typical right-sidewalk cut-in), the car takes the **far driving lane** instead of hugging the wall and still colliding. People peel at ~1.3–2.2 m/s; cars at ~2.4–5.4 m/s.
+
+Inside each ending, `bg_00`, `bg_01`, … rebuild non-threat scatter (trees, buildings, furniture; `full` / `sparse` / `bare`) **and** a distinct time of day (noon / night / dusk / overcast / glare / dawn). Path, ego, clothes, and the threat injector stay fixed. Collision and miss of the **same** `bg_YY` share lighting (prefix PNGs are copied); different `bg_YY` do not. Collision is rendered in full; miss clips **copy the prefix PNGs** and only re-render the tail.
+
+```bash
+./gen_dataset.py --groups --n 4 --bg-variants 3 --seed 21 --name groups15 \
+  --threat-grid 5 --spatial-overlay --media video --no-rgb --biome auto
+# Optional: pin names (otherwise the forkable catalog is cycled)
+./gen_dataset.py --groups --n 2 --bg-variants 2 --group-scenarios jaywalker,car_cut_in --dry-run
+```
+
+```
+datasets/groups15_s21_n4/
+  pack.json
+  plan.json
+  groups_index.json          # flat list for a training dataloader
+  sample_0000_car_cut_in/
+    group.json
+    collision/bg_00/preview.mp4
+    miss_left/bg_00/…
+    miss_right/bg_00/…
+```
+
+Python index (`y=1` collision, `y=0` miss):
+
+```python
+import json
+from pathlib import Path
+root = Path("datasets/groups15_s21_n4")
+clips = json.loads((root / "groups_index.json").read_text())["clips"]
+row = clips[0]
+video = root / row["path"] / "preview.mp4"
+# sample_0000_<scenario>/{collision,miss_left,miss_right}/bg_YY/
+```
+
+Walk speed is not increased for 15 s clips. People start from an on-screen HFOV edge (not a far kerb the lens has already cropped) and walk at a human pace so they occupy the gait around 14 s — the last second is the collision or the miss, not empty road.
+
 ## Checks (no Blender)
 
 ```bash
@@ -306,5 +350,6 @@ python threat_math.py
 python spatial_threat.py
 python spatial_overlay.py
 python scenario_compose.py
+python outcome_groups.py
 python gen_dataset.py --self-test
 ```

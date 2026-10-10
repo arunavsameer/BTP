@@ -35,6 +35,7 @@ if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
 
 import bpy
+from mathutils import Vector
 
 from camera_kinematics import (
     EGO_MODES,
@@ -71,12 +72,14 @@ from threat_math import (
     vec_to_list,
 )
 from scenario_compose import (
+    CROSS_EGO_SCENARIOS,
     SCENARIO_ALIASES,
     all_scenario_names,
     compose_display,
     pick_scenarios,
     scenario_request_from_tokens,
 )
+from outcome_groups import iter_clips, link_or_copy_prefix
 from world_generator import (
     SUNKEN_CLASSES,
     WIND_LABELS,
@@ -146,7 +149,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--duration",
         type=float,
         default=0.0,
-        help="Episode length in seconds. frames = round(duration * fps). Default 10 s. --frames wins if both set.",
+        help="Episode length in seconds. frames = round(duration * fps). Default 15 s. --frames wins if both set.",
     )
     p.add_argument(
         "--media",
@@ -354,8 +357,14 @@ def build_frame_record(
 
         # A tree's silhouette is its canopy but its hazard is its trunk, so
         # the threat point and the Frenet extents come from `threat_obj`
-        # while the 2-D box keeps using the full hierarchy.
-        if actor.threat_obj is not None and actor.threat_obj is not actor.obj:
+        # while the 2-D box keeps using the full hierarchy. Streetlamps use
+        # the pole mesh only — the cobra arm must not inflate half_lat.
+        if actor.class_name in ("tree", "streetlamp"):
+            mesh = actor.threat_obj if actor.threat_obj is not None else actor.obj
+            threat_corners = bound_cache_for(mesh).part_world_corners(
+                only_obj=mesh, scale=1.0,
+            ) or corners
+        elif actor.threat_obj is not None and actor.threat_obj is not actor.obj:
             threat_corners = bound_cache_for(actor.threat_obj).world_corners() or corners
         else:
             threat_corners = corners
@@ -415,6 +424,13 @@ def build_frame_record(
                 INNER_BOX_SCALE, only_obj=only_part,
             )
         inner_boxes = project_inner_boxes(inner_sets, view, proj, res_x, res_y)
+        cam_space = view @ Vector((p_obj[0], p_obj[1], p_obj[2], 1.0))
+        look_dot = (
+            (p_obj[0] - cam_x) * tx
+            + (p_obj[1] - cam_y) * ty
+            + (p_obj[2] - cam_z) * tz
+        )
+        behind_camera = bool(cam_space.z >= -1e-3) or look_dot < -0.05
 
         label = classify_threat(kin, v_obj_vec.length, cfg["threat"])
         half_s, half_lat = horizontal_extents(threat_corners, (tx, ty, tz))
@@ -436,8 +452,11 @@ def build_frame_record(
             res_y=res_y,
             path_s=path_s,
             path_lat=path_lat,
-            boxes=inner_boxes or None,
+            boxes=inner_boxes,
             class_name=actor.class_name,
+            occluded=bool(bbox.occluded),
+            behind_camera=behind_camera,
+            z_cam=float(cam_space.z),
         )
         objects.append(
             {
@@ -630,12 +649,14 @@ def _encode_with_ffmpeg(
     extra_inputs: list[str] | None = None,
     filter_complex: str | None = None,
     filter_map: str = "[out]",
+    start_number: int = 0,
 ) -> tuple[bool, str]:
     """Mux `%06d.png` with system ffmpeg. Returns (ok, message)."""
     exe = shutil.which(ffmpeg_bin)
     if exe is None:
         return False, f"{ffmpeg_bin} not found on PATH"
-    first = png_dir / "000000.png"
+    start_number = max(0, int(start_number))
+    first = png_dir / f"{start_number:06d}.png"
     if not first.is_file():
         return False, f"missing first frame: {first}"
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -645,18 +666,26 @@ def _encode_with_ffmpeg(
     if want == "nvenc" and not _nvenc_usable(exe):
         use_nvenc = False
 
-    common_in = [
-        exe, "-y",
-        "-framerate", str(int(fps)),
-        "-i", str(png_dir / "%06d.png"),
-    ]
+    def _seq_in(path_glob: str) -> list[str]:
+        return [
+            "-framerate", str(int(fps)),
+            "-start_number", str(start_number),
+            "-i", path_glob,
+        ]
+
+    common_in = [exe, "-y"] + _seq_in(str(png_dir / "%06d.png"))
     for extra in extra_inputs or []:
-        common_in += ["-framerate", str(int(fps)), "-i", extra]
+        common_in += _seq_in(extra)
     common_in += ["-frames:v", str(int(n_frames))]
     filter_args: list[str] = []
     if filter_complex:
         filter_args = ["-filter_complex", filter_complex, "-map", filter_map]
-    common_out = filter_args + ["-pix_fmt", "yuv420p", "-movflags", "+faststart", str(out_path)]
+    common_out = filter_args + [
+        "-r", str(int(fps)),
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        str(out_path),
+    ]
 
     if use_nvenc:
         cmd = common_in + [
@@ -685,6 +714,153 @@ def _encode_with_ffmpeg(
         err = (proc.stderr or proc.stdout or "").strip()
         return False, err[-800:] or f"ffmpeg exited {proc.returncode}"
     return True, f"{exe} libx264 {x264_preset}"
+
+
+def _count_mp4_frames(path: Path) -> int | None:
+    """Best-effort packet count so concat-copy cannot silently drop frames."""
+    exe = shutil.which("ffprobe")
+    if exe is None or not path.is_file():
+        return None
+    proc = subprocess.run(
+        [
+            exe, "-v", "error", "-select_streams", "v:0",
+            "-count_packets", "-show_entries", "stream=nb_read_packets,nb_frames",
+            "-of", "csv=p=0", str(path),
+        ],
+        capture_output=True, text=True,
+    )
+    if proc.returncode != 0:
+        return None
+    nums: list[int] = []
+    for part in (proc.stdout or "").replace("\n", ",").split(","):
+        part = part.strip()
+        if part.isdigit():
+            nums.append(int(part))
+    return max(nums) if nums else None
+
+
+def _concat_copy_mp4(parts: list[Path], out_path: Path, ffmpeg_bin: str) -> tuple[bool, str]:
+    """Concat demuxer, bitstream copy. Parts must share codec / timebase / size."""
+    exe = shutil.which(ffmpeg_bin)
+    if exe is None:
+        return False, f"{ffmpeg_bin} not found on PATH"
+    if any(not p.is_file() for p in parts):
+        missing = [str(p) for p in parts if not p.is_file()]
+        return False, f"concat part missing: {missing}"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    list_path = out_path.parent / f".{out_path.stem}.concat.txt"
+    try:
+        lines = []
+        for p in parts:
+            s = p.resolve().as_posix().replace("'", r"'\''")
+            lines.append(f"file '{s}'")
+        list_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        proc = subprocess.run(
+            [
+                exe, "-y", "-f", "concat", "-safe", "0", "-i", str(list_path),
+                "-c", "copy", "-movflags", "+faststart", str(out_path),
+            ],
+            capture_output=True, text=True,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip()
+            return False, err[-800:] or f"concat exited {proc.returncode}"
+        return True, "concat-copy"
+    finally:
+        try:
+            list_path.unlink()
+        except OSError:
+            pass
+
+
+def _encode_full_ffmpeg(
+    *,
+    png_dir: Path,
+    n_frames: int,
+    cfg: dict,
+    out_path: Path,
+    extra_inputs: list[str] | None = None,
+    filter_complex: str | None = None,
+    start_number: int = 0,
+) -> tuple[bool, str]:
+    fps = int(cfg["render"]["fps"])
+    return _encode_with_ffmpeg(
+        png_dir, int(n_frames), fps, out_path,
+        int(cfg["output"].get("video_crf", 18)),
+        str(cfg["output"].get("ffmpeg_bin", "ffmpeg")),
+        encoder=str(cfg["output"].get("video_encoder", "auto")),
+        x264_preset=str(cfg["output"].get("x264_preset", "veryfast")),
+        nvenc_preset=str(cfg["output"].get("nvenc_preset", "p4")),
+        extra_inputs=extra_inputs,
+        filter_complex=filter_complex,
+        start_number=start_number,
+    )
+
+
+def _encode_segmented(
+    *,
+    png_dir: Path,
+    n_frames: int,
+    prefix_len: int,
+    cfg: dict,
+    out_path: Path,
+    extra_inputs: list[str] | None = None,
+    filter_complex: str | None = None,
+    prefix_mp4: Path | None = None,
+    write_prefix_to: Path | None = None,
+) -> tuple[bool, str, Path | None]:
+    """Encode prefix once, encode the tail, concat-copy. Fallback: full PNG mux."""
+    n_frames = int(n_frames)
+    prefix_len = max(0, int(prefix_len))
+    ffmpeg_bin = str(cfg["output"].get("ffmpeg_bin", "ffmpeg"))
+
+    def _full(reason: str) -> tuple[bool, str, Path | None]:
+        ok, msg = _encode_full_ffmpeg(
+            png_dir=png_dir, n_frames=n_frames, cfg=cfg, out_path=out_path,
+            extra_inputs=extra_inputs, filter_complex=filter_complex,
+        )
+        cached = write_prefix_to if write_prefix_to is not None and write_prefix_to.is_file() else None
+        if prefix_mp4 is not None and prefix_mp4.is_file():
+            cached = prefix_mp4
+        return ok, f"{reason}; full ({msg})" if ok else f"{reason}; full failed ({msg})", cached
+
+    if prefix_len <= 0 or prefix_len >= n_frames:
+        ok, msg, cached = _full("no split")
+        return ok, msg.split("; ", 1)[-1], cached
+
+    dest_prefix = prefix_mp4 if prefix_mp4 is not None and prefix_mp4.is_file() else None
+    if dest_prefix is None:
+        dest_prefix = write_prefix_to or out_path.with_name(f".{out_path.stem}_prefix.mp4")
+        ok, msg = _encode_full_ffmpeg(
+            png_dir=png_dir, n_frames=prefix_len, cfg=cfg, out_path=dest_prefix,
+            extra_inputs=extra_inputs, filter_complex=filter_complex, start_number=0,
+        )
+        if not ok:
+            return _full(f"prefix encode failed ({msg})")
+
+    tail_n = n_frames - prefix_len
+    tail_mp4 = out_path.with_name(f".{out_path.stem}_tail.mp4")
+    try:
+        ok, msg = _encode_full_ffmpeg(
+            png_dir=png_dir, n_frames=tail_n, cfg=cfg, out_path=tail_mp4,
+            extra_inputs=extra_inputs, filter_complex=filter_complex,
+            start_number=prefix_len,
+        )
+        if not ok:
+            return _full(f"tail encode failed ({msg})")
+        ok, msg = _concat_copy_mp4([dest_prefix, tail_mp4], out_path, ffmpeg_bin)
+        if not ok:
+            return _full(f"concat failed ({msg})")
+        got = _count_mp4_frames(out_path)
+        if got is not None and got != n_frames:
+            return _full(f"concat dropped frames ({got} != {n_frames})")
+        via = f"concat-copy prefix={prefix_len} tail={tail_n}"
+        return True, via, dest_prefix
+    finally:
+        try:
+            tail_mp4.unlink()
+        except OSError:
+            pass
 
 
 def _sequence_collection(sed: Any) -> Any:
@@ -794,16 +970,27 @@ def encode_episode_video(
     n_frames: int,
     cfg: dict,
     out_path: Path,
+    prefix_len: int = 0,
+    prefix_mp4: Path | None = None,
+    write_prefix_to: Path | None = None,
 ) -> tuple[bool, str]:
     """Prefer system ffmpeg; fall back to Blender's bundled encoder."""
     fps = int(cfg["render"]["fps"])
-    crf = int(cfg["output"].get("video_crf", 18))
-    ffmpeg_bin = str(cfg["output"].get("ffmpeg_bin", "ffmpeg"))
-    ok, msg = _encode_with_ffmpeg(
-        png_dir, n_frames, fps, out_path, crf, ffmpeg_bin,
-        encoder=str(cfg["output"].get("video_encoder", "auto")),
-        x264_preset=str(cfg["output"].get("x264_preset", "veryfast")),
-        nvenc_preset=str(cfg["output"].get("nvenc_preset", "p4")),
+    if 0 < int(prefix_len) < int(n_frames):
+        ok, msg, _cached = _encode_segmented(
+            png_dir=png_dir,
+            n_frames=n_frames,
+            prefix_len=int(prefix_len),
+            cfg=cfg,
+            out_path=out_path,
+            prefix_mp4=prefix_mp4,
+            write_prefix_to=write_prefix_to,
+        )
+        if ok:
+            return True, f"ffmpeg ({msg})"
+        print(f"  [video] segmented mux failed ({msg})")
+    ok, msg = _encode_full_ffmpeg(
+        png_dir=png_dir, n_frames=n_frames, cfg=cfg, out_path=out_path,
     )
     if ok:
         return True, f"ffmpeg ({msg})"
@@ -827,51 +1014,65 @@ def encode_spatial_overlay_video(
     cfg: dict,
     out_path: Path,
     heat_dir: Path,
+    write_heat: bool = True,
+    prefix_len: int = 0,
+    prefix_mp4: Path | None = None,
+    write_prefix_to: Path | None = None,
 ) -> tuple[bool, str]:
     """Hazy RGB + k×k threat heat → ``spatial_overlay.mp4``."""
     frames = list(spatial_payload.get("frames") or [])
     k = int(spatial_payload.get("k") or 3)
     if len(frames) < n_frames:
         return False, f"spatial JSON has {len(frames)} frames, expected {n_frames}"
-    try:
-        written = write_heat_sequence(frames[:n_frames], heat_dir, k=k)
-    except Exception as exc:
-        return False, f"heat sequence failed: {exc}"
-    if written < n_frames:
-        return False, f"wrote {written} heat frames, expected {n_frames}"
+    if write_heat:
+        try:
+            written = write_heat_sequence(frames[:n_frames], heat_dir, k=k)
+        except Exception as exc:
+            return False, f"heat sequence failed: {exc}"
+        if written < n_frames:
+            return False, f"wrote {written} heat frames, expected {n_frames}"
     first_heat = heat_dir / "000000.ppm"
     if not first_heat.is_file():
         return False, f"missing heat frame: {first_heat}"
-    fps = int(cfg["render"]["fps"])
-    crf = int(cfg["output"].get("video_crf", 18))
-    ffmpeg_bin = str(cfg["output"].get("ffmpeg_bin", "ffmpeg"))
+    last_heat = heat_dir / f"{int(n_frames) - 1:06d}.ppm"
+    if not last_heat.is_file():
+        return False, f"missing heat frame: {last_heat}"
+    extra = [str(heat_dir / "%06d.ppm")]
     filt = overlay_filter_complex(
         k,
         int(cfg["render"]["resolution_x"]),
         int(cfg["render"]["resolution_y"]),
     )
-    ok, msg = _encode_with_ffmpeg(
-        rgb_dir, n_frames, fps, out_path, crf, ffmpeg_bin,
-        encoder=str(cfg["output"].get("video_encoder", "auto")),
-        x264_preset=str(cfg["output"].get("x264_preset", "veryfast")),
-        nvenc_preset=str(cfg["output"].get("nvenc_preset", "p4")),
-        extra_inputs=[str(heat_dir / "%06d.ppm")],
-        filter_complex=filt,
-    )
+
+    def _try(filt_graph: str) -> tuple[bool, str]:
+        if 0 < int(prefix_len) < int(n_frames):
+            ok, msg, _cached = _encode_segmented(
+                png_dir=rgb_dir,
+                n_frames=n_frames,
+                prefix_len=int(prefix_len),
+                cfg=cfg,
+                out_path=out_path,
+                extra_inputs=extra,
+                filter_complex=filt_graph,
+                prefix_mp4=prefix_mp4,
+                write_prefix_to=write_prefix_to,
+            )
+            if ok:
+                return True, msg
+        ok, msg = _encode_full_ffmpeg(
+            png_dir=rgb_dir, n_frames=n_frames, cfg=cfg, out_path=out_path,
+            extra_inputs=extra, filter_complex=filt_graph,
+        )
+        return ok, msg
+
+    ok, msg = _try(filt)
     if ok:
         return True, f"ffmpeg ({msg})"
     # Older ffmpeg builds may lack drawgrid; retry the blend-only graph.
     head, sep, _ = filt.partition(";[mix]drawgrid")
     filt_plain = f"{head};[mix]copy[out]" if sep else ""
     if filt_plain and "drawgrid" in filt:
-        ok, msg = _encode_with_ffmpeg(
-            rgb_dir, n_frames, fps, out_path, crf, ffmpeg_bin,
-            encoder=str(cfg["output"].get("video_encoder", "auto")),
-            x264_preset=str(cfg["output"].get("x264_preset", "veryfast")),
-            nvenc_preset=str(cfg["output"].get("nvenc_preset", "p4")),
-            extra_inputs=[str(heat_dir / "%06d.ppm")],
-            filter_complex=filt_plain,
-        )
+        ok, msg = _try(filt_plain)
         if ok:
             return True, f"ffmpeg ({msg}, no drawgrid)"
     return False, msg
@@ -934,19 +1135,22 @@ def _render_animation_sequence(
     pose_objects: list,
     frame_poses: list[list[tuple]],
     png_compression: int,
+    start_frame: int = 0,
 ) -> bool:
     """Replay cached poses inside one EEVEE animation render (GPU stays warm)."""
 
     def on_frame(scene_arg: Any, _depsgraph: Any = None) -> None:
         i = int(scene_arg.frame_current)
         if 0 <= i < len(frame_poses):
-            _restore_poses(pose_objects, frame_poses[i])
+            snap = frame_poses[i]
+            if snap is not None:
+                _restore_poses(pose_objects, snap)
 
     handlers = bpy.app.handlers.frame_change_pre
     handlers.append(on_frame)
     try:
         prepare_still_render(scene, png_compression=png_compression)
-        scene.frame_start = 0
+        scene.frame_start = max(0, int(start_frame))
         scene.frame_end = n_frames - 1
         scene.render.filepath = str(rgb_dir / "######")
         bpy.ops.render.render(animation=True)
@@ -988,13 +1192,22 @@ def _render_stills_fallback(
     pose_objects: list,
     frame_poses: list[list[tuple]],
     png_compression: int,
+    start_frame: int = 0,
 ) -> None:
     prepare_still_render(scene, png_compression=png_compression)
-    for i in range(n_frames):
-        _restore_poses(pose_objects, frame_poses[i])
+    for i in range(max(0, int(start_frame)), n_frames):
+        snap = frame_poses[i]
+        if snap is None:
+            continue
+        _restore_poses(pose_objects, snap)
         bpy.context.view_layer.update()
         scene.render.filepath = str(rgb_dir / f"{i:06d}.png")
         bpy.ops.render.render(write_still=True)
+
+
+def copy_prefix_pngs(src: Path, dst: Path, n: int) -> int:
+    """Hard-link or copy the shared prefix so miss tails do not re-render it."""
+    return link_or_copy_prefix(src, dst, n, suffix=".png")
 
 def run_episode(
     *,
@@ -1302,6 +1515,531 @@ def run_episode(
     return manifest
 
 
+def _mux_clip_videos(
+    *,
+    scene: Any,
+    rgb_dir: Path,
+    n_frames: int,
+    cfg: dict,
+    video_path: Path,
+    overlay_path: Path,
+    spatial_dir: Path,
+    spatial_frames: list,
+    grid_k: int,
+    want_video: bool,
+    want_overlay: bool,
+    prefix_len: int = 0,
+    prefix_video: Path | None = None,
+    prefix_overlay: Path | None = None,
+    write_prefix_video: Path | None = None,
+    write_prefix_overlay: Path | None = None,
+    heat_dir: Path | None = None,
+    write_heat: bool = True,
+    keep_heat: bool = False,
+) -> tuple[bool, str | None, bool, str | None, bool]:
+    """Returns video_ok, video_via, overlay_ok, overlay_via, keep_frames."""
+    keep_frames = False
+    video_ok = False
+    video_via = None
+    split = 0 < int(prefix_len) < int(n_frames)
+    if want_video:
+        video_ok, video_via = encode_episode_video(
+            scene=scene, png_dir=rgb_dir, n_frames=n_frames, cfg=cfg, out_path=video_path,
+            prefix_len=int(prefix_len) if split else 0,
+            prefix_mp4=prefix_video if split else None,
+            write_prefix_to=write_prefix_video if split else None,
+        )
+        if video_ok:
+            print(f"  video → {video_path}  ({video_via})")
+        else:
+            print(f"  [video] FAILED: {video_via}", file=sys.stderr)
+            keep_frames = True
+    overlay_ok = False
+    overlay_via = None
+    if want_overlay:
+        heat_dir = heat_dir or (spatial_dir / "_heat")
+        overlay_ok, overlay_via = encode_spatial_overlay_video(
+            rgb_dir=rgb_dir,
+            spatial_payload=episode_spatial_payload(grid_k, spatial_frames),
+            n_frames=n_frames,
+            cfg=cfg,
+            out_path=overlay_path,
+            heat_dir=heat_dir,
+            write_heat=write_heat,
+            prefix_len=int(prefix_len) if split else 0,
+            prefix_mp4=prefix_overlay if split else None,
+            write_prefix_to=write_prefix_overlay if split else None,
+        )
+        if heat_dir.is_dir() and not keep_heat:
+            shutil.rmtree(heat_dir, ignore_errors=True)
+        if overlay_ok:
+            print(f"  spatial overlay → {overlay_path}  ({overlay_via})")
+        else:
+            print(f"  [spatial-overlay] FAILED: {overlay_via}", file=sys.stderr)
+            keep_frames = True
+    return video_ok, video_via, overlay_ok, overlay_via, keep_frames
+
+
+def run_group_plan(
+    *,
+    plan: dict,
+    cfg: dict,
+    out_root: Path,
+    args: argparse.Namespace,
+    frames_override: int,
+    media: str,
+    threat_k: int,
+) -> int:
+    """Render sample × background × {collision, miss_left, miss_right}.
+
+    One world build per background. Collision is rendered in full; miss
+    clips copy its prefix RGB / heat / JSON and only EEVEE the tail.
+    """
+    clips = list(iter_clips(plan))
+    if not clips:
+        print("[groups] plan has no clips", file=sys.stderr)
+        return 2
+    fps = int(cfg["render"]["fps"])
+    n_frames = int(frames_override) if frames_override > 0 else int(cfg["render"]["frames_per_episode"])
+    grid_k = max(1, int(threat_k))
+    do_render = not bool(args.no_render)
+    want_video = do_render and media in ("video", "both")
+    want_overlay = bool(args.spatial_overlay) and do_render
+    drop_rgb = bool(args.no_rgb)
+    write_annotations = not bool(args.no_annotations)
+    png_compression = int(cfg["render"].get("png_compression", 1))
+
+    n_ok = 0
+    index_rows: list[dict] = []
+    current_key = None
+    gen = None
+    state = None
+    cam_obj = None
+    profile = None
+    scene_cfg = None
+    prefix_rgb: Path | None = None
+    prefix_heat: Path | None = None
+    prefix_video: Path | None = None
+    prefix_overlay: Path | None = None
+    prefix_spatial: list | None = None
+    prefix_records: list | None = None
+    rgb_dirs_to_drop: list[Path] = []
+
+    def _drop_prefix_caches() -> None:
+        nonlocal prefix_rgb, prefix_heat, prefix_video, prefix_overlay
+        nonlocal prefix_spatial, prefix_records
+        for cache in (prefix_video, prefix_overlay):
+            if cache is not None and cache.is_file():
+                try:
+                    cache.unlink()
+                except OSError:
+                    pass
+        if prefix_heat is not None and prefix_heat.is_dir():
+            shutil.rmtree(prefix_heat, ignore_errors=True)
+        prefix_rgb = None
+        prefix_heat = None
+        prefix_video = None
+        prefix_overlay = None
+        prefix_spatial = None
+        prefix_records = None
+
+    def _close_world() -> None:
+        nonlocal gen, state, cam_obj
+        if state is not None:
+            freed = release_episode(state)
+            clear_bound_caches()
+            print(f"  cleanup: purged {freed} datablock(s)")
+        gen = None
+        state = None
+        cam_obj = None
+        _drop_prefix_caches()
+
+    for clip in clips:
+        key = (clip["sample_id"], clip["bg_id"])
+        sample_dir = out_root / str(clip["sample_dir"])
+        ep_dir = sample_dir / str(clip["relpath"])
+        ep_dir.mkdir(parents=True, exist_ok=True)
+        outcome = str(clip["outcome"])
+        diverge_frame = max(1, min(n_frames - 2, int(clip["diverge_frame"])))
+        diverge_s = float(clip["diverge_s"])
+        print(
+            f"[group {clip['sample_id']:04d}/{clip['scenario']}] "
+            f"{outcome}/{clip['bg_id']} style={clip['bg_style']} "
+            f"light={clip.get('bg_lighting') or '?'} "
+            f"diverge_f={diverge_frame} t={diverge_s:.2f}s"
+        )
+
+        if current_key != key:
+            _close_world()
+            for leftover in rgb_dirs_to_drop:
+                if leftover.is_dir():
+                    shutil.rmtree(leftover, ignore_errors=True)
+            rgb_dirs_to_drop = []
+            current_key = key
+            scene_cfg = copy.deepcopy(cfg)
+            scene_rng = random.Random(int(clip["scene_seed"]))
+            bg_rng = random.Random(int(clip["bg_seed"]))
+            apply_camera_fov(
+                scene_cfg,
+                hfov_deg=args.hfov,
+                lens_mm=args.lens_mm,
+                rng=scene_rng,
+                lock=bool(args.no_random_fov),
+            )
+            if args.chaos is not None:
+                c = max(0.0, min(1.0, float(args.chaos)))
+                scene_cfg["domain_randomization"]["material_chaos"] = (c, c)
+            if args.no_trees:
+                for tree_key in ("n_trees", "n_grass_clumps", "n_street_trees", "n_median_trees", "n_path_trees"):
+                    scene_cfg["world"][tree_key] = (0, 0)
+            requested_wind = str(args.wind or "auto").strip().lower()
+            if requested_wind in WIND_LABELS:
+                scene_cfg["domain_randomization"]["wind_weights"] = {requested_wind: 1.0}
+            apply_ego_height(scene_cfg, str(getattr(args, "ego_height", "auto")))
+            names = pick_scenarios(random.Random(int(clip["scene_seed"]) + 3), scene_cfg, clip["scenario"])
+            gen = WorldGenerator(scene_cfg, random.Random(int(clip["scene_seed"])), bg_rng=bg_rng)
+            gen.group_mode = True
+            gen.force_critical = True
+            gen.bg_style = str(clip["bg_style"])
+            gen.bg_lighting = str(clip.get("bg_lighting") or "")
+            gen.prepare_biome(str(args.biome), names=names)
+            gen.prepare_scenario(names)
+            clear_bound_caches()
+            state = gen.build()
+            cam_obj = gen.create_camera()
+            cam_rng = random.Random(int(clip["scene_seed"]) + 17)
+            ego_rng = random.Random(int(clip["scene_seed"]) + 23)
+            requested_mode = str(getattr(args, "ego_mode", "auto") or "auto").strip().lower()
+            if requested_mode in ("", "auto", "random"):
+                requested_mode = "walk"
+            if any(n in CROSS_EGO_SCENARIOS for n in names):
+                requested_mode = "crosswalk"
+            if requested_mode == "seated":
+                requested_mode = "walk"
+            profile = choose_ego_profile(
+                {**scene_cfg, "ego": {**scene_cfg["ego"], "mode_weights": {requested_mode: 1.0}}},
+                ego_rng,
+                episode_seconds=n_frames / float(fps),
+            )
+            rig = CameraRig(
+                cam_obj=cam_obj,
+                spline=state.road,
+                cfg=scene_cfg,
+                rng=cam_rng,
+                walk_speed=0.0 if profile.stationary else state.walk_speed,
+                lateral=state.sidewalk_lateral,
+                profile=profile,
+                lateral_limit=state.corridor.lateral_limit(0.30, True),
+            )
+            gen.inject_scenarios(names, rig)
+            gen.place_ego_props(rig)
+            gen.freeze()
+            gen.snapshot_actors()
+            print(
+                f"  biome={gen.biome}  ego={profile.mode}  "
+                f"eye={profile.eye_height:.2f}m  walk={state.walk_speed:.2f}m/s  "
+                f"style={clip['bg_style']}  "
+                f"light={state.environment.get('lighting')}/"
+                f"{state.environment.get('weather')}"
+            )
+
+        assert gen is not None and state is not None and cam_obj is not None and profile is not None
+        assert scene_cfg is not None
+        gen.restore_actors()
+        gen.apply_outcome_fork(outcome, diverge_s, float(state.sidewalk_lateral))
+        cam_rng = random.Random(int(clip["scene_seed"]) + 17)
+        rig = CameraRig(
+            cam_obj=cam_obj,
+            spline=state.road,
+            cfg=scene_cfg,
+            rng=cam_rng,
+            walk_speed=0.0 if profile.stationary else state.walk_speed,
+            lateral=state.sidewalk_lateral,
+            profile=profile,
+            lateral_limit=state.corridor.lateral_limit(0.30, True),
+        )
+
+        scene = bpy.context.scene
+        clip_frames = min(n_frames, max(2, int(rig.max_time() * fps)))
+        dt = 1.0 / float(fps)
+        scene.frame_start = 0
+        scene.frame_end = clip_frames - 1
+        scene.render.fps = fps
+
+        rgb_dir = ep_dir / str(cfg["output"]["rgb_dirname"])
+        ann_dir = ep_dir / str(cfg["output"]["ann_dirname"])
+        spatial_dir = ep_dir / "spatial_annotations"
+        if write_annotations:
+            ann_dir.mkdir(parents=True, exist_ok=True)
+        spatial_dir.mkdir(parents=True, exist_ok=True)
+        if do_render:
+            rgb_dir.mkdir(parents=True, exist_ok=True)
+
+        start_frame = 0
+        if do_render and clip["prefix_relpath"] and prefix_rgb is not None:
+            copied = copy_prefix_pngs(prefix_rgb, rgb_dir, diverge_frame)
+            start_frame = min(diverge_frame, copied)
+            print(f"  cache prefix {start_frame} pngs ← {prefix_rgb}")
+
+        label_hist: Counter[str] = Counter()
+        object_frames: list[dict] = []
+        spatial_frames: list[dict] = []
+        copied_prefix_json = False
+        json_from = start_frame
+        if (
+            outcome != "collision"
+            and prefix_spatial is not None
+            and len(prefix_spatial) >= max(1, start_frame or diverge_frame)
+        ):
+            json_from = start_frame if start_frame > 0 else diverge_frame
+            json_from = min(json_from, len(prefix_spatial))
+            if json_from > 0:
+                spatial_frames = list(prefix_spatial[:json_from])
+                if prefix_records is not None and len(prefix_records) >= json_from:
+                    object_frames = list(prefix_records[:json_from])
+                    for rec in object_frames:
+                        for obj in rec.get("objects") or []:
+                            label_hist[obj["threat_label"]] += 1
+                copied_prefix_json = True
+                print(f"  cache prefix {json_from} json frames")
+
+        pose_objects = _collect_pose_objects(cam_obj, state.actors) if do_render else []
+        frame_poses: list = [None] * clip_frames if do_render else []
+        t_sim0 = time.perf_counter()
+        for i in range(clip_frames):
+            t = i * dt
+            cam_state = rig.update(t, dt)
+            gen.update(t, dt)
+            # Prefix kinematics still run so wheels / gait / CameraRig velocity
+            # at diverge match collision. Skip depsgraph + labels when the
+            # collision JSON for [0, diverge) is already in hand.
+            need_labels = (not copied_prefix_json) or (i >= json_from)
+            need_pose = do_render and (i >= start_frame)
+            if need_labels or need_pose:
+                bpy.context.view_layer.update()
+            if need_pose:
+                frame_poses[i] = _snapshot_poses(pose_objects)
+            if need_labels:
+                record, threat_grid = build_frame_record(
+                    frame_index=i,
+                    t=t,
+                    cam=cam_state,
+                    cam_obj=cam_obj,
+                    world=gen,
+                    scene=scene,
+                    cfg=scene_cfg,
+                    do_occlusion=not bool(args.no_occlusion),
+                    threat_k=grid_k,
+                )
+                for obj in record["objects"]:
+                    label_hist[obj["threat_label"]] += 1
+                object_frames.append(record)
+                spatial_frames.append(frame_spatial_entry(record["frame_id"], threat_grid))
+            if (i + 1) % 30 == 0 or i == 0 or i == clip_frames - 1:
+                print(f"  sim {i:04d}/{clip_frames - 1:04d}  t={t:5.2f}s")
+        t_sim = time.perf_counter() - t_sim0
+        if write_annotations:
+            _write_json(ann_dir / "annotations.json", {"frames": object_frames})
+        _write_json(spatial_dir / "spatial_annotations.json", episode_spatial_payload(grid_k, spatial_frames))
+
+        t_rnd = 0.0
+        if do_render:
+            t_r0 = time.perf_counter()
+            prepare_still_render(scene, png_compression=png_compression)
+            ok_anim = _render_animation_sequence(
+                scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
+                start_frame=start_frame,
+            )
+            if not ok_anim:
+                print("  [render] animation batch missed files; falling back to stills")
+                _render_stills_fallback(
+                    scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
+                    start_frame=start_frame,
+                )
+            t_rnd = time.perf_counter() - t_r0
+            if outcome == "collision":
+                prefix_rgb = rgb_dir
+
+        if outcome == "collision":
+            prefix_spatial = list(spatial_frames)
+            prefix_records = list(object_frames)
+
+        t_heat = 0.0
+        heat_dir = spatial_dir / "_heat"
+        if want_overlay:
+            t_h0 = time.perf_counter()
+            if start_frame > 0 and prefix_heat is not None:
+                copied_h = link_or_copy_prefix(prefix_heat, heat_dir, start_frame, suffix=".ppm")
+                print(f"  cache prefix {copied_h} heat ← {prefix_heat}")
+                write_heat_sequence(
+                    spatial_frames[start_frame:clip_frames], heat_dir, k=grid_k,
+                )
+            else:
+                write_heat_sequence(spatial_frames[:clip_frames], heat_dir, k=grid_k)
+            t_heat = time.perf_counter() - t_h0
+
+        split_len = 0
+        if diverge_frame > 1 and diverge_frame < clip_frames:
+            if outcome == "collision":
+                split_len = diverge_frame
+            elif start_frame == diverge_frame:
+                video_ready = (not want_video) or (
+                    prefix_video is not None and prefix_video.is_file()
+                )
+                overlay_ready = (not want_overlay) or (
+                    prefix_overlay is not None and prefix_overlay.is_file()
+                )
+                if video_ready and overlay_ready and (want_video or want_overlay):
+                    split_len = diverge_frame
+        cache_preview = ep_dir / "_cache_prefix_preview.mp4" if outcome == "collision" else None
+        cache_overlay = ep_dir / "_cache_prefix_overlay.mp4" if outcome == "collision" else None
+
+        video_path = ep_dir / str(cfg["output"].get("video_name", "preview.mp4"))
+        overlay_path = ep_dir / "spatial_overlay.mp4"
+        t_m0 = time.perf_counter()
+        video_ok, video_via, overlay_ok, overlay_via, keep_fail = _mux_clip_videos(
+            scene=scene,
+            rgb_dir=rgb_dir,
+            n_frames=clip_frames,
+            cfg=cfg,
+            video_path=video_path,
+            overlay_path=overlay_path,
+            spatial_dir=spatial_dir,
+            spatial_frames=spatial_frames,
+            grid_k=grid_k,
+            want_video=want_video,
+            want_overlay=want_overlay,
+            prefix_len=split_len,
+            prefix_video=prefix_video,
+            prefix_overlay=prefix_overlay,
+            write_prefix_video=cache_preview,
+            write_prefix_overlay=cache_overlay,
+            heat_dir=heat_dir if want_overlay else None,
+            write_heat=False,
+            keep_heat=bool(want_overlay and outcome == "collision"),
+        )
+        t_mux = time.perf_counter() - t_m0
+        print(
+            f"  timing  sim={t_sim:.2f}s  render={t_rnd:.2f}s  "
+            f"heat={t_heat:.2f}s  mux={t_mux:.2f}s  start={start_frame}"
+        )
+        if outcome == "collision":
+            if cache_preview is not None and cache_preview.is_file():
+                prefix_video = cache_preview
+            if cache_overlay is not None and cache_overlay.is_file():
+                prefix_overlay = cache_overlay
+            if want_overlay and heat_dir.is_dir():
+                prefix_heat = heat_dir
+        keep_frames = (media in ("frames", "both") and do_render) or keep_fail
+        if drop_rgb and want_video and not keep_fail:
+            keep_frames = False
+        # Collision PNGs are the prefix cache for miss clips of this
+        # background. Drop them only when the next (sample, bg) starts.
+        if do_render and not keep_frames:
+            rgb_dirs_to_drop.append(rgb_dir)
+
+        manifest = {
+            "layout": "groups",
+            "sample_id": clip["sample_id"],
+            "sample_dir": clip["sample_dir"],
+            "outcome": outcome,
+            "bg_id": clip["bg_id"],
+            "bg_style": clip["bg_style"],
+            "bg_lighting": clip.get("bg_lighting") or state.environment.get("lighting"),
+            "diverge_s": diverge_s,
+            "diverge_frame": diverge_frame,
+            "hit_s": clip["hit_s"],
+            "scenario": clip["scenario"],
+            "dir": str(ep_dir.relative_to(out_root)),
+            "frames": clip_frames,
+            "fps": fps,
+            "walk_speed": round(0.0 if profile.stationary else state.walk_speed, 4),
+            "sidewalk_lateral": round(state.sidewalk_lateral, 4),
+            "biome": gen.biome,
+            "ego": {
+                "mode": profile.mode,
+                "eye_height_m": round(float(profile.eye_height), 3),
+                "stature": str(getattr(profile, "stature", "typical")),
+                "stationary": bool(profile.stationary),
+            },
+            "camera": {
+                "lens_mm": round(float(scene_cfg["camera"]["lens_mm"]), 3),
+                "hfov_deg": round(float(scene_cfg["camera"]["hfov_deg"]), 2),
+            },
+            "environment": state.environment,
+            "label_histogram": dict(label_hist),
+            "render": do_render,
+            "media": media if do_render else "annotations",
+            "rgb_dir": str(cfg["output"]["rgb_dirname"]) if keep_frames else None,
+            "video": video_path.name if video_ok else None,
+            "video_encoder": video_via if video_ok else None,
+            "annotations": "annotations/annotations.json" if write_annotations else None,
+            "spatial_annotations_k": grid_k,
+            "spatial_annotations": "spatial_annotations/spatial_annotations.json",
+            "spatial_overlay": overlay_path.name if overlay_ok else None,
+            "prefix_cached": bool(start_frame > 0),
+            "prefix_json_cached": bool(copied_prefix_json),
+            "prefix_mux": "concat-copy" if split_len else None,
+        }
+        _write_json(ep_dir / str(cfg["output"]["manifest_name"]), manifest)
+        index_rows.append(
+            {
+                "sample_id": clip["sample_id"],
+                "scenario": clip["scenario"],
+                "outcome": outcome,
+                "bg_id": clip["bg_id"],
+                "bg_style": clip["bg_style"],
+                "bg_lighting": clip.get("bg_lighting")
+                or (state.environment.get("lighting") if state else None),
+                "path": str(ep_dir.relative_to(out_root)),
+                "video": "preview.mp4" if video_ok else None,
+                "spatial_overlay": "spatial_overlay.mp4" if overlay_ok else None,
+                "diverge_frame": diverge_frame,
+                "y": 1 if outcome == "collision" else 0,
+            }
+        )
+        n_ok += 1
+
+    _close_world()
+    for leftover in rgb_dirs_to_drop:
+        if leftover.is_dir():
+            shutil.rmtree(leftover, ignore_errors=True)
+
+    for sample in plan.get("samples") or []:
+        sdir = out_root / str(sample["dir"])
+        _write_json(
+            sdir / "group.json",
+            {
+                "sample_id": sample["id"],
+                "scenario": sample["scenario"],
+                "diverge_s": sample["diverge_s"],
+                "diverge_frame": sample["diverge_frame"],
+                "hit_s": sample["hit_s"],
+                "scene_seed": sample["scene_seed"],
+                "backgrounds": sample["backgrounds"],
+                "outcomes": sample["outcomes"],
+                "index": {
+                    "collision": {bg["id"]: f"collision/{bg['id']}" for bg in sample["backgrounds"]},
+                    "miss_left": {bg["id"]: f"miss_left/{bg['id']}" for bg in sample["backgrounds"]},
+                    "miss_right": {bg["id"]: f"miss_right/{bg['id']}" for bg in sample["backgrounds"]},
+                },
+            },
+        )
+
+    _write_json(
+        out_root / "groups_index.json",
+        {
+            "layout": "groups",
+            "n_ok": n_ok,
+            "n_clips": len(clips),
+            "train_glob": "sample_*/{collision,miss_left,miss_right}/bg_*/preview.mp4",
+            "clips": index_rows,
+        },
+    )
+    print(f"[done] groups wrote {n_ok}/{len(clips)} clip(s) → {out_root}")
+    return 0 if n_ok == len(clips) else 2
+
+
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
@@ -1357,6 +2095,7 @@ def main() -> int:
             fps = max(1, int(cfg["render"]["fps"]))
             frames_override = max(1, int(round(dur * fps)))
     plan_eps: list[dict] | None = None
+    plan_doc: dict | None = None
     if args.plan:
         plan_path = Path(args.plan)
         if not plan_path.is_file():
@@ -1367,6 +2106,19 @@ def main() -> int:
         except json.JSONDecodeError as exc:
             print(f"invalid --plan JSON: {exc}", file=sys.stderr)
             return 2
+        if str(plan_doc.get("layout") or "") == "groups":
+            out_root = Path(args.output) if args.output else (_ROOT / str(cfg["output"]["root"]))
+            out_root.mkdir(parents=True, exist_ok=True)
+            print(f"[run] group plan={plan_path}  samples={len(plan_doc.get('samples') or [])}")
+            return run_group_plan(
+                plan=plan_doc,
+                cfg=cfg,
+                out_root=out_root,
+                args=args,
+                frames_override=int(frames_override),
+                media=media,
+                threat_k=threat_k,
+            )
         plan_eps = list(plan_doc.get("episodes") or [])
         if not plan_eps:
             print("--plan has no episodes[]", file=sys.stderr)

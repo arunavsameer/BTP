@@ -9,13 +9,14 @@ Not image size. A lamp beside a seated walker is huge and scores 0. Four
 channels, class-aware, ``S = max(S_hit, S_path, S_stat, S_prox)``.
 
 ``S_hit`` — hulls on a collision course. Disk intercept × class TTC
-window. A pedestrian ~5 m on a collision course is already amber (time
-to act); 11 m stays cold. A person at ~2 m is red.
+window. A pedestrian ~5–8 m on a collision / cut course is already
+amber (time to act); 11 m stays cold. A person at ~2 m is red.
 
 ``S_path`` — a **mover** occupies or is about to sweep the space I would
 walk into. A car crossing 5 m in front is a stop even if the disk centres
 miss by metres. The same car in the next lane, parallel, stays cold. A
-person cutting the gait ~6–8 m ahead is already warm; ~2 m is red.
+person occupying or cutting the gait ~5–8 m ahead is already warm;
+~2 m is red.
 
 ``S_stat`` — I am walking **toward** a world-static body on my gait
 (parked car, tree, pole, hole). Inverse in hull gap. An on-gait tree
@@ -25,14 +26,16 @@ warms from ~5–6 m. Seated or a miss to the side → 0.
 
 Both still (seated + furniture) → 0. Matching-speed walker ahead → 0
 (never catch up). An approaching car vs a seated ego is ``S_hit`` because
-``V_rel = V_obj``. A pedestrian ~5 m on a geometric course is amber; 11 m
-is still cold. A person filling the gait at ~2 m is red. Urgency is a
-class TTC window (no closing-speed floor).
+``V_rel = V_obj``. A pedestrian ~5–8 m on a geometric / cut course is
+amber; 11 m is still cold. A person filling the gait at ~2 m is red.
+Urgency is a class TTC window (no closing-speed floor). Behind the
+camera, fully off-screen, or occluded → overlay heat 0.
 
 Paint (where)
 -------------
 ``splat_bbox`` fills only cells the 2-D box actually overlaps. No Gaussian
 bleed into empty neighbours — the model never sees those bounding boxes.
+Empty inner boxes do **not** fall back to a leftover truncated AABB.
 
 ``python spatial_threat.py`` runs the numeric self-test.
 """
@@ -51,7 +54,7 @@ from threat_math import vdot, vnorm, vscale, vsub
 
 EGO_HALF_M = 0.30  # walker half-width (shoulders + a little sway)
 HIT_CLEAR_M = 0.45  # hulls this close *now* still count as a meet when diverging
-HORIZON_S = 12.0
+HORIZON_S = 16.0
 TIME_SLOP_S = 0.12
 REL_STATIC_M_S = 0.12  # |V_rel| below this: intercept is undefined
 OBJ_MOVE_M_S = 0.20  # |V_obj| above this: the other body is a mover
@@ -79,8 +82,8 @@ _KIND: dict[str, dict[str, float]] = {
         "stat_lat": 1.50, "stat_soft": 3.6,
     },
     "agent": {
-        "cpa_soft": 0.28, "path_s": 8.0, "path_pad": 0.50, "yield_t": 2.8,
-        "s_soft": 6.5, "s_pow": 3.0, "t_red": 0.80, "t_cool": 3.60, "prox": 1.70,
+        "cpa_soft": 0.28, "path_s": 12.0, "path_pad": 0.50, "yield_t": 3.6,
+        "s_soft": 8.0, "s_pow": 3.0, "t_red": 0.80, "t_cool": 5.00, "prox": 1.70,
         "stat_lat": 0.70, "stat_soft": 3.6,
     },
     "hole": {
@@ -194,6 +197,9 @@ def object_threat_score(
     path_s: float | None = None,
     path_lat: float | None = None,
     class_name: str | None = None,
+    occluded: bool = False,
+    behind_camera: bool = False,
+    z_cam: float | None = None,
 ) -> float:
     """[0, 1] would-I-stop score. Paint site is separate.
 
@@ -203,8 +209,18 @@ def object_threat_score(
     Off-gait actors (``|path_lat| > ON_GAIT_LAT_M``) keep world XY so a
     crosswalk turn cannot reconstruct a right-side person as if they were
     on the left walking away.
+
+    Invisible bodies (behind the lens, already passed, occluded) score 0
+    so leftover 2-D boxes cannot keep painting red.
     """
-    kn = _KIND[kind_for(class_name)]
+    if occluded or behind_camera:
+        return 0.0
+    # Blender camera looks down local −Z; Z ≥ 0 is behind the lens.
+    if z_cam is not None and float(z_cam) >= -1e-3:
+        return 0.0
+
+    kind = kind_for(class_name)
+    kn = _KIND[kind]
     s_hat, r_hat = heading_frame(heading)
     v_ego = float(walk_speed)
     v_ego = 0.0 if not math.isfinite(v_ego) else max(0.0, v_ego)
@@ -230,6 +246,16 @@ def object_threat_score(
     v_s = vdot(v_o, s_hat)
     v_lat = vdot(v_o, r_hat)
     v_close = v_ego - v_s  # >0 if the along-track gap is shrinking
+    s_world = vdot(p_world, s_hat)
+
+    # Behind the look plane, or a static already passed on the ribbon.
+    if s_world < -0.05:
+        return 0.0
+    if kind in ("static", "hole"):
+        if path_s is not None and float(path_s) < 0.0:
+            return 0.0
+        if s < 0.0:
+            return 0.0
 
     if s < -(r_long + 0.6) and v_close <= 0.05:
         return 0.0
@@ -321,7 +347,10 @@ def _score_path(
     Parallel adjacent-lane traffic never crosses the gait → 0.
 
     Occupancy is a *distance* kernel (cars stay hot at 10 m, people from
-    ~6–8 m). Time-to-enter the slab still gates darting from the side.
+    ~5–8 m). Time-to-enter the slab still gates darting from the side.
+    A person already in the slab and closing counts even if they are
+    walking straight at us (``v_lat≈0``); that used to wait on ``S_hit``
+    until the last second. Adjacent-lane parallel traffic is still 0.
     """
     if obj_speed < OBJ_MOVE_M_S or kn["path_s"] <= 0.05:
         return 0.0
@@ -329,17 +358,19 @@ def _score_path(
     pad = float(kn["path_pad"])
     in_slab = gap_lat <= pad
     toward_gait = (abs(lat) > 1e-3) and (float(lat) * float(v_lat) < 0.0)
+    cutting = abs(float(v_lat)) >= 0.45
     t_line = math.inf
     if in_slab:
+        # Occupying the gait and closing: warn from the distance kernel.
+        # Matching-speed / receding occupants are not a stop.
+        if not cutting and v_close <= 0.05:
+            return 0.0
         t_line = 0.0
-    elif toward_gait:
+    elif cutting and toward_gait:
         t_line = (gap_lat - pad) / max(abs(float(v_lat)), 1e-3)
-
-    # Must actually be cutting across. Parallel adjacent-lane traffic
-    # (v_lat ≈ 0) is S_hit's problem if the hulls truly meet, else 0.
-    if abs(float(v_lat)) < 0.45:
-        return 0.0
-    if not (toward_gait or in_slab):
+    else:
+        # Parallel adjacent-lane traffic (v_lat ≈ 0, not in the slab)
+        # is S_hit's problem if the hulls truly meet, else 0.
         return 0.0
     if t_line > float(kn["yield_t"]):
         return 0.0
@@ -410,6 +441,49 @@ def empty_grid(k: int) -> list[list[float]]:
     return [[0.0] * n for _ in range(n)]
 
 
+def clip_box_to_image(
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    res_x: int,
+    res_y: int,
+) -> tuple[float, float, float, float] | None:
+    """On-screen intersection of a pixel AABB. None if it misses the frame."""
+    if xmax < xmin:
+        xmin, xmax = xmax, xmin
+    if ymax < ymin:
+        ymin, ymax = ymax, ymin
+    rx = float(res_x)
+    ry = float(res_y)
+    xmin = max(0.0, xmin)
+    ymin = max(0.0, ymin)
+    xmax = min(rx, xmax)
+    ymax = min(ry, ymax)
+    if xmax - xmin <= OVERLAP_PX or ymax - ymin <= OVERLAP_PX:
+        return None
+    return (xmin, ymin, xmax, ymax)
+
+
+def clip_boxes_to_image(
+    boxes: Sequence[Sequence[float]],
+    res_x: int,
+    res_y: int,
+) -> list[tuple[float, float, float, float]]:
+    """Keep only the on-screen remainder of each inner box."""
+    out: list[tuple[float, float, float, float]] = []
+    for box in boxes:
+        if len(box) < 4:
+            continue
+        clipped = clip_box_to_image(
+            float(box[0]), float(box[1]), float(box[2]), float(box[3]),
+            res_x, res_y,
+        )
+        if clipped is not None:
+            out.append(clipped)
+    return out
+
+
 def splat_bbox(
     grid: list[list[float]],
     *,
@@ -428,12 +502,12 @@ def splat_bbox(
     k = len(grid)
     if k <= 0:
         return
+    clipped = clip_box_to_image(xmin, ymin, xmax, ymax, res_x, res_y)
+    if clipped is None:
+        return
+    xmin, ymin, xmax, ymax = clipped
     cw = float(res_x) / k
     ch = float(res_y) / k
-    if xmax < xmin:
-        xmin, xmax = xmax, xmin
-    if ymax < ymin:
-        ymin, ymax = ymax, ymin
     j0 = int(math.floor(xmin / cw))
     j1 = int(math.ceil(xmax / cw))
     i0 = int(math.floor(ymin / ch))
@@ -497,14 +571,28 @@ def splat_object(
     path_lat: float | None = None,
     boxes: Sequence[Sequence[float]] | None = None,
     class_name: str | None = None,
+    occluded: bool = False,
+    behind_camera: bool = False,
+    z_cam: float | None = None,
 ) -> float:
-    """Score + splat. ``bbox`` is the fallback outer box. Returns S."""
+    """Score + splat. ``bbox`` is fallback only when ``boxes is None``.
+
+    Pass ``boxes=[]`` (visible inner projection found nothing) to skip
+    paint — never a leftover truncated outer AABB. Occluded / behind the
+    camera score and paint 0.
+    """
+    if occluded or behind_camera:
+        return 0.0
     s = object_threat_score(
         p_cam, p_obj, v_obj, heading, walk_speed, half_s, half_lat,
         path_s=path_s, path_lat=path_lat, class_name=class_name,
+        occluded=occluded, behind_camera=behind_camera, z_cam=z_cam,
     )
-    if boxes:
-        splat_boxes(grid, boxes, s, res_x, res_y)
+    if boxes is not None:
+        visible = clip_boxes_to_image(boxes, res_x, res_y)
+        if not visible:
+            return s
+        splat_boxes(grid, visible, s, res_x, res_y)
     else:
         splat_bbox(
             grid,
@@ -598,8 +686,14 @@ def _self_test() -> None:
     # Oncoming person ~5.5 m: amber so there is time to act. 11 m stays cold.
     s_oncoming_5 = score((0.55, 5.50, 1.6), (0.0, -1.05, 0.0), 0.28, 0.38, "person")
     s_oncoming_11 = score((0.50, 11.0, 1.6), (0.0, -1.00, 0.0), 0.28, 0.38, "person")
-    assert 0.22 <= s_oncoming_5 < 0.80, s_oncoming_5
+    assert 0.22 <= s_oncoming_5 < 0.85, s_oncoming_5
     assert s_oncoming_11 < 0.12, s_oncoming_11
+    # Occupying / cutting the gait ~5–8 m: already warm, not last-instant.
+    s_gait_6 = score((0.25, 6.5, 1.6), (0.0, -1.00, 0.0), 0.28, 0.38, "person")
+    s_gait_8 = score((0.20, 7.8, 1.6), (0.0, -1.00, 0.0), 0.28, 0.38, "person")
+    assert s_gait_6 >= 0.35, s_gait_6
+    assert s_gait_8 >= 0.22, s_gait_8
+    assert s_gait_6 > s_oncoming_11, (s_gait_6, s_oncoming_11)
 
     # On-gait tree: warm from ~4–5 m, hot at ~2 m, still cold at 9 m.
     s_tree_mid = score((0.0, 4.5, 1.6), (0.0, 0.0, 0.0), 0.22, 0.22, "tree")
@@ -633,6 +727,29 @@ def _self_test() -> None:
     # World-static furniture you will miss: S_hit too tight, S_stat off-gait.
     s_lamp_walk = score((0.90, 2.4, 1.6), (0.0, 0.0, 0.0), 0.18, 0.18, "streetlamp")
     assert s_lamp_walk < 0.12, s_lamp_walk
+    # Screenshot pose: sidewalk lamp ~1.1 m left, ~1.2 m ahead — pole, not arm.
+    s_side_lamp = score((-1.12, 1.18, 1.6), (0.0, 0.0, 0.0), 0.05, 0.05, "streetlamp")
+    assert s_side_lamp < 0.05, s_side_lamp
+    # Already passed (behind camera / s_obj < s_cam): static heat 0.
+    s_passed_lamp = score((0.90, -0.80, 1.6), (0.0, 0.0, 0.0), 0.18, 0.18, "streetlamp")
+    assert s_passed_lamp < 0.02, s_passed_lamp
+    s_passed_path = object_threat_score(
+        cam, (0.90, 8.0, 1.6), (0.0, 0.0, 0.0), heading, walk, 0.18, 0.18,
+        path_s=-0.60, path_lat=0.90, class_name="streetlamp",
+    )
+    assert s_passed_path < 0.02, s_passed_path
+    assert object_threat_score(
+        cam, (0.0, 4.0, 1.6), (0.0, 0.0, 0.0), heading, walk, 0.22, 0.22,
+        class_name="tree", occluded=True,
+    ) < 0.02
+    assert object_threat_score(
+        cam, (0.0, 4.0, 1.6), (0.0, 0.0, 0.0), heading, walk, 0.22, 0.22,
+        class_name="tree", behind_camera=True,
+    ) < 0.02
+    assert object_threat_score(
+        cam, (0.0, 4.0, 1.6), (0.0, 0.0, 0.0), heading, walk, 0.22, 0.22,
+        class_name="tree", z_cam=0.15,
+    ) < 0.02
 
     # Car crossing ~6 m in front (episode_0003 pose): disk CPA is metres,
     # but a human would not walk into that moving vehicle.
@@ -715,6 +832,40 @@ def _self_test() -> None:
     assert right >= 0.75, g5
     assert left < 0.02, g5
     assert centre < 0.02, g5
+
+    # Empty inner boxes: do not paint a leftover truncated AABB (passed lamp).
+    g_left = empty_grid(5)
+    splat_object(
+        g_left,
+        p_cam=cam, p_obj=(-1.12, 1.18, 1.6), v_obj=(0.0, 0.0, 0.0),
+        heading=heading, walk_speed=walk, half_s=0.55, half_lat=0.55,
+        bbox=(0.0, 0.0, 768.0, 1080.0), res_x=1920, res_y=1080,
+        boxes=[], class_name="streetlamp",
+    )
+    assert max(max(row) for row in g_left) < 0.02, g_left
+    # Occluded / behind: skip paint even with a huge on-screen box.
+    g_occ = empty_grid(5)
+    splat_object(
+        g_occ,
+        p_cam=cam, p_obj=(0.25, 2.0, 1.6), v_obj=(-1.2, 0.0, 0.0),
+        heading=heading, walk_speed=walk, half_s=0.28, half_lat=0.38,
+        bbox=(0.0, 0.0, 800.0, 1080.0), res_x=1920, res_y=1080,
+        boxes=[(0.0, 0.0, 800.0, 1080.0)], class_name="person",
+        occluded=True,
+    )
+    assert max(max(row) for row in g_occ) < 0.02, g_occ
+    g_behind = empty_grid(5)
+    splat_object(
+        g_behind,
+        p_cam=cam, p_obj=(0.25, -1.0, 1.6), v_obj=(0.0, 0.0, 0.0),
+        heading=heading, walk_speed=walk, half_s=0.18, half_lat=0.18,
+        bbox=(0.0, 0.0, 800.0, 1080.0), res_x=1920, res_y=1080,
+        boxes=[(0.0, 0.0, 800.0, 1080.0)], class_name="streetlamp",
+        behind_camera=True,
+    )
+    assert max(max(row) for row in g_behind) < 0.02, g_behind
+    miss = clip_box_to_image(-80.0, 10.0, -4.0, 400.0, 1920, 1080)
+    assert miss is None
 
     out = finalize_grid(g)
     assert out[1][1] <= 1.0

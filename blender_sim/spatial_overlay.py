@@ -205,8 +205,13 @@ def write_heat_sequence(
     k: int,
     cell_w: int = CELL_W,
     cell_h: int = CELL_H,
+    skip_existing: bool = False,
 ) -> int:
-    """Write ``000000.ppm`` … for each entry. Returns the number of files."""
+    """Write ``000000.ppm`` … for each entry. Returns the number of files.
+
+    ``skip_existing`` is for miss clips that already hard-linked the shared
+    prefix: those PPMs are identical to the collision heat, so do not raster.
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
     n = 0
     expect_k = max(1, int(k))
@@ -215,8 +220,12 @@ def write_heat_sequence(
         if len(matrix) != expect_k or any(len(r) != expect_k for r in matrix):
             raise ValueError(f"frame {entry.get('frame_id')} is not {expect_k}×{expect_k}")
         fid = str(entry.get("frame_id", f"{n:06d}"))
+        path = out_dir / f"{fid}.ppm"
+        if skip_existing and path.is_file():
+            n += 1
+            continue
         w, h, rgb = render_heat_frame(matrix, cell_w=cell_w, cell_h=cell_h)
-        write_ppm(out_dir / f"{fid}.ppm", w, h, rgb)
+        write_ppm(path, w, h, rgb)
         n += 1
     return n
 
@@ -240,6 +249,17 @@ def _self_test() -> None:
     assert hot[0] > hot[2] + 20, hot
     filt = overlay_filter_complex(3, 1920, 1080)
     assert "drawgrid" in filt and "scale=1920:1080" in filt
+    import tempfile
+    td = Path(tempfile.mkdtemp())
+    frames = [
+        {"frame_id": "000000", "matrix": [[0.0, 1.0], [0.5, 0.2]]},
+        {"frame_id": "000001", "matrix": [[1.0, 0.0], [0.2, 0.5]]},
+    ]
+    assert write_heat_sequence(frames, td, k=2) == 2
+    first = td / "000000.ppm"
+    stamp = first.read_bytes()
+    assert write_heat_sequence(frames[:1], td, k=2, skip_existing=True) == 1
+    assert first.read_bytes() == stamp
     print("spatial_overlay self-test: OK")
 
 

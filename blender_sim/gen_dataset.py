@@ -27,6 +27,7 @@ import random
 import re
 import subprocess
 import sys
+import tempfile
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -355,10 +356,10 @@ def write_pack(pack_dir: Path, plan: dict, extra: dict) -> Path:
     path = pack_dir / "pack.json"
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     plan_path = pack_dir / "plan.json"
-    plan_path.write_text(
-        json.dumps({"seed": plan["seed"], "episodes": plan["episodes"]}, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    dump = {k: plan[k] for k in plan}
+    if "episodes" not in dump and "samples" not in dump:
+        dump["episodes"] = []
+    plan_path.write_text(json.dumps(dump, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
     return plan_path
 
 
@@ -421,6 +422,36 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "threats enter from the side only."
         ),
     )
+    p.add_argument(
+        "--groups",
+        action="store_true",
+        help=(
+            "Outcome-group pack: each sample is collision / miss_left / miss_right "
+            "with shared prefix frames, plus --bg-variants background-only worlds. "
+            "Folder layout is sample_XXXX_<scenario>/{collision,miss_left,miss_right}/bg_YY/."
+        ),
+    )
+    p.add_argument(
+        "--bg-variants",
+        type=int,
+        default=3,
+        dest="bg_variants",
+        metavar="K",
+        help=(
+            "Background variants per sample when --groups. Default: 3. "
+            "Each variant gets a distinct time-of-day slot plus full/sparse/bare scatter."
+        ),
+    )
+    p.add_argument(
+        "--group-scenarios",
+        type=str,
+        default="",
+        dest="group_scenarios",
+        help=(
+            "Comma-separated forkable scenario names for --groups "
+            "(e.g. jaywalker,car_cut_in). Default: cycle the catalog."
+        ),
+    )
     p.add_argument("--dry-run", action="store_true",
                    help="Write pack.json + plan.json and print the mix; do not launch Blender.")
     p.add_argument("--self-test", action="store_true", help="Run the planner unit test and exit.")
@@ -428,6 +459,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _print_mix(plan: dict) -> None:
+    if str(plan.get("layout") or "") == "groups":
+        print(
+            f"  layout=groups  samples={plan.get('n')}  "
+            f"bg={plan.get('n_bg')}  diverge={plan.get('diverge_s')}s  "
+            f"hit={plan.get('hit_s')}s"
+        )
+        for sample in plan.get("samples") or []:
+            styles = ",".join(b.get("style", "?") for b in sample.get("backgrounds") or [])
+            lights = ",".join(b.get("lighting", "?") for b in sample.get("backgrounds") or [])
+            print(f"    {sample['dir']}  bg=[{styles}]  light=[{lights}]")
+        return
     q = plan["quotas"]
     kinds = Counter(ep["kind"] for ep in plan["episodes"])
     buckets = Counter(ep["bucket"] for ep in plan["episodes"])
@@ -488,6 +530,8 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
         cmd += ["--wind", str(args.wind)]
     print(f"[gen_dataset] exec: {' '.join(cmd)}", flush=True)
     env = os.environ.copy()
+    # One Blender, one GPU. EEVEE is already the bottleneck; a second
+    # process on the same card just thrashes VRAM and does not overlap.
     return int(subprocess.call(cmd, cwd=str(_ROOT), env=env))
 
 
@@ -528,12 +572,34 @@ def _self_test() -> None:
     mixed_names = {e["scenario"] for e in build_plan(16, 5, cfg)["episodes"]}
     assert not mixed_names.issubset(CLEAR_CENTER_SCENARIOS)
     fps = int(cfg["render"]["fps"])
-    assert int(round(10.0 * fps)) == int(cfg["render"]["frames_per_episode"])
+    assert int(round(15.0 * fps)) == int(cfg["render"]["frames_per_episode"])
+    from outcome_groups import build_group_plan, iter_clips
+    g = build_group_plan(3, 11, cfg, n_bg=2)
+    g2 = build_group_plan(3, 11, cfg, n_bg=2)
+    assert g["samples"] == g2["samples"]
+    assert g["layout"] == "groups"
+    assert len(list(iter_clips(g))) == 3 * 2 * 3
+    for sample in g["samples"]:
+        lights = [b["lighting"] for b in sample["backgrounds"]]
+        assert len(set(lights)) == len(lights), lights
     safe, near, crit = _pools(cfg)
     catalog = set(safe + near + crit)
     assert "tree_on_path" in catalog
     assert "lamp_on_path" in catalog
     assert "hasty_look" in catalog
+
+    parent = Path(tempfile.mkdtemp(prefix="btp_ds_"))
+    existing = parent / pack_dirname(seed=1, n=2, name="groups15")
+    existing.mkdir()
+    (existing / "keep.txt").write_text("ok", encoding="utf-8")
+    rc = main([
+        "--dry-run", "--groups", "-n", "2", "--seed", "1",
+        "--datasets", str(parent), "--name", "groups15",
+    ])
+    assert rc == 0
+    kids = sorted(p.name for p in parent.iterdir())
+    assert kids == [existing.name], kids
+    assert (existing / "keep.txt").read_text(encoding="utf-8") == "ok"
     print("gen_dataset self-test: OK")
 
 
@@ -555,11 +621,27 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    plan = build_plan(int(args.n), int(args.seed), cfg, theme=theme)
+    if bool(args.groups):
+        from outcome_groups import build_group_plan
+        n_bg = max(1, int(args.bg_variants))
+        names = [
+            p.strip() for p in str(getattr(args, "group_scenarios", "") or "").split(",")
+            if p.strip()
+        ]
+        plan = build_group_plan(
+            int(args.n), int(args.seed), cfg, n_bg=n_bg,
+            scenarios=names or None,
+        )
+        if str(getattr(args, "ego_mode", "auto")) in ("", "auto"):
+            args.ego_mode = "walk"
+    else:
+        plan = build_plan(int(args.n), int(args.seed), cfg, theme=theme)
     parent = Path(args.datasets) if args.datasets else (_ROOT / "datasets")
     parent.mkdir(parents=True, exist_ok=True)
-    dirname = pack_dirname(seed=int(args.seed), n=int(args.n), name=str(args.name or ""))
-    pack_dir = unique_pack_dir(parent, dirname)
+    pack_name = str(args.name or "")
+    if bool(args.groups) and not pack_name:
+        pack_name = "groups15"
+    dirname = pack_dirname(seed=int(args.seed), n=int(args.n), name=pack_name)
     extra = {
         "media": args.media,
         "frames": int(args.frames),
@@ -573,21 +655,27 @@ def main(argv: list[str] | None = None) -> int:
         "ego_height": str(getattr(args, "ego_height", "auto")),
         "chaos": args.chaos,
         "no_trees": bool(args.no_trees),
-        "theme": theme,
+        "theme": "groups" if bool(args.groups) else theme,
         "note": (
-            "Scenario tokens are chosen here. Lighting, weather, path type, "
-            "walk speed, FOV, body proportions, colours, and clutter are "
-            "drawn per episode from the pipeline RNG (same --seed)."
-            + (
-                " Theme 'peripheral': empty sidewalk ahead; cars/people stay "
-                "on the side until they cut in."
-                if theme == "peripheral"
-                else ""
+            "Outcome groups: one threat scenario, three endings (collision / "
+            "miss_left / miss_right) that share frames until diverge_s, and "
+            "K background variants (trees/buildings/furniture plus a distinct "
+            "time-of-day lighting slot per bg_YY)."
+            if bool(args.groups)
+            else (
+                "Scenario tokens are chosen here. Lighting, weather, path type, "
+                "walk speed, FOV, body proportions, colours, and clutter are "
+                "drawn per episode from the pipeline RNG (same --seed)."
+                + (
+                    " Theme 'peripheral': empty sidewalk ahead; cars/people stay "
+                    "on the side until they cut in."
+                    if theme == "peripheral"
+                    else ""
+                )
             )
         ),
     }
-    plan_path = write_pack(pack_dir, plan, extra)
-    print(f"[gen_dataset] pack → {pack_dir}", flush=True)
+    would_dir = unique_pack_dir(parent, dirname)
     extra_flags = []
     if args.no_rgb:
         extra_flags.append("no-rgb")
@@ -599,14 +687,24 @@ def main(argv: list[str] | None = None) -> int:
         extra_flags.append(f"ego={args.ego_mode}")
     flag_s = ("  " + " ".join(extra_flags)) if extra_flags else ""
     print(
-        f"  seed={args.seed}  n={args.n}  theme={theme}  media={args.media}{flag_s}",
+        f"  seed={args.seed}  n={args.n}  theme={'groups' if args.groups else theme}  "
+        f"media={args.media}{flag_s}",
         flush=True,
     )
     _print_mix(plan)
     sys.stdout.flush()
     if args.dry_run:
+        # Do not mkdir under datasets/: a named pack that already exists
+        # used to leave groups15_*_2 leftovers with only plan.json.
+        tmp = Path(tempfile.mkdtemp(prefix="btp_dryrun_"))
+        plan_path = write_pack(tmp, plan, extra)
+        print(f"[gen_dataset] dry-run; would write {would_dir}")
+        print(f"  plan → {plan_path}")
         print("[gen_dataset] dry-run; Blender not launched")
         return 0
+    pack_dir = would_dir
+    plan_path = write_pack(pack_dir, plan, extra)
+    print(f"[gen_dataset] pack → {pack_dir}", flush=True)
     rc = launch_blender(plan_path, pack_dir, args)
     if rc != 0:
         print(f"[gen_dataset] blender exited {rc}", file=sys.stderr)

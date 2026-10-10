@@ -561,7 +561,7 @@ class ComposeSession:
             s_hi=float(s_hi),
             nudge_s=float(block.get("nudge_s_m", 2.6)),
             max_nudges=int(block.get("max_nudges", 18)),
-            horizon=float(block.get("horizon_s", 10.0)),
+            horizon=float(block.get("horizon_s", 15.0)),
             dt_sample=float(block.get("dt_sample", 0.12)),
             clearance_s=float(block.get("clearance_s", 0.20)),
             clearance_lat=float(block.get("clearance_lat", 0.18)),

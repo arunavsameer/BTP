@@ -254,7 +254,7 @@ class EgoProfile:
         return self.mode == "seated"
 
 
-def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 10.0) -> EgoProfile:
+def choose_ego_profile(cfg: dict, rng: random.Random, episode_seconds: float = 15.0) -> EgoProfile:
     """Draw an ego mode and its parameters from `cfg['ego']`.
 
     `episode_seconds` scales the timing windows so a hesitation actually

@@ -22,7 +22,7 @@ CONFIG: dict[str, Any] = {
         "resolution_x": 1920,
         "resolution_y": 1080,
         "fps": 30,
-        "frames_per_episode": 300,  # 10.0 s at 30 fps
+        "frames_per_episode": 450,  # 15.0 s at 30 fps
         "filepath_format": "PNG",
         "color_depth": "8",
         "film_transparent": False,
@@ -38,7 +38,7 @@ CONFIG: dict[str, Any] = {
         "volumetric_samples": 16,
         "volumetric_tile_size": "8",
         "volumetric_start": 0.1,
-        "volumetric_end": 100.0,
+        "volumetric_end": 130.0,
         # PNG zlib 0–100. 1 is nearly as fast as uncompressed and much smaller.
         "png_compression": 1,
     },
@@ -51,7 +51,7 @@ CONFIG: dict[str, Any] = {
         "sensor_width_mm": 36.0,
         "sensor_fit": "HORIZONTAL",
         "clip_start": 0.05,
-        "clip_end": 160.0,
+        "clip_end": 220.0,
         "eye_height_m": 1.6,
         # Domain-randomized standing eye height. Seated uses ego.seated_*.
         # short ≈ child/teen / stooped adult; tall ≈ 95th-percentile adult.
@@ -116,8 +116,8 @@ CONFIG: dict[str, Any] = {
         "sidestep_rate_hz": (0.10, 0.38),
         "speed_wobble": (0.15, 0.55),
         "hesitate_prob": 0.55,
-        # Windows are for a 10 s clip. choose_ego_profile scales them when
-        # --duration / --frames is shorter.
+        # Windows are for a 10 s clip. choose_ego_profile scales them by
+        # episode_seconds / 10 so a 15 s walk still hesitates in-frame.
         "hesitate_window_s": (1.8, 5.2),
         "hesitate_duration_s": (0.7, 2.0),
         # Raised-cosine ramps inside the halt window so optical flow does
@@ -164,10 +164,11 @@ CONFIG: dict[str, Any] = {
     # Procedural street
     # -------------------------------------------------------------------------
     "world": {
-        # Long enough for a 10 s walk plus ~2× intercept leads (oncoming
-        # cars spawn ~40–70 m ahead). Short 48 m streets clipped those.
-        "path_length_min": 95.0,
-        "path_length_max": 125.0,
+        # Long enough for a 15 s walk plus a late intercept. An oncoming
+        # car at ~6–9 m/s with τ≈13 s spawns ~90–150 m ahead; 95 m streets
+        # clipped those. Walk speed is unchanged — only the ribbon grows.
+        "path_length_min": 155.0,
+        "path_length_max": 195.0,
         "path_types": ("straight", "gentle_curve", "s_curve", "corner_90"),
         "road_width": 7.0,
         "lane_offset": 1.75,
@@ -186,7 +187,7 @@ CONFIG: dict[str, Any] = {
         "median_width": 0.0,
         # Chance the carriageway uses cobble tiles instead of asphalt.
         "cobble_prob": 0.10,
-        "n_streetlamps": 10,
+        "n_streetlamps": 14,
         "streetlamp_height": 5.6,
         "streetlamp_energy_night": 900.0,
         # Poisson-disk radii (minimum spacing) for sidewalk clutter.
@@ -194,7 +195,7 @@ CONFIG: dict[str, Any] = {
             "static_radius": 3.2,
             "head_hazard_radius": 7.5,
             "k_candidates": 20,
-            "n_ground_static": (4, 9),
+            "n_ground_static": (5, 11),
             # Floating head-height boxes (branch / AC / sign) are off by
             # default — they read as junk on the gait line. Re-enable via
             # config if a pack specifically wants that clutter.
@@ -242,7 +243,7 @@ CONFIG: dict[str, Any] = {
                 "building_height": (10.0, 30.0),
                 "building_width": (6.0, 16.0),
                 "n_background_vehicles": (4, 9),
-                "n_streetlamps": 12,
+                "n_streetlamps": 16,
                 "n_trees": (10, 18),
                 "n_street_trees": (0, 0),
                 "n_median_trees": (2, 4),
@@ -482,50 +483,62 @@ CONFIG: dict[str, Any] = {
             "periph_ped_cut",
             "periph_child_cut",
         ),
-        # Timing assumes a 10 s clip. Danger is scheduled in the second
-        # half: oncoming actors spawn at ~2× the old τ, crossers start at
-        # the corridor edge and take several seconds to occupy the gait.
-        "swerve_trigger_s": 3.6,
-        "cut_in_trigger_s": 2.4,
-        "swerve_hit_s": 6.8,
-        "cut_in_hit_s": 5.8,
-        "run_off_hit_s": (4.6, 6.6),
-        "weave_tau": (4.8, 7.2),
-        "child_dart_hit_s": (4.8, 6.8),
-        "child_dart_run_s": (1.8, 2.6),
+        # Timing assumes a 15 s clip. Walk / vehicle *speeds* stay in the
+        # same bands; only spawn τ and meet times move later so the street
+        # does not scramble. Danger occupies the gait around 14.3 s so the
+        # last second is still the intercept; outcome groups fork ~2 s
+        # before that (see outcome_hit_s / outcome_diverge_s).
+        "swerve_trigger_s": 11.2,
+        "cut_in_trigger_s": 11.4,
+        "swerve_hit_s": 14.4,
+        "cut_in_hit_s": 14.3,
+        "run_off_hit_s": (13.8, 14.5),
+        "weave_tau": (13.4, 14.5),
+        "child_dart_hit_s": (13.8, 14.5),
+        # Dart starts in the 8–11 s window (always before outcome_diverge_s)
+        # so the child is already running in FOV; they do not wait 12 s at a
+        # kerb that a 50° lens has already cropped.
+        "child_dart_run_s": (4.2, 6.0),
         "sudden_stop_lead_m": 6.5,
-        "sudden_stop_trigger_s": 3.2,
-        # On-gait hole. 12.5 m is a ~9 s walk at 1.4 m/s, still in the
-        # lower third of a 50–90° HFOV (depression atan(1.6/12.5) ≈ 7°).
-        "pothole_on_path_lead_m": 12.5,
-        "pothole_near_lead_m": 11.5,
-        "pothole_offset_lead_m": 13.0,
-        "tree_on_path_lead_m": 12.0,
-        "tree_near_lead_m": 11.5,
-        "lamp_on_path_lead_m": 12.0,
-        "lamp_near_lead_m": 11.5,
-        "static_shape_lead_m": 8.8,
-        # Time for a walking-speed crosser to reach the gait from the
-        # corridor edge. Used by through-cross; not a sprint.
-        "jaywalker_ttc": 6.4,
+        "sudden_stop_trigger_s": 11.5,
+        # On-gait statics. 18 m is a ~13 s walk at 1.4 m/s, still in the
+        # lower third of a 50–90° HFOV (depression atan(1.6/18) ≈ 5°).
+        "pothole_on_path_lead_m": 18.0,
+        "pothole_near_lead_m": 16.5,
+        "pothole_offset_lead_m": 18.5,
+        "tree_on_path_lead_m": 17.5,
+        "tree_near_lead_m": 16.5,
+        "lamp_on_path_lead_m": 17.5,
+        "lamp_near_lead_m": 16.5,
+        "static_shape_lead_m": 16.0,
+        # Time for a walking-speed crosser to occupy the gait. People start
+        # on the camera HFOV edge (not the far kerb) and walk at this band;
+        # they do not sprint to fill the extra seconds.
+        "jaywalker_ttc": 14.3,
         "cross_person_speed": (0.75, 1.10),
-        "cross_car_meet_s": 6.6,
-        "cross_bike_meet_s": 5.6,
-        "cross_cube_meet_s": 5.8,
-        "projectile_ttc": 3.2,
+        "cross_car_meet_s": 14.35,
+        "cross_bike_meet_s": 14.2,
+        "cross_cube_meet_s": 14.25,
+        "projectile_ttc": 4.0,
         "projectile_speed": 3.6,
         "near_miss_cpa_target": 1.0,
         "critical_cpa_target": 0.12,
-        "oncoming_tau": 5.6,
-        "oncoming_ped_tau": 6.0,
-        "car_pass_tau": 6.4,
-        "car_approach_tau": 6.0,
-        "cyclist_near_tau": 5.0,
-        "car_near_tau": 5.6,
-        "cube_near_tau": 5.2,
-        "cube_head_tau": 4.8,
-        "cyclist_head_tau": 4.6,
-        "cross_car_tau": 5.2,
+        "oncoming_tau": 14.3,
+        "oncoming_ped_tau": 14.2,
+        "car_pass_tau": 14.4,
+        "car_approach_tau": 14.3,
+        "cyclist_near_tau": 14.2,
+        "car_near_tau": 14.3,
+        "cube_near_tau": 14.2,
+        "cube_head_tau": 14.3,
+        "cyclist_head_tau": 14.25,
+        "cross_car_tau": 14.3,
+        # Shared-prefix outcome groups (gen_dataset --groups).
+        # Hit in the last second so the collision still fills the frame;
+        # fork ~2 s earlier so misses are visible going left / right.
+        "outcome_hit_s": 14.35,
+        "outcome_diverge_s": 12.15,
+        "outcome_miss_clearance_m": 2.40,
         # Compound injectors (``--scenario jaywalker,car,pothole``). Occupancy
         # is Frenet (s, lateral); this runs once per episode, not per frame.
         "compose": {
@@ -534,11 +547,11 @@ CONFIG: dict[str, Any] = {
             "static_stride_m": 2.4,
             "nudge_s_m": 2.6,
             "max_nudges": 18,
-            "horizon_s": 10.0,
+            "horizon_s": 15.0,
             "dt_sample": 0.12,
             "clearance_s": 0.20,
             "clearance_lat": 0.18,
-            "look_ahead_m": 72.0,
+            "look_ahead_m": 130.0,
         },
     },
     # -------------------------------------------------------------------------
@@ -655,7 +668,7 @@ CONFIG: dict[str, Any] = {
         "nvenc_preset": "p4",
     },
     "annotation": {
-        "max_distance": 80.0,  # skip objects beyond this (metres)
+        "max_distance": 140.0,  # skip objects beyond this (metres)
         "occlusion_epsilon": 0.08,
     },
 }
