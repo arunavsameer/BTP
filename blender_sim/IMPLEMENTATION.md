@@ -63,7 +63,7 @@ These are the reasons the code looks the way it does. Almost every “why” in 
 
 **C1. One Frenet parameter.** Every actor and the camera share the **road centreline** arc-length `s` plus a signed `lateral` (positive = road-right, \(\hat{r}=\hat{t}\times\hat{z}\)). The sidewalk is an offset of that spline, not a second path. Mixing a resampled sidewalk spline’s arc length with road `s` would desynchronise injectors from the annotator.
 
-**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix is a separate product: body intercept × TTC, plus a moving near-pass term. Those two products answer different questions and must not be collapsed.
+**C2. Constant-velocity point TTC.** The label is the spec’s point-mass TTC / CPA of a **threat point**, not the mesh origin and not a swept volume. The spatial matrix is a separate product: class-aware \(S=\max(S_{\mathrm{hit}},S_{\mathrm{path}},S_{\mathrm{stat}},S_{\mathrm{prox}})\). Those two products answer different questions and must not be collapsed.
 
 **C3. Stationary ego is a first-class state.** Seated / hesitate have `walk_speed = 0`. Every solver must accept \(V_{\mathrm{cam}}=0\) without dividing by it. Intercepts spawn at \(\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},\,v_{\mathrm{obj}})\tau\), never on top of the HMD.
 
@@ -351,6 +351,7 @@ Never:
 | `spatial_overlay.py` | no | PPM heat + ffmpeg overlay graph |
 | `outcome_groups.py` | no | Group folder names, miss laterals, `--groups` plan, prefix-cache rules |
 | `gen_dataset.py` | no | Balanced pack planner + `--groups`; launches `run.sh --plan` |
+| `remux_spatial_from_json.py` | no | Recompute overlay + spatial JSON from `preview.mp4` + annotations (no Blender) |
 | `main.py` | yes | CLI, episode loop, `run_group_plan`, annotation JSON, render, mux |
 
 `python threat_math.py`, `python spatial_threat.py`, `python spatial_overlay.py`, `python scenario_compose.py`, `python outcome_groups.py`, and `python gen_dataset.py --self-test` are the unit tests. They run on system Python.
@@ -849,7 +850,7 @@ A hard reject (`_on_drive_or_walk`) drops any candidate whose `|lat|` is on the 
 
 `_spawn_canopy_gobo` — one alpha-hashed ribbon at 6.5–10.5 m. Hidden from camera / diffuse / glossy if those flags exist; `visible_shadow=True`. Models “avenue of plane trees” as a moving shadow, not 10k leaves.
 
-`_spawn_streetlamps` — pole wrapped as an annotatable static `Actor` (`class_name="streetlamp"`, `threat_obj=pole`) + collar + arm along local −X (toward the carriageway; local +X is `road.right`) + cobra-head housing + underside lens + downward SPOT parented at the luminaire. Alternating sides. `_site_free` vs trunks. Dead/gain custom props; dead lamps keep the fixture and a dark lens (SPOT hidden). Daytime: energy 0, hidden SPOT, dark lens. Dedicated injectors `lamp_on_path` / `lamp_near` plant an extra pole on or beside the gait (same welded fixture, no extra SPOT).
+`_spawn_streetlamps` — pole wrapped as an annotatable static `Actor` (`class_name="streetlamp"`, `threat_obj=pole`). Collar, arm, cobra-head, underside lens, and downward SPOT are **parented** to the pole (`_parent_local`, identity parent inverse — they must not float). The arm’s long axis is local **X** and is displaced toward the carriageway (`arm_sign` = pole lateral sign; local +X is `road.right`). Alternating sides. `_site_free` vs trunks. Dead/gain custom props; dead lamps keep the fixture and a dark lens (SPOT hidden). Daytime: energy 0, hidden SPOT, dark lens. Dedicated injectors `lamp_on_path` / `lamp_near` plant an extra pole on or beside the gait (same welded fixture, no extra SPOT). Heat splat uses the pole mesh only — never the cobra-arm AABB.
 
 ### 11.15 Furniture and head hazards
 
@@ -984,14 +985,14 @@ Shared helpers:
 - `_resolve_lat(dlat, L, pad)` — `dlat` may be `"opposite"`, a float offset, or an absolute.
 - `_kind_pad` — vehicle 1.05, bicycle 0.40, shapes ~0.35, person 0.35.
 - `_frustum_half_width(depth, frac)` — `depth * tan(0.5*hfov*frac)`, min 1.20 m.
-- `_visible_entry_lat` / `_ahead_depth` / `_prefer_cross_from_left` — people (jaywalk, child dart) spawn on the **HFOV edge** at a reference time (~6–8 s), not the far building-line. A 50° lens cannot see the opposite kerb in the second half of a 15 s walk.
+- `_visible_entry_lat` / `_ahead_depth` / `_prefer_cross_from_left` — people (jaywalk, child dart) spawn on the **HFOV edge** at a reference time (~6–8 s), not the far building-line. A 50° lens cannot see the opposite kerb in the second half of a 15 s walk. While waiting they **face `lat_target`**, not the road tangent.
 - `_visible_lead(preferred, near, far)` — clamp spawn into `look_ahead_m`. Far cars start as specks on purpose.
 - `_cross_kind_params` / `_lat_speed_for_meet` — meet time and lateral pace for through-cross.
 - `_scale_person` — uniform scale for `child_darting` if the child mesh path is not used; the real child path uses `spawn_humanoid(child=True)`.
 - `_inject_oncoming` — spawn at \(s_0+\max(v_{\mathrm{ego}}+v_{\mathrm{obj}},v_{\mathrm{obj}})\tau\), lateral = gait + `dlat` (or opposite sidewalk). Speed is **negative** (toward the camera) for oncoming kinds. Seated still gets \(v_{\mathrm{obj}}\tau\) ahead.
-- `_inject_through_cross` — people: HFOV-edge start, walk toward the camera, `lat_target` the gait (groups) or far edge. Vehicles: corridor-edge, `speed=0`. `behavior='through'`. Depth \(\approx (v_{\mathrm{ego}}+|v_{\mathrm{along}}|)\times\texttt{meet}\).
+- `_inject_through_cross` — people: HFOV-edge start, wait then walk by t≤6 s toward the camera, `lat_target` the gait (`force_critical` / groups) or far edge. Vehicles: corridor-edge, `speed=0`. `behavior='through'`. Depth \(\approx (v_{\mathrm{ego}}+|v_{\mathrm{along}}|)\times\texttt{meet}\).
 - `_inject_jaywalk_turn` — corridor-edge entry, then `turn_t` blends into along-track toward or away from the camera.
-- `_inject_static_shapes` — `n=1` one cube; `n=0` draws 2–4 mixed shapes. On gait, 2.55 m apart, lead 8.8 m + static stride.
+- `_inject_static_shapes` — `n=1` one cube; `n=0` draws 2–4 mixed shapes. On gait, 2.55 m apart, lead `static_shape_lead_m` (16.0 m) + static stride.
 - `_inject_pothole` — lead from config, `dlat` 0 / 0.85 / 1.80. On-gait: pothole/crater/broken_slab. Offset may also be debris.
 - `_inject_car_lane` / `_inject_parallel_person` / `_inject_cyclist_same_way` / `_inject_distant_jaywalk` / `_inject_parked_car` / `_inject_sudden_stop` / `_inject_cut_in` / `_inject_weaving` / `_inject_run_off_road` / `_inject_child_dart` / `_inject_head_cube` — see §15.
 
@@ -1037,11 +1038,11 @@ CLI parse + Frenet occupancy. Injector **bodies** stay in `world_generator.py` s
 
 `pick_scenario` — first of `pick_scenarios` (legacy single-name API).
 
-`compose_slug` — user order, `_` joined, truncated to 72 chars for folder names.
+`compose_slug` — user order, `__` joined, truncated to 72 chars for folder names.
 
-`compose_display` — same for the log line.
+`compose_display` — same for the log line (`+` joined).
 
-`is_noop` — `safe_walk` / `empty_street` (empty still sparsifies in `prepare_scenario`; the injector is a no-op).
+`is_noop` — `safe_walk` / `empty_street` / `periph_empty` / `hasty_look` (empty / clear-center still sparsify in `prepare_scenario`; the injector is a no-op).
 
 `scenario_request_from_tokens` — joins repeated `--scenario` and `--scenarios`.
 
@@ -1209,13 +1210,13 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `safe_walk` | safe | Background only. Injector is a no-op. |
 | `empty_street` | safe | `prepare_scenario` zeroes background peds/cars and most clutter. Injector no-op. |
 | `periph_empty` | safe* | Clear-center empty street. Ego `walk`, no clutter, no gait traffic. |
-| `periph_car_side` | safe* | Far-lane car, ~24 m oncoming / ~14 m same-way so it sits on a FOV edge for most of the clip. Stays in lane. |
-| `periph_parked` | safe* | Parked car in a gutter (near or far), ~12 m ahead. |
-| `periph_ped_side` | safe* | Person on the opposite sidewalk only, ~12 m ahead. |
-| `periph_car_turn` | crit* | Near-lane car ~22 m out, holds the lane for ~2 s, then cut-in onto the gait. |
-| `periph_car_runoff` | crit* | Same start, then mounts the pavement. |
-| `periph_ped_cut` | crit* | Through-cross person from a corridor edge. |
-| `periph_child_cut` | crit* | Child waits on-screen, then darts through the gait. |
+| `periph_car_side` | safe* | Far-lane car, oncoming ~28 m min / same-way ~14 m so it sits on a FOV edge for most of the clip. Stays in lane. |
+| `periph_parked` | safe* | Parked car in a gutter (near or far), gait-meet lead 18 m. |
+| `periph_ped_side` | safe* | Person on the opposite sidewalk only, gait-meet lead 18 m. |
+| `periph_car_turn` | crit* | Near-lane car, holds the lane until ~11 s (`t_hit − 2–3.4 s` ease), then cut-in onto the gait. `--groups` yes. |
+| `periph_car_runoff` | crit* | Same start, then mounts the pavement. Not forkable. |
+| `periph_ped_cut` | crit* | Through-cross person from an HFOV / corridor edge. `--groups` yes. |
+| `periph_child_cut` | crit* | Child waits on-screen, darts t0∈[7.2, 10.4] s through the gait. `--groups` yes. |
 
 \*Peripheral names live in `peripheral_safe` / `peripheral_critical`, not the auto mix.
 | `oncoming_pedestrian` | safe | Opposite sidewalk (`dlat="opposite"`), 0.95–1.30 m/s, \(\tau=14.2\). CPA stays large. |
@@ -1228,7 +1229,7 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `parked_car_opposite` | safe | Static vehicle, far lane, 16 m ahead. |
 | `near_miss_pass` | near | Oncoming ped, `dlat=1.0`, \(\tau=14.3\). |
 | `jaywalker_offset` | near | Through-cross, CPA 1.0, from left. |
-| `jaywalker_from_left` / `_right` | near | Through-cross, CPA 1.0, forced side. |
+| `jaywalker_from_left` / `_right` | near | Through-cross, CPA 1.0, forced side. `--groups` yes (`force_critical` makes CPA 0.12). |
 | `jaywalker_turn_away` | near | Corridor-edge entry, merge off the gait, then walk the same way. |
 | `cyclist_near_miss` | near | Oncoming bike, `dlat=1.0`, \(\tau=14.2\). |
 | `car_near_miss_lane` | near | Oncoming car, `dlat=1.0`, \(\tau=14.3\), pad 1.05, **near lane locked**. |
@@ -1238,35 +1239,37 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `tree_near` | near | Extra trunk at `dlat=0.80`, lead 16.5 m. |
 | `lamp_near` | near | Extra pole at `dlat=0.80`, lead 16.5 m. |
 | `cyclist_weaving` | near | Near-lane bike, sine 0.9–1.9 m @ 0.28–0.62 Hz, \(\tau\sim U(13.4,14.5)\). |
-| `jaywalker` | critical | Through-cross person, CPA 0.12. Starts on-screen (HFOV edge); walking by ~6 s; meet ~14.3 s. |
-| `jaywalker_turn_toward` | critical | Corridor-edge entry, then oncoming on the gait (turn delayed to `hit_s`). |
+| `jaywalker` | critical | Through-cross person, CPA 0.12. Starts on-screen (HFOV edge); faces `lat_target` while waiting; walking by t≤6 s; meet ~14.3 s. `--groups` yes. |
+| `jaywalker_turn_toward` | critical | Corridor-edge entry, then oncoming on the gait (turn delayed to `hit_s`). `--groups` yes. |
 | `sudden_stop` | critical | Ped 6.5 m ahead (`sudden_stop_lead_m`), `stop_t=11.5` s. Walker closes on a now-static body. |
-| `swerve_vehicle` | critical | Near-lane car, `swerve_t=11.2`, then drift onto gait, CPA 0.12, \(t_{\mathrm{hit}}=14.4\). |
-| `car_cut_in` | critical | Same family, `swerve_t=11.4`, \(t_{\mathrm{hit}}=14.3\). |
+| `swerve_vehicle` | critical | Near-lane car, `swerve_t=11.2`, then drift onto gait, CPA 0.12, \(t_{\mathrm{hit}}=14.4\). `--groups` yes. |
+| `car_cut_in` | critical | Same family, `swerve_t=11.4`, \(t_{\mathrm{hit}}=14.3\). `--groups` yes. |
 | `pothole_on_path` | critical | On-gait hole, lead 18.0 m, `dlat=0`. |
 | `tree_on_path` | critical | Extra trunk on the gait, lead 17.5 m. Splat / TTC use the bole. |
 | `lamp_on_path` | critical | Extra pole on the gait, lead 17.5 m. Splat / TTC use the pole. |
-| `cube_on_path` | critical | One static cube on the gait. |
-| `shapes_on_path` | critical | 2–4 mixed static primitives on the gait, 2.55 m apart. |
-| `cube_head_on` / `shape_head_on` | critical | Oncoming primitive, `dlat=0.12`, \(\tau=14.3\). |
-| `cube_from_left` / `_right` / `shape_from_*` | critical | Through-cross primitive, CPA 0.12 (`cross_cube_meet_s=14.25`). |
-| `cyclist_head_on` | critical | Oncoming bike on the gait, \(\tau=14.25\). |
+| `cube_on_path` | critical | One static cube on the gait (lead 16.0 m). `--groups` yes: miss **rolls aside** after `diverge_s`. |
+| `shapes_on_path` | critical | 2–4 mixed static primitives on the gait, 2.55 m apart. Not forkable. |
+| `cube_head_on` / `shape_head_on` | critical | Oncoming primitive, `dlat=0.12`, \(\tau=14.3\). `--groups` yes. |
+| `cube_from_left` / `_right` / `shape_from_*` | critical | Through-cross primitive, CPA 0.12 (`cross_cube_meet_s=14.25`). `--groups` yes. |
+| `cyclist_head_on` | critical | Oncoming bike on the gait, \(\tau=14.25\). `--groups` yes. |
 | `head_level_projectile` | critical | Eye-height cube, 3.6 m/s, \(\tau=4.0\) (`_inject_head_cube`). |
-| `car_cross_critical` | critical | Through-cross vehicle, CPA 0.12. |
+| `car_cross_critical` | critical | Through-cross vehicle, CPA 0.12. `--groups` yes. |
 | `car_erratic_swerve` | critical | Near-lane car, weave 1.0–2.2 m @ 0.18–0.40 Hz, \(\tau\sim U(13.4,14.5)\). |
-| `car_runs_off_road` | critical | Car in the near lane, then mounts the walker’s sidewalk around \(t\sim U(13.8,14.5)\) s. |
-| `child_darting` | critical | `spawn_humanoid(child=True)`. On-screen wait, dart from ~8–10.5 s (before `diverge_s`) at 1.9–3.1 m/s plus a 0.85–1.35 m/s close; gait meet \(U(13.8,14.5)\) s. |
+| `car_runs_off_road` | critical | Car in the near lane, then mounts the walker’s sidewalk around \(t\sim U(13.8,14.5)\) s. `--groups` yes. |
+| `child_darting` | critical | `spawn_humanoid(child=True)`. On-screen wait facing `lat_target`; dart t0∈[7.2, 10.4] s (always before `diverge_s`) at 1.9–3.1 m/s plus a 0.85–1.35 m/s close; gait meet \(U(13.8,14.5)\) s. Not a far-kerb statue. `--groups` yes. |
 | `crossing_street` | safe | No extra injector. Forces ego `crosswalk` (Frenet lateral + heading). |
 | `cyclist_overtake` | safe | Bike same way, ~0.85 m toward the road, faster than ego, lead ~3.6 m. |
 | `hasty_look` | safe | No extra injector. Forces ego `hasty` (fast look, extra bob). |
 | `group_crossing` | near | 2–3 through-cross pedestrians; forces ego `crosswalk`. |
 | `scooter_from_sidewalk` | near | Through-cross bicycle from a corridor edge. |
-| `parked_car_door` | near | Parked car in the near gutter (~10 m) + a static door-height box on the gait. |
-| `crossing_car_side` | critical | Oncoming car in the **near driving lane** + ego `crosswalk`. Stays on asphalt. \(\tau=14.3\). |
-| `crossing_head_on` | critical | Oncoming car in the far driving lane while the ego crosses. |
+| `parked_car_door` | near | Parked car in the near gutter (gait-meet lead 16 m) + a static door-height box on the gait. |
+| `crossing_car_side` | critical | **Intended:** oncoming car in the **near driving lane** + ego `crosswalk`, \(\tau=14.3\). **Still broken:** gaze follows the crossing (up to 50° off the road) so the car is often off-screen / a speck while the frame fills with pavement or puddles. In `--groups` anyway. Do not claim this clip works. |
+| `crossing_head_on` | critical | Same injector with `far=True` (far driving lane) while the ego crosses. Same look-vs-car risk; not forkable. |
 | `backing_vehicle` | critical | Car ~12.5 m ahead, `look_flip`, slow reverse (`ds < 0`) toward the walker. |
 
-Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car, crossing, sidewalk_dyn.
+Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, tree, lamp, car, cyclist, cube, shape, ped, erratic_car, crossing, sidewalk_dyn.
+
+`--groups` / `FORKABLE_SCENARIOS` (21): `jaywalker`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_toward`, `swerve_vehicle`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `car_cut_in`, `cyclist_head_on`, `car_cross_critical`, `car_runs_off_road`, `child_darting`, `crossing_car_side`, `periph_car_turn`, `periph_ped_cut`, `periph_child_cut`. `safe_walk` is **not** in this set. Static holes / lamps / `shapes_on_path` are not either. Group packs set `force_critical=True` and default ego `walk` (seated remapped to walk; `CROSS_EGO` names still force `crosswalk`).
 
 ### 15.3 Worked inject: `jaywalker` + `car_approaching` + `pothole`
 
@@ -1449,6 +1452,8 @@ Debug movie, not a training product. `write_heat_sequence` writes one PPM per fr
 
 Group miss clips hard-link collision heat frames `[0, diverge_frame)` and only raster the tail. Overlay and `preview.mp4` mux as prefix mp4 + tail mp4 (`ffmpeg` concat-copy, same 30 fps / 1920×1080 bitstream for the shared prefix). A frame-count mismatch falls back to encoding the full PNG sequence.
 
+To change heatmap knobs after a pack is already rendered, `remux_spatial_from_json.py` re-scores from annotations JSON + `preview.mp4` (no depsgraph). It does not need `rgb/`.
+
 `python spatial_overlay.py` writes a tiny PPM and checks the filter string contains `geq` / overlay nodes.
 
 ---
@@ -1464,7 +1469,7 @@ Each episode already randomizes lighting, weather, path, FOV, body, colours, clu
 ### 18.2 `build_plan`
 
 1. Quotas: leftover after compounds is split **40 / 30 / 30** like `--scenario auto`.
-2. Compounds: `_COMPOUND_FRAC=0.22` of \(N\). `draw_compound` picks **at most one name per family** (jaywalk, pothole, car, cyclist, cube, shape, ped, erratic_car) so occupancy stays sane. `jaywalker+jaywalker_from_left` is refused by construction.
+2. Compounds: `_COMPOUND_FRAC=0.22` of \(N\). `draw_compound` picks **at most one name per family** (jaywalk, pothole, tree, lamp, car, cyclist, cube, shape, ped, erratic_car, crossing, sidewalk_dyn) so occupancy stays sane. `jaywalker+jaywalker_from_left` is refused by construction.
 3. Singles: cycle-draw from each pool so a small \(N\) still sees several names, not 8 copies of the first.
 
 `--theme peripheral` (aliases `side`, `clear_center`) uses `build_plan_peripheral` instead: ~18 % `periph_empty`, ~37 % side-stay, ~45 % side-cut. No compounds. Those names are not in the mixed catalog.
@@ -1475,7 +1480,7 @@ Each episode already randomizes lighting, weather, path, FOV, body, colours, clu
 
 `launch_blender` is a single `subprocess.call` of `./run.sh` (the planner process stays alive until Blender exits). Do not launch two Blenders on one GPU — EEVEE is already the bottleneck. Flags after `--` include `--plan`, `--output` (the pack dir), and whatever media/overlay/render flags were on the planner CLI.
 
-`--groups` skips `build_plan`. It calls `outcome_groups.build_group_plan` (forkable names only), forces `--ego-mode walk` if the CLI was `auto`, and names the folder `groups15_s{seed}_n{N}` unless `--name` is set.
+`--groups` skips `build_plan`. It calls `outcome_groups.build_group_plan` (forkable names only; `safe_walk` is dropped), forces `--ego-mode walk` if the CLI was `auto`, clamps `--bg-variants` to 1–8 (default 2), and names the folder `groups15_s{seed}_n{N}` unless `--name` is set. Lighting-per-bg is automatic; there is no `--bg-lighting` flag. Each sample always writes `collision` plus **one** miss side (`miss_left` or `miss_right`, 50/50 from the plan RNG / `--seed`). Clip count is `--n` × 2 outcomes × K backgrounds.
 
 ### 18.3 Outcome groups (`--groups`)
 
@@ -1484,18 +1489,20 @@ Each episode already randomizes lighting, weather, path, FOV, body, colours, clu
 A **sample** is one threat scenario. It expands to
 
 ```text
-sample_XXXX_<scenario>/{collision,miss_left,miss_right}/bg_YY/
+sample_XXXX_<scenario>/{collision,miss_left|miss_right}/bg_YY/
 ```
 
-Until `diverge_s` (config `outcome_diverge_s=12.15`) every clip of a `(sample, background)` triple has the same ego, the same threat kinematics, and the same RGB. After that the threat either continues into the walker (`outcome_hit_s=14.35`) or peels.
+Collision is always present. Exactly one miss folder is written; `groups_index.json` / `group.json` list only that pair. Until `diverge_s` (config `outcome_diverge_s=12.15`) every clip of a `(sample, background)` pair has the same ego, the same threat kinematics, and the same RGB. After that the threat either continues into the walker (`outcome_hit_s=14.35`) or peels to the chosen side.
 
-`miss_target_lat` aims `gait ± clearance`. Vehicle clearance is 3.40 m, people 2.40 m, with a **minimum after clip** of 2.50 m (cars) / 1.55 m (people). If the named side is a facade (`|clipped − gait| < need`), the target is the **far driving lane**, not a 1.3 m hug that still hits. `apply_outcome_fork` may set a **negative** `corridor_pad` so `StreetCorridor.confine` allows the verge. Through-crossers sitting at one `s` also get a small along-track `fork_speed` so they do not sweep the gait while peeling.
+`miss_target_lat` aims `gait ± clearance`. Vehicle clearance is 3.40 m, people 2.40 m, with a **minimum after clip** of 2.50 m (cars) / 1.55 m (people). If the named side is a facade (`|clipped − gait| < need`), the target is the **far driving lane**, not a wall-side hug that still hits. `apply_outcome_fork` may set a **negative** `corridor_pad` so `StreetCorridor.confine` allows the verge. Peel rates at the fork: people \(1.25\)–\(2.15\) m/s, cars \(2.40\)–\(5.40\) m/s. Through-crossers sitting at one `s` also get a small along-track `fork_speed` so they do not freeze at the kerb when the peel retargets.
 
 Background variants (`full` / `sparse` / `bare`) rebuild trees, buildings, and furniture, **and** each `bg_YY` of a sample is assigned a distinct lighting slot (`noon`, `night`, `dusk`, `overcast`, `harsh_glare`, `dawn` — cycled so two backgrounds cannot share a time of day). Weather is a mild companion (`clear` / `light_fog`). Prefix cache is still per `(sample, same bg)`, so collision and miss of that bg keep identical illumination. `group_mode` zeroes background movers so occupancy cannot nudge the threat. Scene RNG vs `bg_rng` keeps clothes / injector / path / ego identical across `bg_00` and `bg_01`; only scatter + lighting change.
 
-`run_group_plan` in `main.py`: one world build per `(sample, bg)`. Collision is a full 450-frame render. Miss clips hard-link prefix RGB **and** heat PPMs for frames `[0, diverge_frame)` (365 at 30 fps), copy prefix spatial/annotation JSON, and only EEVEE the tail. `preview.mp4` / `spatial_overlay.mp4` concat-copy that collision prefix bitstream plus a newly encoded tail (fallback: full PNG encode if concat drops frames). `groups_index.json` is a flat list (`y=1` collision, `y=0` miss) for a trainer glob.
+`run_group_plan` in `main.py`: one world build per `(sample, bg)`. Collision is a full 450-frame render. The single miss clip hard-links prefix RGB **and** heat PPMs for frames `[0, diverge_frame)` (365 at 30 fps), copies prefix spatial/annotation JSON, and only EEVEE the tail. `preview.mp4` / `spatial_overlay.mp4` concat-copy that collision prefix bitstream plus a newly encoded tail (fallback: full PNG encode if concat drops frames). `groups_index.json` is a flat list of clips that exist (`y=1` collision, `y=0` miss) for a trainer glob.
 
-`FORKABLE_SCENARIOS` is the catalog `--groups` will cycle. Static holes and lamp-on-path are not in it.
+`FORKABLE_SCENARIOS` is the catalog `--groups` will cycle (list in §15.2). Static holes and lamp-on-path are not in it. `cube_on_path` is: the static cube becomes dynamic at `diverge_s` and rolls aside. `--group-scenarios` keeps only names in that set; an empty remainder falls back to the full catalog.
+
+`remux_spatial_from_json.py` recomputes heat + `spatial_overlay.mp4` from `preview.mp4` and `annotations/annotations.json` (no Blender). `--no-rgb` is compatible; `--no-annotations` is not. Pole/trunk paint uses a projected strip, not the cobra-arm AABB. JSON `threat_label` / TTC stay the point-mass solve.
 
 ---
 
@@ -1509,12 +1516,12 @@ Called once per sim frame after `view_layer.update()`. Returns `(record, threat_
 
 For each `world.annotatable()` actor:
 
-1. **Range cull.** Skip if \(\|P-P_{\mathrm{cam}}\|^2 > (40+5)^2\), or if the object is more than 6 m **behind** the camera tangent (`(P-Pcam)·t < -6`). The +5 m pad and the −6 m back-face keep a wide box that is about to enter from the side.
+1. **Range cull.** Skip if \(\|P-P_{\mathrm{cam}}\|^2 > (d_{\max}+5)^2\) with \(d_{\max}=\) `annotation.max_distance` (**140 m**), or if the object is more than 6 m **behind** the camera tangent (`(P-Pcam)·t < -6`). The +5 m pad and the −6 m back-face keep a wide box that is about to enter from the side.
 2. **Corners.** Sunken → cached mouth slab. Static → cached world AABB. Dynamic → `actor._bounds.world_corners()`.
 3. **Threat corners.** `threat_obj` if set and distinct (tree trunk), else the silhouette corners.
 4. **Threat point.** `threat_point_from_corners(..., cam.position.z, actor.threat_mode)`.
 5. **Velocity.** `actor.velocity`, or `finite_velocity(1/fps)` if that vector is ~0 and the actor is not static/stopped (first-frame movers).
-6. **Kinematics.** `relative_kinematics(..., planar=(biome in {park,plaza}))`. Skip if `kin.distance > 40`.
+6. **Kinematics.** `relative_kinematics(..., planar=(biome in {park,plaza}))`. Skip if `kin.distance > max_distance` (140 m).
 7. **Box.** `project_object` with the shared view/proj matrices. `None` → omit.
 8. **Label.** `classify_threat(kin, \|v_obj\|, cfg['threat'])`.
 9. **Extents.** `horizontal_extents(threat_corners, tangent)` for the spatial score.
@@ -1771,6 +1778,7 @@ Change numbers **in `config.py`**, not by scattering literals. Remaining injecto
 | Spatial matrix / overlay | `spatial_threat.py` / `spatial_overlay.py` |
 | Mixed pack | `gen_dataset.py` → `main.py --plan` |
 | Outcome groups | `outcome_groups.py`, `gen_dataset.py --groups`, `main.run_group_plan` |
+| Overlay remux (no Blender) | `remux_spatial_from_json.py` |
 | Miss peel / wall fallback | `miss_target_lat`, `WorldGenerator.apply_outcome_fork` |
 | 2-D boxes / occlusion / threat point | `projection.py` |
 | Animation-batch render | `main._render_animation_sequence` |
@@ -1829,8 +1837,9 @@ Add energy + elevation ranges and a weight. Teach `apply_domain_randomization` c
 | `python spatial_overlay.py` | PPM header, filter graph parses |
 | `python camera_kinematics.py` | Halt gain is 1→0→1 with zero derivative at the joints; only crosswalk/diagonal blend gaze with lateral |
 | `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only |
-| `python outcome_groups.py` | Folder names; collision vs miss laterals; wall-side car miss goes far-lane; 15 s diverge/hit |
-| `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds; 15 s frames; group plan length |
+| `python outcome_groups.py` | Folder names; collision vs miss laterals; one miss side per sample (50/50, mixed L/R); wall-side car miss goes far-lane; 15 s diverge/hit |
+| `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds; 15 s frames; group plan length (2 outcomes × K bg); lighting slots unique per bg |
+| `python remux_spatial_from_json.py --clip DIR` | Rewrites overlay from `preview.mp4` + annotations; not a unit test |
 | `./run.sh --episodes 1 --scenario safe_walk --no-render --output /tmp/btp` | `objects>0` if the street has people; `cleanup: purged` is large |
 | `./run.sh --episodes 1 --scenario jaywalker --no-render` | Some `CRITICAL_THREAT` in `label_histogram` for a walking ego |
 | `./run.sh --episodes 1 --ego-mode seated --scenario pothole_on_path --no-render` | Hole is `SAFE_STATIC`; TTC 9999 |
@@ -1886,7 +1895,7 @@ Everything a downstream model needs is in those two JSON files plus optional RGB
 | Frenet `(s, lateral)` | Arc length along the **road** centreline + signed offset along \(\hat{t}\times\hat{z}\) |
 | Threat point | The 3-D point TTC/CPA use. Not the mesh origin. Not the 2-D box centre |
 | Threat label | One of four strings from `classify_threat` |
-| Spatial matrix | K×K heat: \(\max(S_{\mathrm{hit}},S_{\mathrm{pass}})\), separate from the four-class label |
+| Spatial matrix | K×K heat: \(\max(S_{\mathrm{hit}},S_{\mathrm{path}},S_{\mathrm{stat}},S_{\mathrm{prox}})\), separate from the four-class label |
 | Injector | Closed-form placement of a forced event after the rig exists |
 | Compose | Occupancy reservation so several injectors share one street |
 | Chaos | Appearance dial, not motion. `--chaos 0` is tame materials |

@@ -426,19 +426,20 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--groups",
         action="store_true",
         help=(
-            "Outcome-group pack: each sample is collision / miss_left / miss_right "
-            "with shared prefix frames, plus --bg-variants background-only worlds. "
-            "Folder layout is sample_XXXX_<scenario>/{collision,miss_left,miss_right}/bg_YY/."
+            "Outcome-group pack: each sample is collision plus one miss side "
+            "(miss_left or miss_right, 50/50 from --seed) with shared prefix "
+            "frames, plus --bg-variants background-only worlds. Folder layout is "
+            "sample_XXXX_<scenario>/{collision,miss_left|miss_right}/bg_YY/."
         ),
     )
     p.add_argument(
         "--bg-variants",
         type=int,
-        default=3,
+        default=2,
         dest="bg_variants",
         metavar="K",
         help=(
-            "Background variants per sample when --groups. Default: 3. "
+            "Background variants per sample when --groups. Default: 2. "
             "Each variant gets a distinct time-of-day slot plus full/sparse/bare scatter."
         ),
     )
@@ -460,15 +461,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _print_mix(plan: dict) -> None:
     if str(plan.get("layout") or "") == "groups":
+        n_clips = sum(
+            len(s.get("outcomes") or []) * len(s.get("backgrounds") or [])
+            for s in plan.get("samples") or []
+        )
         print(
             f"  layout=groups  samples={plan.get('n')}  "
-            f"bg={plan.get('n_bg')}  diverge={plan.get('diverge_s')}s  "
-            f"hit={plan.get('hit_s')}s"
+            f"bg={plan.get('n_bg')}  clips={n_clips}  "
+            f"diverge={plan.get('diverge_s')}s  hit={plan.get('hit_s')}s"
         )
         for sample in plan.get("samples") or []:
             styles = ",".join(b.get("style", "?") for b in sample.get("backgrounds") or [])
             lights = ",".join(b.get("lighting", "?") for b in sample.get("backgrounds") or [])
-            print(f"    {sample['dir']}  bg=[{styles}]  light=[{lights}]")
+            outs = ",".join(sample.get("outcomes") or [])
+            print(
+                f"    {sample['dir']}  outcomes=[{outs}]  "
+                f"bg=[{styles}]  light=[{lights}]"
+            )
         return
     q = plan["quotas"]
     kinds = Counter(ep["kind"] for ep in plan["episodes"])
@@ -573,15 +582,25 @@ def _self_test() -> None:
     assert not mixed_names.issubset(CLEAR_CENTER_SCENARIOS)
     fps = int(cfg["render"]["fps"])
     assert int(round(15.0 * fps)) == int(cfg["render"]["frames_per_episode"])
-    from outcome_groups import build_group_plan, iter_clips
+    from outcome_groups import MISS_SIDES, build_group_plan, iter_clips
     g = build_group_plan(3, 11, cfg, n_bg=2)
     g2 = build_group_plan(3, 11, cfg, n_bg=2)
     assert g["samples"] == g2["samples"]
     assert g["layout"] == "groups"
-    assert len(list(iter_clips(g))) == 3 * 2 * 3
+    g_clips = list(iter_clips(g))
+    assert len(g_clips) == 3 * 2 * 2
     for sample in g["samples"]:
         lights = [b["lighting"] for b in sample["backgrounds"]]
         assert len(set(lights)) == len(lights), lights
+        outs = list(sample["outcomes"])
+        assert outs[0] == "collision" and len(outs) == 2, outs
+        assert outs[1] in MISS_SIDES, outs
+        miss = {
+            cl["outcome"]
+            for cl in g_clips
+            if cl["sample_id"] == sample["id"] and cl["outcome"] != "collision"
+        }
+        assert miss == {outs[1]}, (sample["id"], miss, outs)
     safe, near, crit = _pools(cfg)
     catalog = set(safe + near + crit)
     assert "tree_on_path" in catalog
@@ -623,7 +642,7 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     if bool(args.groups):
         from outcome_groups import build_group_plan
-        n_bg = max(1, int(args.bg_variants))
+        n_bg = max(1, min(8, int(args.bg_variants)))
         names = [
             p.strip() for p in str(getattr(args, "group_scenarios", "") or "").split(",")
             if p.strip()
@@ -657,10 +676,11 @@ def main(argv: list[str] | None = None) -> int:
         "no_trees": bool(args.no_trees),
         "theme": "groups" if bool(args.groups) else theme,
         "note": (
-            "Outcome groups: one threat scenario, three endings (collision / "
-            "miss_left / miss_right) that share frames until diverge_s, and "
-            "K background variants (trees/buildings/furniture plus a distinct "
-            "time-of-day lighting slot per bg_YY)."
+            "Outcome groups: one threat scenario, collision plus one miss "
+            "side (miss_left or miss_right, 50/50 per sample from --seed) "
+            "that share frames until diverge_s, and K background variants "
+            "(trees/buildings/furniture plus a distinct time-of-day lighting "
+            "slot per bg_YY)."
             if bool(args.groups)
             else (
                 "Scenario tokens are chosen here. Lighting, weather, path type, "

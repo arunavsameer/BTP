@@ -1590,10 +1590,11 @@ def run_group_plan(
     media: str,
     threat_k: int,
 ) -> int:
-    """Render sample × background × {collision, miss_left, miss_right}.
+    """Render sample × background × {collision, one miss side}.
 
-    One world build per background. Collision is rendered in full; miss
-    clips copy its prefix RGB / heat / JSON and only EEVEE the tail.
+    One world build per background. Collision is rendered in full; the
+    single miss clip copies its prefix RGB / heat / JSON and only EEVEE
+    the tail.
     """
     clips = list(iter_clips(plan))
     if not clips:
@@ -2007,6 +2008,11 @@ def run_group_plan(
 
     for sample in plan.get("samples") or []:
         sdir = out_root / str(sample["dir"])
+        sample_outcomes = list(sample.get("outcomes") or ["collision"])
+        index = {
+            outcome: {bg["id"]: f"{outcome}/{bg['id']}" for bg in sample["backgrounds"]}
+            for outcome in sample_outcomes
+        }
         _write_json(
             sdir / "group.json",
             {
@@ -2017,12 +2023,8 @@ def run_group_plan(
                 "hit_s": sample["hit_s"],
                 "scene_seed": sample["scene_seed"],
                 "backgrounds": sample["backgrounds"],
-                "outcomes": sample["outcomes"],
-                "index": {
-                    "collision": {bg["id"]: f"collision/{bg['id']}" for bg in sample["backgrounds"]},
-                    "miss_left": {bg["id"]: f"miss_left/{bg['id']}" for bg in sample["backgrounds"]},
-                    "miss_right": {bg["id"]: f"miss_right/{bg['id']}" for bg in sample["backgrounds"]},
-                },
+                "outcomes": sample_outcomes,
+                "index": index,
             },
         )
 

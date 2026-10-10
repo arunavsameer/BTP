@@ -1,18 +1,19 @@
-"""Outcome groups: shared-prefix collision vs miss-left vs miss-right.
+"""Outcome groups: shared-prefix collision vs one miss side.
 
 A *sample* is one threat scenario (the object that would go red on the
 heat overlay). It expands to:
 
     sample_XXXX_<scenario>/
       collision/bg_00/   collision/bg_01/  …
-      miss_left/bg_00/   …
-      miss_right/bg_00/  …
+      miss_left/bg_00/   …   # XOR miss_right; 50/50 per sample from --seed
 
-Until ``diverge_s`` every clip of a (sample, background) triple has the
-same ego, the same threat kinematics, and the same RGB. After that the
-threat either continues into the walker or peels to the walker's left or
-right. Background variants rebuild trees / buildings / furniture **and**
-pin a distinct time-of-day lighting slot (noon / night / dusk / …).
+Collision is always written. Exactly one miss folder is written; the
+unchosen side is omitted. Until ``diverge_s`` every clip of a (sample,
+background) pair has the same ego, the same threat kinematics, and the
+same RGB. After that the threat either continues into the walker or
+peels to the chosen side. Background variants rebuild trees / buildings
+/ furniture **and** pin a distinct time-of-day lighting slot (noon /
+night / dusk / …).
 
 Pure Python, no ``bpy``. ``python outcome_groups.py`` runs the self-test.
 """
@@ -28,7 +29,9 @@ from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 
+# Legal names. Each sample always has collision plus exactly one miss.
 OUTCOMES: tuple[str, str, str] = ("collision", "miss_left", "miss_right")
+MISS_SIDES: tuple[str, str] = ("miss_left", "miss_right")
 
 # Styles for non-threat scatter. The threat injector is unchanged.
 BG_STYLES: tuple[str, str, str] = ("full", "sparse", "bare")
@@ -92,6 +95,11 @@ def clip_relpath(outcome: str, bg_id: str) -> str:
 
 def bg_id_for(index: int) -> str:
     return f"bg_{int(index):02d}"
+
+
+def pick_miss_side(rng: random.Random) -> str:
+    """50/50 miss_left vs miss_right. Uses the caller's plan/scene RNG."""
+    return MISS_SIDES[0] if rng.random() < 0.5 else MISS_SIDES[1]
 
 
 def link_or_copy_prefix(
@@ -220,10 +228,14 @@ def build_group_plan(
     seed: int,
     cfg: dict | None = None,
     *,
-    n_bg: int = 3,
+    n_bg: int = 2,
     scenarios: Sequence[str] | None = None,
 ) -> dict:
-    """Deterministic group recipe. Same ``(n, seed, n_bg)`` ⇒ same samples."""
+    """Deterministic group recipe. Same ``(n, seed, n_bg)`` ⇒ same samples.
+
+    Each sample always includes ``collision`` and exactly one miss side
+    (``miss_left`` or ``miss_right``, 50/50 from this plan RNG).
+    """
     from config import get_config
 
     cfg = cfg or get_config()
@@ -241,6 +253,7 @@ def build_group_plan(
     for i in range(n):
         scenario = pool[i % len(pool)]
         scene_seed = rng.randrange(1, 2**31)
+        miss_side = pick_miss_side(rng)
         backgrounds: list[dict] = []
         styles = list(BG_STYLES)
         rng.shuffle(styles)
@@ -264,7 +277,7 @@ def build_group_plan(
                 "hit_s": round(hit_s, 4),
                 "diverge_frame": int(math.floor(float(diverge_s) * fps + 1e-9)) + 1,
                 "backgrounds": backgrounds,
-                "outcomes": list(OUTCOMES),
+                "outcomes": ["collision", miss_side],
             }
         )
     return {
@@ -284,8 +297,8 @@ def build_group_plan(
 def iter_clips(plan: dict) -> Iterable[dict]:
     """Flatten samples × backgrounds × outcomes for the Blender loop.
 
-    Collision is always first inside a background so miss clips can copy
-    its prefix RGB, heat PPMs, and JSON.
+    Collision is always first inside a background so the single miss clip
+    can copy its prefix RGB, heat PPMs, and JSON.
     """
     for sample in plan.get("samples") or []:
         bgs = list(sample.get("backgrounds") or [])
@@ -346,15 +359,24 @@ def verify_group_pack(root: str, *, heat_atol: float = 1e-4) -> list[str]:
         group_path = sample / "group.json"
         diverge = 330
         bgs: list[str] = []
+        outcomes: list[str] = []
         if group_path.is_file():
             g = json.loads(group_path.read_text(encoding="utf-8"))
             diverge = int(g.get("diverge_frame") or diverge)
             bgs = [str(b["id"]) for b in g.get("backgrounds") or []]
+            outcomes = [o for o in (g.get("outcomes") or []) if o in OUTCOMES]
         if not bgs and (sample / "collision").is_dir():
             bgs = sorted(p.name for p in (sample / "collision").glob("bg_*") if p.is_dir())
+        if not outcomes:
+            outcomes = ["collision"]
+            for miss in MISS_SIDES:
+                if (sample / miss).is_dir():
+                    outcomes.append(miss)
+        ordered = [o for o in OUTCOMES if o in outcomes]
+        misses = [o for o in ordered if o != "collision"]
         for bg in bgs:
             grids: dict[str, list] = {}
-            for outcome in OUTCOMES:
+            for outcome in ordered:
                 path = (
                     sample / outcome / bg / "spatial_annotations" / "spatial_annotations.json"
                 )
@@ -364,15 +386,15 @@ def verify_group_pack(root: str, *, heat_atol: float = 1e-4) -> list[str]:
                 payload = json.loads(path.read_text(encoding="utf-8"))
                 frames = list(payload.get("frames") or [])
                 grids[outcome] = [fr.get("matrix") for fr in frames]
-            if len(grids) < 3:
+            if "collision" not in grids or not misses or any(m not in grids for m in misses):
                 continue
-            n = min(len(g) for g in grids.values())
+            n = min(len(grids[o]) for o in ["collision", *misses])
             if n < diverge + 8:
                 problems.append(f"{sample.name}/{bg}: only {n} frames (diverge={diverge})")
                 continue
             for i in range(min(diverge, n)):
                 a = grids["collision"][i]
-                for outcome in ("miss_left", "miss_right"):
+                for outcome in misses:
                     if not _grids_close(a, grids[outcome][i], heat_atol):
                         problems.append(
                             f"{sample.name}/{bg}: prefix diverge at frame {i} ({outcome})"
@@ -385,16 +407,17 @@ def verify_group_pack(root: str, *, heat_atol: float = 1e-4) -> list[str]:
             # meeting cell every ending can be empty.
             hit_i = min(n - 1, diverge + int(0.70 * 30))
             hit_c = _grid_max(grids["collision"][hit_i])
-            hit_l = _grid_max(grids["miss_left"][hit_i])
-            hit_r = _grid_max(grids["miss_right"][hit_i])
-            if _grids_close(grids["collision"][hit_i], grids["miss_left"][hit_i], heat_atol) and _grids_close(
-                grids["collision"][hit_i], grids["miss_right"][hit_i], heat_atol
-            ):
-                problems.append(f"{sample.name}/{bg}: three endings identical at frame {hit_i}")
-            elif hit_c + 0.08 < max(hit_l, hit_r):
+            miss_heats = [_grid_max(grids[m][hit_i]) for m in misses]
+            identical = all(
+                _grids_close(grids["collision"][hit_i], grids[m][hit_i], heat_atol)
+                for m in misses
+            )
+            if identical:
+                problems.append(f"{sample.name}/{bg}: endings identical at frame {hit_i}")
+            elif hit_c + 0.08 < max(miss_heats):
                 problems.append(
                     f"{sample.name}/{bg}: collision heat {hit_c:.3f} < miss "
-                    f"{max(hit_l, hit_r):.3f} at frame {hit_i}"
+                    f"{max(miss_heats):.3f} at frame {hit_i}"
                 )
     return problems
 
@@ -413,10 +436,23 @@ def _self_test() -> None:
     names = {s["scenario"] for s in a["samples"]}
     assert names.issubset(set(FORKABLE_SCENARIOS))
     clips = list(iter_clips(a))
-    assert len(clips) == 4 * 3 * 3
+    assert len(clips) == 4 * 2 * 3
+    for sample in a["samples"]:
+        outs = list(sample["outcomes"])
+        assert outs[0] == "collision" and len(outs) == 2, outs
+        assert outs[1] in MISS_SIDES, outs
+        sample_miss = {
+            cl["outcome"]
+            for cl in clips
+            if cl["sample_id"] == sample["id"] and cl["outcome"] != "collision"
+        }
+        assert sample_miss == {outs[1]}, (sample["id"], sample_miss, outs)
+    assert {s["outcomes"][1] for s in a["samples"]} == set(MISS_SIDES)
     # Collision is first per background so prefix copies have a source.
     by_bg = [cl for cl in clips if cl["sample_id"] == 0 and cl["bg_id"] == "bg_00"]
-    assert [cl["outcome"] for cl in by_bg] == list(OUTCOMES)
+    assert by_bg[0]["outcome"] == "collision"
+    assert len(by_bg) == 2
+    assert by_bg[1]["outcome"] in MISS_SIDES
     assert by_bg[0]["prefix_relpath"] is None
     assert by_bg[1]["prefix_relpath"] == "collision/bg_00"
     lights = [b["lighting"] for b in a["samples"][0]["backgrounds"]]
