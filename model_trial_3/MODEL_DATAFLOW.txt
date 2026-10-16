@@ -1,0 +1,610 @@
+HOW THE MODEL WORKS — EXACT DATA MOVEMENT
+=========================================
+
+This file describes CollisionTeacher3, the only neural network in Model Trial 3.
+
+It is NOT about pairing, splits, or which heatmap is used as the label.
+Those happen before and after the model. Here the model only sees RGB
+and emits heatmaps + a latent Z_t.
+
+Code files, in the order data actually flows:
+
+  collision_jepa3/models/teacher.py              wiring / forward
+  collision_jepa3/models/vjepa_backbone.py       RGB -> tokens
+  collision_jepa3/models/lora.py                 optional extra weights on Giant
+  collision_jepa3/models/spatial_adapter.py      tokens -> Z_t
+  collision_jepa3/models/heatmap_decoder.py      Z_t -> now map and Delta
+  collision_jepa3/models/residual_predictor.py   Z_t -> Zhat for a future
+
+Call site during training (trainer.py):
+
+  out = self.model(clip=batch["frames"])
+
+batch["frames"] is the ONLY tensor the model consumes.
+
+
+================================================================
+1. WHAT THE MODEL IS FOR
+================================================================
+
+Job: look at 16 RGB frames (3 seconds ending at time t) and answer:
+
+  What does danger look like on a 5x5 grid
+    right now,
+    1 second from now,
+    1.5 seconds from now,
+    2 seconds from now?
+
+It also produces Z_t, a 32-channel 5x5 latent. That is the interface a
+future small student would copy. The student is not trained in this trial.
+
+It does not classify "collision vs miss".
+It does not take a background id.
+It does not see future RGB after t.
+
+
+================================================================
+2. THE PIECES, BUILT ONCE AT STARTUP
+================================================================
+
+CollisionTeacher3.__init__(cfg) builds, in this order:
+
+  self.backbone     VJEPA2Backbone (Giant) or DummyVJEPA2Backbone
+  self.adapter      SpatialTemporalAdapter
+  self.decoder      HeatmapDecoder          (one, for NOW)
+  self.predictors   ModuleDict of 3 ResidualPredictor  keys 1s, 1_5s, 2s
+  self.delta_heads  ModuleDict of 3 HeatmapDelta       keys 1s, 1_5s, 2s
+
+The adapter is sized from the backbone:
+
+  Giant: hidden_size=1408, temporal_groups=8, spatial=16
+  Dummy: hidden_size=64,   temporal_groups=8, spatial=16
+         (dummy crop is 256 in build_backbone, patch 16 -> spatial 16)
+
+Aliases (same objects, nicer names):
+
+  self.predictor_1s   = self.predictors["1s"]
+  self.predictor_1_5s = self.predictors["1_5s"]
+  self.predictor_2s   = self.predictors["2s"]
+
+train() is overridden:
+
+  super().train(True)
+  self.backbone.eval()     ALWAYS, even in training mode
+
+So dropout/BatchNorm inside V-JEPA stay in eval. Only adapter, decoder,
+predictors, delta_heads (and LoRA A/B in phase B) train.
+
+Two parameter groups:
+
+  adapter_parameters()  adapter + decoder + predictors + delta_heads
+  lora_parameters()     lora_A, lora_B on last 6 encoder blocks
+                        empty until enable_lora() is called
+
+
+================================================================
+3. INPUT CONTRACT
+================================================================
+
+The trainer passes:
+
+  clip  = batch["frames"]
+  shape [B, 16, 3, 256, 256]
+  dtype float32 (may be cast inside autocast)
+  value range 0.0 to 1.0     NOT ImageNet-normalized yet
+  layout NCHW per frame: channel, height, width
+  time order: index 0 is the oldest frame (t-90),
+              index 15 is the anchor frame t
+
+Default B = 1 (training.micro_batch_size).
+
+There is an alternate path:
+
+  model(tokens=precomputed_tokens)
+
+that skips the backbone. Default training does not use it
+(cache_encoder_tokens is false).
+
+If clip is missing and tokens is missing: ValueError.
+
+
+================================================================
+4. THE ONE-LINE FORWARD, EXPANDED
+================================================================
+
+teacher.forward(clip):
+
+  return self._heads(self.encode(clip=clip))
+
+which is:
+
+  tokens = self.backbone(clip)     # encode_tokens
+  z_t    = self.adapter(tokens)    # encode
+  return self._heads(z_t)
+
+The rest of this file is those three calls, tensor by tensor.
+
+Running example below uses:
+
+  B = 1
+  T = 16 frames
+  Giant backbone
+  256 x 256 letterboxed RGB
+
+
+================================================================
+5. STAGE A — BACKBONE  (RGB -> tokens)
+================================================================
+
+File: vjepa_backbone.py
+Class: VJEPA2Backbone.forward
+
+5.1 Check the clip
+
+  clip.ndim must be 5
+  channels must be 3
+  T=16 must be divisible by tubelet_size=2
+
+  expected_tokens(16):
+    T' = 16 / 2 = 8          (each tubelet eats 2 frames)
+    S  = crop_size / patch   = 256 / 16 = 16
+    N  = T' * S * S          = 8 * 16 * 16 = 2048
+
+5.2 ImageNet normalize  (happens HERE, not in the dataset)
+
+  mean = (0.485, 0.456, 0.406)   from VJEPA2VideoProcessor if available
+  std  = (0.229, 0.224, 0.225)
+
+  buffers are shaped [1, 1, 3, 1, 1] so they broadcast over B,T,H,W
+
+  x = (clip - mean) / std
+  still [1, 16, 3, 256, 256]
+
+  A mid-grey 0.5 pixel becomes about (0.5-0.485)/0.229 on red, etc.
+  The 56-pixel black letterbox pads (value 0) become a large negative
+  after normalize. That is intended: they are not content.
+
+5.3 Grad context
+
+  Frozen phase: torch.no_grad() around the encoder
+                Giant weights have requires_grad=False
+  LoRA phase:   torch.enable_grad()
+                base W still frozen, lora_A/B have grads
+
+5.4 Encode
+
+  Preferred:  model.get_vision_features(x)
+  Fallback:   model(pixel_values_videos=x, skip_predictor=True)
+
+  skip_predictor=True means we do NOT run V-JEPA's own future-token
+  predictor. We only want the encoder features of the 16 frames we gave.
+
+  HuggingFace V-JEPA 2 internally:
+    - rearranges [B,T,3,H,W] into tubelets of 2 frames x 16x16 patches
+    - embeds each tubelet to C=1408
+    - runs the ViT-Giant encoder (many self-attention blocks)
+    - returns last hidden state
+
+  We treat that as a dense token list. We do not interpret the inside
+  of Giant further in this codebase.
+
+5.5 Cast and count check
+
+  tokens = tokens.float()           # fp32 even if encoder ran in bf16
+  tokens.shape must be [1, 2048, 1408]
+
+  If the encoder ever returned a different N, RuntimeError.
+  The code REFUSES to drop or pad tokens to "make it fit".
+
+Output of Stage A:
+
+  tokens  [B, 2048, 1408]
+           ^    ^      ^
+           |    |      hidden size C
+           |    N = 8 time groups * 16 * 16 spatial
+           batch
+
+Memory picture of the 2048 tokens (how the adapter will reshape them):
+
+  time group 0 (frames 0-1 of the 16, i.e. oldest pair)
+    16x16 spatial tokens, each a 1408-vector
+  time group 1 (frames 2-3)
+    ...
+  time group 7 (frames 14-15, the last two frames, including t)
+    16x16 spatial tokens
+
+So later time groups are "more recent". The adapter will mix them.
+
+
+Dummy backbone (tests / --dummy train), for comparison:
+
+  Conv3d kernel (2,16,16) stride (2,16,16) on [B,3,T,H,W]
+  -> tokens [B, 8*16*16, 64] after flatten
+  then 8 tiny Linear-GELU-Linear blocks, all frozen
+  Same LAYOUT, much smaller C.
+
+
+================================================================
+6. STAGE B — ADAPTER  (tokens -> Z_t)
+================================================================
+
+File: spatial_adapter.py
+Class: SpatialTemporalAdapter.forward
+
+Purpose: compress the 2048 Giant tokens into a 32 x 5 x 5 collision
+latent that lives on the same grid as the heatmaps.
+
+6.1 tokens_to_grid
+
+  Input  tokens [B, 2048, 1408]
+  Check  N == 8*16*16 and C == 1408, else RuntimeError (no silent slice)
+
+  reshape  [B, 8, 16, 16, 1408]
+           batch, T', H_tok, W_tok, channels
+
+  permute  [B, 8, 1408, 16, 16]
+           now channels are where convs expect them
+
+  Call this `grid`.
+  grid[:, 0] is the oldest time group.
+  grid[:, 7] is the newest (includes frame t).
+
+6.2 Spatial projection, per time group independently
+
+  Flatten time into batch:
+    x = grid.reshape(B*8, 1408, 16, 16)     # [8, 1408, 16, 16] if B=1
+
+  spatial_proj:
+    Conv2d 1408 -> 128, kernel 1x1, GELU
+    Conv2d 128  -> 128, kernel 3x3 pad 1, GELU
+
+  Still 16x16 spatially. Channels 1408 -> 128.
+  Each of the 8 time groups is projected with THE SAME weights
+  (the reshape tricks the conv into sharing).
+
+  Unflatten:
+    [B, 8, 128, 16, 16]
+    permute to [B, 128, 8, 16, 16]
+    layout for Conv3d: channels, time, height, width
+
+6.3 Temporal residual blocks  (mix across the 8 time groups)
+
+  Default: 2 blocks, kernel 3, dilation 1.
+
+  One TemporalResidualBlock on x [B, 128, 8, 16, 16]:
+
+    dw: depthwise Conv3d
+        kernel (3, 1, 1)  -> only TIME, not space
+        padding (1, 0, 0)
+        groups=128 so each channel has its own 3-tap filter
+    pw: Conv3d 128 -> 128, kernel 1x1x1  (mix channels)
+    GroupNorm(8 groups), GELU
+    residual: output = x + that
+
+  After 2 blocks, every spatial cell has seen neighboring time groups.
+  Newest and oldest information can mix, but space is still 16x16.
+
+  x is still [B, 128, 8, 16, 16]
+
+6.4 Collapse time: mean and last
+
+  mean_f = x.mean(dim=2)     average over the 8 time groups
+                             [B, 128, 16, 16]  "what was true across 3s"
+
+  last_f = x[:, :, -1]       time group 7 only
+                             [B, 128, 16, 16]  "what is true near t"
+
+  cat    = concat on channel dim
+                             [B, 256, 16, 16]
+
+  mix    = Conv2d 256 -> 128, 1x1, GELU
+                             [B, 128, 16, 16]
+
+  So Z_t is not "only the last frame" and not "only a blur of 3 seconds".
+  It is a learned mix of both.
+
+6.5 Downsample 16x16 -> 5x5  (the heatmap grid)
+
+  adaptive_avg_pool2d(mixed, 5)
+    [B, 128, 5, 5]
+
+  This is the first time the spatial layout matches the 5x5 threat map.
+  row 0 of this 5x5 is the top / far part of the letterboxed image.
+  row 4 is the bottom / near / feet.
+  col 0 left, col 4 right.
+
+  Because we letterboxed instead of center-cropped, left and right
+  FOV survived into these columns.
+
+6.6 Bottleneck to 32 channels + LayerNorm
+
+  Conv2d 128 -> 128, 1x1, GELU
+  Conv2d 128 -> 32,  1x1
+    z [B, 32, 5, 5]
+
+  permute to [B, 5, 5, 32]
+  LayerNorm over the last dim (the 32 channels), independently per cell
+  permute back to [B, 32, 5, 5]
+
+  Shape check: must be exactly (B, 32, 5, 5) or RuntimeError.
+
+Output of Stage B:
+
+  Z_t  [B, 32, 5, 5]
+
+  Each of the 25 cells has a 32-D vector meaning "collision-related
+  state of that direction/distance, after watching 3 seconds".
+
+  This tensor is:
+    - the input to all heatmap heads
+    - the thing L_bg compares across bg_00 / bg_01
+    - the future student interface
+
+
+================================================================
+7. STAGE C — HEADS  (Z_t -> heatmaps)
+================================================================
+
+File: teacher.py  _heads(z_t)
+Uses: heatmap_decoder.py, residual_predictor.py
+
+7.1 NOW map
+
+  h_now = HeatmapDecoder(Z_t)
+
+  Inside HeatmapDecoder, Z_t [B, 32, 5, 5]:
+    Conv2d 32 -> 48, 1x1, ReLU
+    Conv2d 48 -> 48, 3x3 pad 1, ReLU     (each cell sees neighbors)
+    Conv2d 48 -> 1,  1x1
+    sigmoid
+    squeeze channel -> [B, 5, 5]
+
+  Every cell is in (0, 1). This is Hhat_now, "danger right now".
+
+7.2 Each future horizon, independently, same recipe
+
+  For name in ["1s", "1_5s", "2s"]:
+
+    (i)  ResidualPredictor
+         Zhat = Z_t + f_name(Z_t)
+
+         f_name is 3 convs on [B,32,5,5]:
+           Conv 32 -> 96, 3x3 pad 1, ReLU
+           Conv 96 -> 96, 3x3 pad 2 dilation 2, ReLU
+             (dilation 2: a cell sees a wider neighborhood, useful
+              for left vs right on a tiny 5x5)
+           Conv 96 -> 32, 1x1
+         ADD back to Z_t  (residual in latent space)
+
+         Zhat_1s is "Z_t moved a little toward 1 second later"
+         There are THREE different f_name networks. They do not share
+         weights. 1s, 1.5s, 2s can learn different motions.
+
+    (ii) HeatmapDelta on the latent residual
+         delta_in = Zhat - Z_t     [B, 32, 5, 5]
+                    which is exactly f_name(Z_t)
+
+         HeatmapDelta:
+           Conv 32 -> 48, 1x1, ReLU
+           Conv 48 -> 48, 3x3 pad 1, ReLU
+           Conv 48 -> 1,  1x1
+           tanh
+           squeeze -> Delta [B, 5, 5] in (-1, 1)
+
+         Delta is "how should the NOW heatmap change for this horizon".
+
+    (iii) copy_residual_future
+         Hhat = clamp( Hhat_now.detach() + Delta, 0, 1 )
+
+         .detach() on Hhat_now is critical:
+           the future head is not allowed to change Hhat_now in order
+           to make the sum easier. NOW is supervised only by L_now.
+           The future head must explain the change with Delta.
+
+         clamp keeps the map a valid 0..1 heatmap.
+
+  So for 1s (the others are the same pattern):
+
+    Z_t  --f_1s-->  Zhat_1s = Z_t + f_1s(Z_t)
+         --Delta_1s(Zhat_1s - Z_t)-->  Delta_1s
+         --add to stopgrad(Hhat_now)-->  Hhat_1s
+
+7.3 Why copy-residual instead of predicting the future map from scratch?
+
+  Most of the 5x5 often stays similar 1 second later. Predicting the
+  CHANGE is easier. If Delta is ~0, Hhat_1s copies Hhat_now. The
+  network only spends capacity on cells that actually grow or shrink.
+
+
+================================================================
+8. OUTPUT DICT  (what leaves the model)
+================================================================
+
+All keys, shapes, ranges for Giant + B=1:
+
+  Z_t         [1, 32, 5, 5]     unbounded-ish (LayerNormed channels)
+  Hhat_now    [1, 5, 5]         (0, 1) sigmoid
+
+  Zhat_1s     [1, 32, 5, 5]     Z_t + residual
+  Delta_1s    [1, 5, 5]         (-1, 1) tanh
+  Hhat_1s     [1, 5, 5]         [0, 1] clamp(now + delta)
+
+  Zhat_1_5s   same as Zhat_1s, different weights
+  Delta_1_5s
+  Hhat_1_5s
+
+  Zhat_2s
+  Delta_2s
+  Hhat_2s
+
+The loss then uses:
+
+  Hhat_now, Hhat_1s, Hhat_1_5s, Hhat_2s   vs batch h_*
+  Delta_*                                 vs (h_future - stopgrad(Hhat_now))
+  Z_t                                     vs a stored mate Z_t for L_bg
+
+The model never returns tokens. They are intermediate.
+
+
+================================================================
+9. ASCII PATH (one batch, Giant)
+================================================================
+
+  frames [B,16,3,256,256]  values 0..1
+           |
+           |  subtract ImageNet mean, divide std
+           v
+  x        [B,16,3,256,256]  normalized
+           |
+           |  V-JEPA 2 Giant encoder  (frozen, or LoRA on last 6 blocks)
+           |  tubelets 2 x 16 x 16
+           v
+  tokens   [B, 2048, 1408]
+           |
+           |  reshape to 8 x 16 x 16 grid
+           v
+  grid     [B, 8, 1408, 16, 16]
+           |
+           |  1x1 then 3x3 conv, shared across time
+           v
+           [B, 8, 128, 16, 16]
+           |
+           |  permute, 2 x temporal residual (time-only conv)
+           v
+           [B, 128, 8, 16, 16]
+           |
+           |  concat(mean over time, last time) -> 1x1 mix
+           v
+           [B, 128, 16, 16]
+           |
+           |  adaptive pool to 5x5, 1x1 to 32, LayerNorm
+           v
+  Z_t      [B, 32, 5, 5] -------------------------------+
+           |                                            |
+           |  HeatmapDecoder (sigmoid)                  |
+           v                                            |
+  Hhat_now [B, 5, 5]  ---- detach ----+                 |
+                                      |                 |
+           +--------------------------+                 |
+           |  for each horizon 1s / 1.5s / 2s           |
+           |                                            |
+           |  ResidualPredictor: Zhat = Z_t + f(Z_t)  <-+
+           |  HeatmapDelta:      Delta = tanh(g(Zhat-Z_t))
+           |  Hhat = clamp(Hhat_now.detach() + Delta, 0, 1)
+           v
+  Hhat_1s, Hhat_1_5s, Hhat_2s
+  Delta_1s, Delta_1_5s, Delta_2s
+  Zhat_1s, Zhat_1_5s, Zhat_2s
+
+
+================================================================
+10. FROZEN vs LoRA  (how gradients move)
+================================================================
+
+Phase A (frozen), default first training phase:
+
+  Giant W: requires_grad False, forward under no_grad
+  tokens arrive as constants w.r.t. Giant
+  grads flow:
+
+    L -> Hhat_* / Delta_* / Z_t -> adapter, decoder, predictors, delta_heads
+    STOP at tokens. Giant is untouched.
+
+Phase B (enable_lora):
+
+  Find encoder blocks, take the LAST 6.
+  Replace every nn.Linear in those blocks with LoRALinear:
+
+    y = W_frozen x + (alpha/rank) * B (A x)
+    rank=16, alpha=16, scale=1.0
+    A kaiming-uniform, B zeros  => at enable time, output is unchanged
+    dropout 0.0 by default
+
+  _grad_enabled True, so encoder forward has autograd.
+  Still: original W has requires_grad False.
+  Grads flow into lora_A, lora_B, AND still into adapter/heads.
+
+  Gradient checkpointing is turned on if the HF model supports it,
+  to save VRAM of Giant activations.
+
+  Learning rates (optimizer.py):
+    adapter/heads  2e-4     (lower than Phase A 1e-3)
+    LoRA           1e-4
+
+
+================================================================
+11. WHAT DATA DOES *NOT* ENTER THE MODEL
+================================================================
+
+These sit in the batch but teacher.forward ignores them:
+
+  h_now, h_1s, h_1_5s, h_2s     labels, used only in the loss
+  amb_1s, amb_1_5s, amb_2s      skip flags for the loss
+  outcome_type, background_id   strings for logs / L_bg matching
+  clip_id, pairing ids
+  pre_fork, fork_frame
+  bg_pair_valid, mate_clip_id
+
+So two clips with identical RGB (collision vs miss before the fork)
+produce (almost) identical Z_t and Hhat_*. The outcome difference is
+enforced by different targets in the loss, not by a switch inside
+the network.
+
+
+================================================================
+12. NUMERIC WALKTHROUGH (B=1, one cell)
+================================================================
+
+Suppose after the adapter, at grid cell (row=4, col=2) — near, center —
+the 32-D vector in Z_t has some values. Decoder sigmoid might output
+Hhat_now[4,2] = 0.40  (some danger at the feet, now).
+
+1s ResidualPredictor adds a residual; HeatmapDelta for 1s might output
+Delta_1s[4,2] = +0.35.
+
+Then:
+  Hhat_1s[4,2] = clamp(0.40 + 0.35, 0, 1) = 0.75
+
+Meaning: "from what I see up to t, danger in the near-center cell
+should grow over the next second."
+
+2s could output Delta_2s[4,2] = +0.55 -> Hhat_2s = 0.95.
+Same Z_t, different head, stronger growth further out.
+
+If the cell should stay safe, Delta ~ 0 and Hhat_future copies Hhat_now.
+
+
+================================================================
+13. SHAPE CHEAT SHEET
+================================================================
+
+  dataset frames              [B, 16, 3, 256, 256]     float 0..1
+  after ImageNet norm         [B, 16, 3, 256, 256]
+  Giant tokens                [B, 2048, 1408]
+  grid                        [B, 8, 1408, 16, 16]
+  after spatial_proj          [B, 8, 128, 16, 16]
+  after temporal (NCHWT)      [B, 128, 8, 16, 16]
+  after time mix              [B, 128, 16, 16]
+  after pool                  [B, 128, 5, 5]
+  Z_t                         [B, 32, 5, 5]
+  Hhat_now                    [B, 5, 5]
+  Zhat_h                      [B, 32, 5, 5]
+  Delta_h                     [B, 5, 5]
+  Hhat_h                      [B, 5, 5]
+
+Dummy (tests): tokens [B, 2048, 64] if crop 256, or [B, 8*4*4, 64]
+if someone constructs Dummy with crop 64. build_backbone(dummy=True)
+uses preprocessing.input_size (256) so default dummy spatial is also 16.
+
+
+================================================================
+14. FILE-TO-STAGE MAP
+================================================================
+
+  teacher.py              constructs modules; encode + _heads; train() freeze
+  vjepa_backbone.py       normalize, HF encode, token count check, dummy
+  lora.py                 wrap last-6 Linears for phase B
+  spatial_adapter.py      2048 tokens -> Z_t 32x5x5
+  residual_predictor.py   Z_t -> Zhat_h
+  heatmap_decoder.py      Z_t -> Hhat_now; residual -> Delta; copy-add-clamp
+)

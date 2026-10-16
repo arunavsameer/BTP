@@ -1,0 +1,211 @@
+project:
+  name: collision_jepa_model_trial_3
+  seed: 1337
+
+paths:
+  # Relative dataset paths resolve against the workspace (parent of model_trial_3).
+  # Relative cache/checkpoint/log paths resolve against model_trial_3/.
+  dataset_root: "blender_sim/datasets/groups15_n400_s67_n400"
+  manifest: "cache/manifest.jsonl"
+  split_file: "cache/splits.json"
+  # Frame .npy cache is large (~66 GB for 800 clips). Keep it on /raid;
+  # home quota is 50/70 GB and cannot hold it.
+  cache_root: "/raid/asrivastava/VJEPA2_BTP/model_trial_3/cache"
+  checkpoint_root: "checkpoints"
+  logs_root: "logs"
+  reports_root: "reports"
+  visualizations_root: "visualizations"
+  hf_cache_dir: "/raid/asrivastava/VJEPA2_BTP/model_trial_2/hf_cache"
+  hf_cache_fallback: "hf_cache"
+
+data:
+  fps_expected: 30
+  expected_frames: 450
+  source_height: 1080
+  source_width: 1920
+  target_grid: 5
+  skip_incomplete: true
+  use_spatial_annotations: true
+  never_use_overlay_as_input: true
+  min_decoded_frames: 450
+  heatmap_value_min: 0.0
+  heatmap_value_max: 1.0
+
+preprocessing:
+  input_size: 256
+  preserve_fov: true
+  # letterbox keeps left/right FOV. checkpoint_center_crop matches the official
+  # V-JEPA processor (shortest-edge resize then center crop) and is opt-in.
+  resize_mode: "letterbox"
+  pad_value: 0
+  use_checkpoint_normalization: true
+  # ImageNet stats used by VJEPA2VideoProcessor. Overridden from the processor
+  # at runtime when use_checkpoint_normalization is true.
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  random_horizontal_flip: false
+  random_geometric_augmentation: false
+  photometric_augmentation: false
+  normalize_in_backbone: true
+
+sampling:
+  history_seconds: 3.0
+  input_frames: 16
+  input_spacing_frames: 6
+  frame_offsets: [-90, -84, -78, -72, -66, -60, -54, -48, -42, -36, -30, -24, -18, -12, -6, 0]
+  horizons_frames: [30, 45, 60]
+  horizon_names: ["1s", "1_5s", "2s"]
+  # If true, keep late anchors that still have a 1s target even when 1.5s/2s
+  # fall off the clip. Those missing horizons are masked in the loss.
+  # 450-frame clip → t_max=419; stride 15 last anchor 405 (off → last 375).
+  allow_partial_horizons: true
+  train_anchor_stride: 15
+  val_anchor_stride: 15
+  test_anchor_stride: 15
+  fork_frame: 365
+  mask_ambiguous_pairs: true
+  # mean_target: when history is still pre-fork but future heatmaps have
+  # split, train both clips on the cell-wise average of collision and miss.
+  # collision_target: use the collision heatmap instead of the average.
+  # mask_ambiguous_pairs: skip loss on those horizons instead.
+  ambiguous_policy: "mean_target"
+  heatmap_disagree_tol: 0.02
+  rgb_history_l1_tol: 0.002
+  background_target_tolerance: 0.001
+
+splits:
+  train_fraction: 0.70
+  val_fraction: 0.15
+  test_fraction: 0.15
+  stratify_by: "scenario_type"
+
+backbone:
+  model_id: "facebook/vjepa2-vitg-fpc64-256"
+  fallback_model_id: "facebook/vjepa2-vitl-fpc64-256"
+  input_resolution: 256
+  tuning_mode: "frozen"  # frozen | lora_last6
+  mixed_precision: true
+  torch_dtype: "bfloat16"
+  gradient_checkpointing: false
+  attention_implementation: "sdpa"
+  skip_predictor: true
+  use_get_vision_features: true
+
+heads:
+  # residual: H_now + copy-residual 1s/1.5s/2s (Phase A)
+  # direct_h1s: Z_t -> H_1s only (no now / delta / 1.5s / 2s)
+  mode: residual
+
+adapter:
+  projection_channels: 128
+  z_channels: 32
+  feature_grid: 5
+  temporal_blocks: 2
+  temporal_kernel: 3
+  temporal_dilation: 1
+  group_norm_groups: 8
+  row_weights: [0.8, 0.9, 1.0, 1.1, 1.2]
+
+lora:
+  enabled: true
+  rank: 16
+  alpha: 16
+  dropout: 0.0
+  last_n_blocks: 6
+
+loss:
+  horizon_weights:
+    "1s": 0.50
+    "1_5s": 0.30
+    "2s": 0.20
+  now_weight: 0.25
+  delta_weight: 0.20
+  false_positive_weight: 0.10
+  direction_weight: 0.05
+  background_consistency_weight: 0.02
+  background_target_tolerance: 0.001
+  threat_weight_floor: 0.05
+  threat_weight_scale: 4.0
+  threat_weight_gamma: 2.0
+  safe_cell_threshold: 0.05
+  false_positive_margin: 0.10
+  direction_temperature: 0.08
+  direction_threat_threshold: 0.42
+  delta_residual_mix: 0.5
+  # 1.0 = current L_1s. >1 multiplies weight on under-predicted GT>=0.5 cells.
+  recall_weight_beta: 1.0
+  recall_weight_hi: 0.5
+
+optimizer:
+  name: "AdamW"
+  adapter_lr: 0.001
+  lora_lr: 0.0001
+  lora_adapter_lr: 0.0002
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  scheduler: "cosine"
+  min_lr: 0.000001
+
+training:
+  frozen_epochs: 8
+  lora_epochs: 10
+  patience: 4
+  # selection: documented composite score (Phase A).
+  # val_mse: stop after `patience` epochs where val heatmap MSE did not fall
+  # vs the previous epoch; best.pt is that last improving epoch (x - patience).
+  early_stop_metric: selection
+  micro_batch_size: 8
+  gradient_accumulation_steps: 1
+  num_workers: 2
+  prefetch_factor: 2
+  pin_memory: true
+  amp: true
+  amp_dtype: "bfloat16"
+  # Clip-contiguous sampling needs a larger mate buffer than shuffled anchors.
+  max_pair_buffer: 8192
+  clip_contiguous_sampling: true
+  log_every_steps: 10
+  save_every_epoch: true
+  max_steps: 0  # 0 = one full epoch; >0 stops training after this many optimizer steps
+
+cache:
+  cache_frames: true
+  cache_encoder_tokens: true
+  encoder_cache_max_gb: 120
+  token_cache_dtype: "float16"
+  token_encode_batch_size: 8
+  frame_cache_max_gb: 80
+  lru_clips_in_ram: 4
+
+evaluation:
+  horizons_seconds: [1.0, 1.5, 2.0]
+  high_threat_threshold: 0.5
+  caution_threshold: 0.42
+  stop_threshold: 0.70
+  save_overlays: true
+  # Checkpoint picking uses a seeded random subset of val clips (not anchors).
+  # 05_evaluate_teacher.py still runs the full split.
+  val_subset_fraction: 0.25
+  row_weights: [0.5, 0.65, 0.8, 1.0, 1.0]
+  left_cols: [0, 1]
+  center_cols: [2]
+  right_cols: [3, 4]
+  overlay_limit: 24
+
+selection:
+  nuisance_weight: 0.5
+  miss_weight: 0.5
+  max_nuisance: 0.20
+  max_miss: 0.25
+  future_recall_weight: 0.6
+  stop_f1_weight: 0.4
+
+warning:
+  row_weights: [0.5, 0.65, 0.8, 1.0, 1.0]
+  left_cols: [0, 1]
+  center_cols: [2]
+  right_cols: [3, 4]
+  caution_threshold: 0.42
+  stop_threshold: 0.70
+  confirm_frames: 3
+  release_frames: 5

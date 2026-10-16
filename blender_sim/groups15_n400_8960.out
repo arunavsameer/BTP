@@ -1,0 +1,2 @@
+0
+/usr/bin/xvfb-run: 184: ./gen_dataset.py: Permission denied

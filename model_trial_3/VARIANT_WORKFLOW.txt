@@ -1,0 +1,628 @@
+HOW BACKGROUND AND OUTCOME VARIANTS ARE HANDLED
+================================================
+
+This document is only about the two kinds of paired variants in Model Trial 3:
+
+  OUTCOME variants     collision vs miss_left / miss_right
+  BACKGROUND variants  bg_00 vs bg_01
+
+It follows them from folders on disk, through IDs, splits, preprocessing,
+the dataset, the model, the loss, and evaluation.
+
+The model itself NEVER receives a one-hot for "collision" or "bg_00".
+It only sees RGB frames. Variant logic lives in:
+  which video is loaded
+  which 5x5 heatmap is used as the training target
+  whether a future horizon is rewritten or skipped
+  a side buffer of Z_t for the other background
+
+Read with one real family in mind. Every later section uses these four clips.
+
+
+================================================================
+0. THE FOUR CLIPS OF ONE SAMPLE
+================================================================
+
+Folder on disk:
+
+  blender_sim/datasets/groups15_n400_s67_n400/
+    sample_0000_jaywalker/
+      collision/
+        bg_00/   preview.mp4 + episode.json + spatial_annotations.json
+        bg_01/   preview.mp4 + episode.json + spatial_annotations.json
+      miss_left/
+        bg_00/   preview.mp4 + episode.json + spatial_annotations.json
+        bg_01/   preview.mp4 + episode.json + spatial_annotations.json
+
+What is the same vs different:
+
+  Axis              What changes                         What stays the same
+  ----------------  -----------------------------------  --------------------------------
+  OUTCOME           After frame 365 the pedestrian       Until frame 365, RGB is the
+                    either hits you or misses left.      same story. Same sample, same
+                    Future heatmaps split.               street if background is shared.
+
+  BACKGROUND        Lighting, clutter, texture of the    Same pedestrian motion, same
+                    street (bg_00 vs bg_01). RGB looks   outcome, same 5x5 threat maps
+                    different the whole way through.     (within tolerance 0.001).
+
+So you can picture a 2 x 2 table:
+
+                    bg_00                         bg_01
+  collision         clip C0                       clip C1
+  miss_left         clip M0                       clip M1
+
+Pairing axes (this is the whole design):
+
+  OUTCOME pair, same street:
+    C0  <->  M0     group id  sample_0000_jaywalker|bg_00
+    C1  <->  M1     group id  sample_0000_jaywalker|bg_01
+
+  BACKGROUND pair, same ending:
+    C0  <->  C1     pair id   sample_0000_jaywalker|collision
+    M0  <->  M1     pair id   sample_0000_jaywalker|miss_left
+
+C0 is never paired with M1. Different street AND different ending.
+
+
+================================================================
+1. HOW VARIANT NAMES ARE READ FROM DISK
+================================================================
+
+File: collision_jepa3/data/manifest.py
+Function: inspect_clip_dir(clip_dir, dataset_root, cfg)
+
+The folder path IS the variant label. Nothing in episode.json is required
+to decide outcome vs background (episode.json is only extra metadata).
+
+  clip_dir relative to dataset root:
+
+    sample_0000_jaywalker / collision / bg_00
+
+  parts[0] = sample_0000_jaywalker   -> sample_id
+                                        scenario_group_id
+                                        (this is the SPLIT unit)
+  parts[1] = collision               -> outcome_type
+  parts[2] = bg_00                   -> background_id
+
+  _scenario_type(parts[0])           -> jaywalker
+  clip_id                            -> sample_0000_jaywalker/collision/bg_00
+
+Then two pairing strings are built, always, even if the clip is invalid:
+
+  outcome_group_id   = f"{sample_dir}|{background}"
+                     = "sample_0000_jaywalker|bg_00"
+
+  background_pair_id = f"{sample_dir}|{outcome}"
+                     = "sample_0000_jaywalker|collision"
+
+Memorize those two strings. Every later pairing step matches on them,
+never on "the next item in a list".
+
+Also stored on the ClipRecord (from episode.json, if present):
+  lighting, biome, bg_style, fork_frame (365), hit_s, extra.scenario
+These are for stats and logs. They do not change how RGB is preprocessed.
+
+iter_clip_dirs walks:
+  each sample_* folder
+    each of collision / miss_left / miss_right  (OUTCOME_NAMES)
+      each bg_* folder
+        yield that leaf as one clip
+
+So four (or six) ClipRecords are produced for one sample if all exist.
+Each is independently checked for preview.mp4, episode.json, heatmaps.
+If M1 is missing files, C0/C1/M0 can still be valid. Pairing later
+simply finds fewer mates.
+
+
+================================================================
+2. SPLITS: VARIANTS NEVER CROSS TRAIN/VAL/TEST
+================================================================
+
+File: collision_jepa3/data/splits.py
+Function: split_groups
+
+The split unit is scenario_group_id = the sample folder, NOT the clip.
+
+  sample_0000_jaywalker  is one group.
+
+If this group is assigned to TRAIN, then C0, C1, M0, M1 all go to train.
+The code never puts collision in train and miss in val for the same
+jaywalker. That would leak the shared 3-second prefix.
+
+Stratification is by scenario_type (jaywalker vs cube_from_left vs ...),
+still at group level. Outcome and background are NOT stratification keys.
+
+TeacherDataset.__init__ then filters:
+
+  groups = set(splits[split])          # e.g. train sample ids
+  self.records = [r for r in records
+                  if r.valid and r.scenario_group_id in groups]
+
+So a train dataset contains whole 2x2 families, or whatever subset of
+that family was valid on disk.
+
+
+================================================================
+3. PREPROCESSING DOES NOT KNOW ABOUT VARIANTS
+================================================================
+
+This is important. Letterbox / cache / ImageNet normalize treat C0, C1,
+M0, M1 as four independent videos.
+
+Per clip, independently:
+
+  preview.mp4
+    -> decode RGB (video_reader.py)
+    -> letterbox to 256x256 (preprocessing.py)
+       1920x1080 -> 256x144 content + 56 px black pad top and bottom
+       LEFT/RIGHT of the street kept. No flip. No color jitter.
+    -> cache/frames/<clip_id with / replaced by __>/frames_uint8.npy
+
+Cache path includes the full clip_id, so variants do not overwrite each other:
+
+  .../sample_0000_jaywalker__collision__bg_00/frames_uint8.npy
+  .../sample_0000_jaywalker__collision__bg_01/frames_uint8.npy
+  .../sample_0000_jaywalker__miss_left__bg_00/frames_uint8.npy
+  .../sample_0000_jaywalker__miss_left__bg_01/frames_uint8.npy
+
+When the dataset later asks for 16 frames ending at t:
+
+  input_indices(t) = [t-90, t-84, ..., t]
+  take those indices from THIS clip's cached video only
+  uint8_to_nchw01 -> [16, 3, 256, 256] float in 0..1
+
+There is no mixing of C0 pixels with M0 pixels. Even before the fork,
+when the two videos are visually the same, they are still stored and
+loaded as two files. The model sees whichever clip this index belongs to.
+
+Heatmaps are also loaded per clip, independently:
+
+  self._heatmaps[clip_id] = load_heatmaps(...)   # [450, 5, 5]
+
+C0 and C1 heatmaps should match (same outcome, different street).
+C0 and M0 heatmaps match BEFORE the fork and differ AFTER.
+
+
+================================================================
+4. DATASET BUILD: TABLES THAT CONNECT THE VARIANTS
+================================================================
+
+Still in TeacherDataset.__init__, after heatmaps are in RAM.
+
+4.1 Ambiguity table  (OUTCOME axis)
+
+  File: pairing.py  compute_ambiguity_table
+
+  Groups clips by outcome_group_id (same sample AND same background).
+
+  For group "sample_0000_jaywalker|bg_00" the mates are C0 and M0.
+  For group "sample_0000_jaywalker|bg_01" the mates are C1 and M1.
+
+  For each such group:
+    find the collision clip
+    find every miss_* clip in that group
+    for every training time t:
+      if t >= fork (365): do nothing
+        (history already shows which ending it is)
+      else:
+        compare collision heatmap vs miss heatmap at
+          1s   = t+30
+          1.5s = t+45
+          2s   = t+60
+        if max |diff| > 0.02:
+          mark BOTH clips True on that horizon
+
+  Example t = 330, fork = 365, group bg_00:
+
+    1s target frame 360  < 365   C0 and M0 maps still match  -> False
+    1.5s frame 375       > 365   maps differ                -> True
+    2s frame 390         > 365   maps differ                -> True
+
+  Stored as:
+
+    table[("sample_0000_jaywalker/collision/bg_00", 330)]
+      = {"1s": False, "1_5s": True, "2s": True}
+
+    table[("sample_0000_jaywalker/miss_left/bg_00", 330)]
+      = {"1s": False, "1_5s": True, "2s": True}
+
+  C1/M1 get their own table rows, using bg_01 heatmaps.
+  C0 is never compared to M1.
+
+4.2 Collision clip lookup  (OUTCOME axis, for rewriting targets)
+
+  collision_clip_by_outcome_group(records)
+
+    "sample_0000_jaywalker|bg_00" -> "sample_0000_jaywalker/collision/bg_00"
+    "sample_0000_jaywalker|bg_01" -> "sample_0000_jaywalker/collision/bg_01"
+
+  So a miss on bg_00 will copy from C0, never from C1.
+
+4.3 Dataset index
+
+  Every valid clip times every anchor t is a separate training item.
+
+  If 4 clips and 22 anchors (90,105,...,405):
+    4 * 22 = 88 items for this sample in this split.
+
+  Shuffle later mixes C0-at-330 with unrelated clips. The pair is NOT
+  required to sit in the same batch. Background pairing uses a buffer
+  across steps (section 8). Outcome pairing is baked into the TARGET
+  of each item, so it does not need the mate in the same batch.
+
+
+================================================================
+5. DATASET __getitem__: ONE VARIANT BECOMES ONE SAMPLE DICT
+================================================================
+
+File: collision_jepa3/data/dataset.py
+Suppose the DataLoader asked for miss clip M0 at t = 330.
+
+Step A. Load THIS clip's RGB
+  rec = records_by_id["sample_0000_jaywalker/miss_left/bg_00"]
+  frames = 16 letterboxed frames ending at 330 from M0's video
+  shape [16, 3, 256, 256]
+
+  These pixels are the miss video. Before the fork they look like C0.
+  The network does not get a flag saying "this is a miss".
+
+Step B. Load THIS clip's heatmaps at the four times
+
+  tg = targets_for_anchor(self._heatmaps[M0], 330, [30,45,60])
+    h_now  = M0 map at 330
+    h_1s   = M0 map at 360
+    h_1_5s = M0 map at 375
+    h_2s   = M0 map at 390     (often near-zero for a miss)
+
+Step C. OUTCOME rewrite (mean_target, the default)
+
+  amb = table[(M0, 330)]  -> 1s False, 1.5s True, 2s True
+  apply_mean_future_targets(...)
+
+    Look up outcome_group_id "sample_0000_jaywalker|bg_00"
+    Find C0 and M0 heatmaps
+    For each horizon with amb True and the frame still in range:
+      replace h_<horizon> with the cell-wise average of C0 and M0
+
+    After rewrite:
+      h_now  still M0 at 330     (same as C0 anyway; now is never rewritten)
+      h_1s   still M0 at 360     (amb was False)
+      h_1_5s NOW mean(C0, M0) at 375
+      h_2s   NOW mean(C0, M0) at 390
+             (was miss zeros vs collision ~0.96, now ~0.48)
+
+    replaced = {"1_5s", "2s"}
+
+  If this item had been C0 instead of M0, C0 also gets that same average.
+  Both clips then train toward the SAME future maps.
+
+  If t = 375 (after fork):
+    amb all False, rewrite does not run.
+    M0 keeps miss heatmaps, C0 keeps collision heatmaps.
+    History already showed which ending it is, so two answers are fair.
+
+Step D. Ambiguity flags that the LOSS will see
+
+  _horizon_masked(name, amb, avail, replaced)
+
+    future frame does not exist     -> True  (skip; e.g. t=405, 2s gone)
+    name is in `replaced`           -> False (TRAIN on the mean map)
+    else                            -> amb table value
+
+  So for M0 at 330 with mean_target:
+    amb_1s   = False
+    amb_1_5s = False     even though the table said True, because replaced
+    amb_2s   = False
+
+  If you set ambiguous_policy: mask_ambiguous_pairs instead:
+    rewrite does not run
+    amb_1_5s = amb_2s = True
+    loss SKIPS those futures
+    h_2s stays the miss zeros, but they are not used
+
+Step E. BACKGROUND mate check
+
+  _mate_clip_id(rec) finds the other clip with the same
+  background_pair_id and a different clip_id.
+
+  For M0, background_pair_id = "sample_0000_jaywalker|miss_left"
+  mate = M1  (miss_left / bg_01)
+
+  Then background_pair_valid(M0, M1, heatmaps, t=330, tol=0.001):
+    same pair id? yes
+    different clip? yes
+    same outcome_type miss_left? yes
+    same sample? yes
+    heatmaps at now, 1s, 1.5s, 2s all agree within 0.001?
+      These are the RAW heatmaps of M0 vs M1, not the rewritten ones.
+      Same outcome, different street: they should match.
+      -> bg_pair_valid = True
+
+  If M1 is missing, mate_id is empty and bg_pair_valid is False.
+  Then this item will not participate in L_bg.
+
+  NOTE: C0's mate is C1, not M0. Outcome mates are NOT the background mate.
+
+Step F. Pack the sample dict (what leaves the dataset)
+
+  frames            RGB of THIS variant only
+  h_now, h_1s, h_1_5s, h_2s     possibly rewritten (outcome logic)
+  anchor            t
+  clip_id, sample_id, scenario_group_id, scenario_type
+  outcome_type      "miss_left"     (string, not an input tensor)
+  background_id     "bg_00"
+  outcome_group_id  "sample_0000_jaywalker|bg_00"
+  background_pair_id "sample_0000_jaywalker|miss_left"
+  mate_clip_id      ".../miss_left/bg_01"
+  bg_pair_valid     True/False
+  pre_fork          True because 330 < 365
+  fork_frame        365
+  amb_1s, amb_1_5s, amb_2s
+
+collate_teacher_batch stacks tensors and keeps IDs as Python lists.
+Default micro_batch_size is 1, so a batch is often one variant at one t.
+
+
+================================================================
+6. WHAT THE MODEL SEES (AND WHAT IT DOES NOT SEE)
+================================================================
+
+File: collision_jepa3/models/teacher.py
+Called as: out = model(clip=batch["frames"])
+
+The forward pass receives ONLY `frames`.
+
+It does not receive:
+  outcome_type
+  background_id
+  pairing IDs
+  amb flags
+  the mate clip
+  heatmaps
+
+So C0-at-330 and M0-at-330, if the videos are still identical before
+the fork, produce nearly identical tokens and Z_t. That is intended.
+The difference is in the TARGETS, not in a "collision bit".
+
+Forward:
+
+  frames [B,16,3,256,256] in 0..1
+    -> V-JEPA 2 ImageNet-normalize and encode
+    -> tokens [B,2048,1408]
+    -> adapter -> Z_t [B,32,5,5]
+    -> decoder -> Hhat_now [B,5,5]
+    -> three residual heads -> Hhat_1s, Hhat_1_5s, Hhat_2s [B,5,5]
+       each is clamp(stopgrad(Hhat_now) + Delta, 0, 1)
+
+Z_t is the spatial collision latent. Background pairing will compare
+Z_t of C0 with Z_t of C1 (same outcome, different street), not Z_t of
+C0 with Z_t of M0.
+
+
+================================================================
+7. LOSS: HOW OUTCOME VARIANTS ENTER
+================================================================
+
+File: collision_jepa3/losses/composite.py
+TeacherLoss.__call__(out, batch, z_bg_pair=None)
+
+7.1 Current map  (always trained, both outcomes)
+
+  L_now = weighted MSE(Hhat_now, batch["h_now"])
+  No amb mask.
+
+  For t=330, C0 and M0 have the same h_now (pre-fork).
+  For t=390, C0's h_now is the collision map, M0's h_now is the miss map.
+  Each clip trains its OWN now-map.
+
+7.2 Future maps  (OUTCOME rewrite already happened in the dataset)
+
+  For name in 1s, 1_5s, 2s:
+    valid = NOT batch["amb_"+name]
+    h_tgt = batch["h_"+name]     # already mean map if rewritten
+    compare Hhat_name vs h_tgt
+    also delta loss, false-positive, direction
+    skip the sample if valid is False
+
+  Default mean_target at t=330 for BOTH C0 and M0:
+    they share the same h_1_5s and h_2s (average of collision and miss)
+    amb flags are False
+    so BOTH train to predict that average future from the shared past
+
+  That is the whole point of the outcome-variant handling:
+    same 3-second history -> one shared future (the average)
+    instead of two contradictory answers or a skipped loss
+
+  After the fork, no rewrite:
+    C0 future loss vs collision heatmaps
+    M0 future loss vs miss heatmaps
+
+7.3 Weights (same for every variant)
+
+  L_future = 0.50*L_1s + 0.30*L_1_5s + 0.20*L_2s
+  L_total  = L_future + 0.25*L_now + 0.20*L_delta
+             + 0.10*L_FP + 0.05*L_dir + 0.02*L_bg
+
+L_now / L_future / L_delta / L_FP / L_dir do not branch on
+outcome_type. The branching already happened when h_* was filled.
+
+
+================================================================
+8. LOSS: HOW BACKGROUND VARIANTS ENTER
+================================================================
+
+This is the only loss term that looks at TWO clips.
+
+It does NOT concatenate two videos into the backbone (that would
+need two Giant forwards in one graph). It uses a stop-grad buffer.
+
+8.1 Dataset only sets a permission flag
+
+  bg_pair_valid True means:
+    "there exists another background of this SAME outcome whose
+     heatmaps at this t still match, so it is fair to ask Z_t to match"
+
+  It does not load the other video in this sample.
+
+8.2 Trainer PairBuffer  (training/trainer.py)
+
+  Key   = (background_pair_id, t)
+  Value = (clip_id, Z_t.detach())   # no gradient through the stored copy
+  Capacity 64, LRU
+
+  Example timeline, batch size 1:
+
+    Step 17  item = C0 at t=300
+      background_pair_id = sample_0000_jaywalker|collision
+      bg_pair_valid True
+      buffer empty -> no L_bg this step
+      store Z_t of C0 under that key
+
+    Step 84  item = C1 at t=300     (later, after shuffle)
+      same key sample_0000_jaywalker|collision , t=300
+      pop_mate finds C0's Z_t (different clip_id)
+      L_bg = mean over 5x5 cells of (1 - cosine(Z_C1, stopgrad(Z_C0)))
+      store Z_t of C1 (overwrites C0 at this key)
+
+  M0 at t=300 uses a DIFFERENT key:
+    sample_0000_jaywalker|miss_left
+  so miss backgrounds pair with each other, not with collision.
+
+  If C1 at t=300 never appears before the key is evicted, that pair
+  simply never contributes L_bg. That is expected with shuffle + LRU 64.
+
+8.3 Exact loss  (losses/background_consistency.py)
+
+  Z_a, Z_b : [N, 32, 5, 5]     N = how many pairs found in this batch
+  For each of the 25 cells, take the 32-D vector, L2-normalize, cosine.
+  L_bg = mean(1 - cos)
+
+  Meaning: "the danger latent at each grid cell should not change just
+  because the street texture changed, as long as the threat map is the
+  same."
+
+8.4 How it is added to the total
+
+  TeacherLoss is first called with z_bg_pair=None, so L_bg is 0 inside
+  that call. Then trainer._bg_pair_tensor computes the real L_bg and
+  splices it in:
+
+    packed.total = packed.total
+                   - bg_w * (old L_bg which was 0)
+                   + bg_w * real_L_bg
+
+  bg_w = 0.02  (small on purpose)
+
+  Gradients flow only into the CURRENT clip's Z_t, not into the stored
+  mate (it was .detach()). Over many steps both C0 and C1 get pulled
+  toward each other because each is current on different steps.
+
+
+================================================================
+9. EVALUATION
+================================================================
+
+evaluate_loader uses the SAME dataset, so:
+  mean_target rewrite still applies on val/test
+  amb flags still skip missing futures
+
+Metrics extra:
+  HorizonAccumulator also records outcome_type and background_id
+  so reports can show MSE broken down by
+    collision vs miss_left vs miss_right
+    bg_00 vs bg_01
+  That is reporting only. It does not change the model.
+
+amb_* True samples are skipped in future-horizon metrics, same as loss.
+"now" is never masked.
+
+
+================================================================
+10. END-TO-END WORKFLOW (BOTH AXES TOGETHER)
+================================================================
+
+For sample_0000_jaywalker, t=330 (before fork):
+
+  Item C0
+    RGB: collision/bg_00 video, frames 240..330
+    targets: C0 heatmaps; 1.5s/2s already collision, rewrite no-op
+    train all futures toward collision maps
+    maybe L_bg vs stored C1 Z_t if C1@330 was seen recently
+
+  Item M0
+    RGB: miss_left/bg_00 video, frames 240..330  (looks like C0)
+    targets: now/1s from M0; 1.5s/2s REPLACED with C0 maps
+    train those futures toward collision maps too
+    maybe L_bg vs stored M1 Z_t (miss_left pair, not C0)
+
+  Item C1
+    RGB: collision/bg_01 (different street, same motion)
+    targets: C1 heatmaps (= C0 heatmaps within 0.001)
+    maybe L_bg vs C0
+
+  Item M1
+    RGB: miss_left/bg_01
+    1.5s/2s rewritten from C1 (the collision clip of bg_01)
+    maybe L_bg vs M0
+
+For the same sample, t=375 (after fork):
+
+  No rewrite. No outcome ambiguity flags.
+  C0/C1 train on collision futures.
+  M0/M1 train on miss futures.
+  Background L_bg still allowed if heatmaps of the two streets still match
+  at that t (they should, same outcome).
+
+
+================================================================
+11. WHAT IS *NOT* DONE
+================================================================
+
+  The backbone is not given an outcome or background embedding.
+  Two variants are not stacked as a 32-frame clip.
+  C0 and M0 are not required in the same batch.
+  collision_target (copy collision map) is optional, not the default.
+    Live policy is mean_target.
+  Overlay videos are never mixed in as a "variant".
+  Random horizontal flip is disabled, so left-miss stays left.
+  Splits never separate the 2x2 family.
+
+
+================================================================
+12. CODE MAP (if you want to read it in order)
+================================================================
+
+  Disk folders
+    manifest.py inspect_clip_dir
+      outcome_type, background_id, outcome_group_id, background_pair_id
+
+  Keep family together
+    splits.py split_groups          (by sample folder)
+    dataset.py filters records
+
+  Independent RGB
+    cache.py / video_reader.py / preprocessing.py
+    dataset.py _load_input_clip
+
+  Outcome pairing
+    pairing.py outcome_mates
+    pairing.py compute_ambiguity_table
+    pairing.py outcome_clip_ids_by_group
+    pairing.py apply_mean_future_targets
+    dataset.py __getitem__ rewrite + amb flags
+    losses/composite.py uses h_* and amb_*
+
+  Background pairing
+    pairing.py background_mates / background_pair_valid
+    dataset.py _mate_clip_id, bg_pair_valid
+    trainer.py PairBuffer, _bg_pair_tensor
+    losses/background_consistency.py
+    losses/composite.py L_bg weight 0.02
+
+  Model
+    teacher.py forward(frames only)
+
+  Eval
+    evaluator.py subgroups by outcome_type and background_id
+)

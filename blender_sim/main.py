@@ -1659,10 +1659,41 @@ def run_group_plan(
         key = (clip["sample_id"], clip["bg_id"])
         sample_dir = out_root / str(clip["sample_dir"])
         ep_dir = sample_dir / str(clip["relpath"])
-        ep_dir.mkdir(parents=True, exist_ok=True)
         outcome = str(clip["outcome"])
         diverge_frame = max(1, min(n_frames - 2, int(clip["diverge_frame"])))
         diverge_s = float(clip["diverge_s"])
+        video_name = str(cfg["output"].get("video_name", "preview.mp4"))
+        video_path = ep_dir / video_name
+        overlay_path = ep_dir / "spatial_overlay.mp4"
+        # Resume: skip clips that already have their final video(s) on disk.
+        already_done = video_path.is_file() and (
+            (not want_overlay) or overlay_path.is_file()
+        )
+        if already_done:
+            print(
+                f"[group {clip['sample_id']:04d}/{clip['scenario']}] "
+                f"{outcome}/{clip['bg_id']} skip (exists)"
+            )
+            index_rows.append(
+                {
+                    "sample_id": clip["sample_id"],
+                    "scenario": clip["scenario"],
+                    "outcome": outcome,
+                    "bg_id": clip["bg_id"],
+                    "bg_style": clip["bg_style"],
+                    "bg_lighting": clip.get("bg_lighting"),
+                    "path": str(ep_dir.relative_to(out_root)),
+                    "video": video_name,
+                    "spatial_overlay": overlay_path.name if want_overlay else None,
+                    "diverge_frame": diverge_frame,
+                    "y": 1 if outcome == "collision" else 0,
+                    "resumed": True,
+                }
+            )
+            n_ok += 1
+            continue
+
+        ep_dir.mkdir(parents=True, exist_ok=True)
         print(
             f"[group {clip['sample_id']:04d}/{clip['scenario']}] "
             f"{outcome}/{clip['bg_id']} style={clip['bg_style']} "
