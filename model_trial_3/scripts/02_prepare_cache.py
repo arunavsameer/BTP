@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Resize-and-cache RGB frames. Resumable; refuses to exceed the GB budget."""
+"""Resize-and-cache RGB frames. Resumable. Optional --max-gb only if you pass it."""
 
 from __future__ import annotations
 

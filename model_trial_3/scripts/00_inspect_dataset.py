@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts._common import add_config_args, load_cfg  # noqa: E402
 
 from collision_jepa3.data.manifest import build_manifest, manifest_stats  # noqa: E402
-from collision_jepa3.data.sampling import iter_anchors  # noqa: E402
+from collision_jepa3.data.sampling import planned_anchors_per_clip  # noqa: E402
 from collision_jepa3.utils.logging import setup_logger  # noqa: E402
 
 
@@ -26,17 +26,10 @@ def main() -> None:
     log.info("dataset_root=%s exists=%s", root, root.exists())
     records = build_manifest(cfg, root)
     stats = manifest_stats(records)
-    n_frames = int(cfg.get("data.expected_frames", 450))
-    anchors = iter_anchors(
-        n_frames,
-        int(cfg.get("sampling.train_anchor_stride", 15)),
-        cfg.get("sampling.frame_offsets"),
-        cfg.get("sampling.horizons_frames"),
-        allow_partial_horizons=bool(cfg.get("sampling.allow_partial_horizons", True)),
-    )
-    stats["anchors_per_clip"] = len(anchors)
-    stats["anchor_range"] = [anchors[0], anchors[-1]] if anchors else []
-    stats["valid_train_anchors"] = len(anchors) * stats["n_valid"]
+    n_per = planned_anchors_per_clip(cfg)
+    stats["anchors_per_clip"] = n_per
+    stats["anchor_mode"] = cfg.get("sampling.anchor_mode", "stride")
+    stats["valid_train_anchors"] = n_per * stats["n_valid"]
     out = cfg.path("paths.reports_root") / "dataset_inspect.json"
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(stats, indent=2), encoding="utf-8")

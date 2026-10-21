@@ -12,7 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts._common import add_config_args, load_cfg  # noqa: E402
 
 from collision_jepa3.data.manifest import build_manifest, manifest_stats, save_manifest, valid_clips  # noqa: E402
-from collision_jepa3.data.sampling import iter_anchors  # noqa: E402
+from collision_jepa3.data.sampling import planned_anchors_per_clip  # noqa: E402
 from collision_jepa3.data.splits import save_splits, split_groups  # noqa: E402
 from collision_jepa3.reproducibility import set_seed  # noqa: E402
 from collision_jepa3.utils.logging import setup_logger  # noqa: E402
@@ -54,19 +54,13 @@ def main() -> None:
         log.info("wrote splits %s fingerprint=%s counts=%s", split_path, sfp, {k: len(v) for k, v in splits.items()})
         splits = {"splits": splits}
 
-    anchors = iter_anchors(
-        int(cfg.get("data.expected_frames", 450)),
-        int(cfg.get("sampling.train_anchor_stride", 15)),
-        cfg.get("sampling.frame_offsets"),
-        cfg.get("sampling.horizons_frames"),
-        allow_partial_horizons=bool(cfg.get("sampling.allow_partial_horizons", True)),
-    )
     n_valid = len(valid_clips(records))
     report = {
         "manifest": str(man_path),
         "manifest_fingerprint": fp,
         "stats": stats,
-        "anchors_per_clip": len(anchors),
+        "anchors_per_clip": planned_anchors_per_clip(cfg),
+        "anchor_mode": cfg.get("sampling.anchor_mode", "stride"),
         "valid_clips": n_valid,
         "split_file": str(split_path),
         "splits": splits.get("splits", splits),

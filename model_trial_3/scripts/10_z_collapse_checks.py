@@ -112,9 +112,9 @@ def load_heads(ckpt: Path, device: str):
     adapter = SpatialTemporalAdapter(
         hidden_size=1408, temporal_groups=8, spatial=16, z_channels=32, feature_grid=5,
         projection_channels=128, temporal_blocks=2, temporal_kernel=3, temporal_dilation=1,
-        group_norm_groups=8,
+        temporal_dilations=[1, 1], temporal_pool="mean_last", group_norm_groups=8,
     )
-    decoder = HeatmapDecoder(z_channels=32)
+    decoder = HeatmapDecoder(z_channels=32, dilated=False)
     adapter.load_state_dict(blob["adapter"])
     decoder.load_state_dict(blob["decoder"])
     adapter.to(device).eval()

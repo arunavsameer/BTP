@@ -9,6 +9,7 @@ import torch
 
 from ..config import heads_mode, supervised_horizon_names
 from ..training.engine import composite_score, move_batch, teacher_forward
+from .judge import HeatmapPack
 from .metrics import HorizonAccumulator
 from .operating_point import operating_metrics
 
@@ -96,3 +97,39 @@ def evaluate_loader(model, loader, cfg, device: str, loss_fn=None) -> dict[str, 
 
 def _mean_map(d: dict[str, list[float]]) -> dict[str, float]:
     return {k: float(np.mean(v)) for k, v in d.items() if v}
+
+
+@torch.no_grad()
+def collect_h1s_pack(model, loader, device: str) -> HeatmapPack:
+    """Run the teacher once and keep H_1s maps plus clip metadata for the judge."""
+    model.eval()
+    pred, gt, valid = [], [], []
+    clip_id, scenario, background, outcome, pre_fork, anchor = [], [], [], [], [], []
+    for batch in loader:
+        batch = move_batch(batch, device)
+        out = teacher_forward(model, batch)
+        p = out["Hhat_1s"].float().cpu().numpy()
+        g = batch["h_1s"].float().cpu().numpy()
+        amb = batch["amb_1s"].detach().cpu().numpy().astype(bool)
+        pred.append(p)
+        gt.append(g)
+        valid.append(~amb)
+        clip_id.extend(list(batch["clip_id"]))
+        scenario.extend(list(batch["scenario_type"]))
+        background.extend(list(batch["background_id"]))
+        outcome.extend(list(batch["outcome_type"]))
+        pre_fork.append(batch["pre_fork"].detach().cpu().numpy().astype(bool))
+        anchor.append(batch["anchor"].detach().cpu().numpy().astype(np.int64))
+    if not pred:
+        raise RuntimeError("empty loader")
+    return HeatmapPack(
+        pred=np.concatenate(pred, axis=0),
+        gt=np.concatenate(gt, axis=0),
+        valid=np.concatenate(valid, axis=0),
+        clip_id=np.asarray(clip_id, dtype=object),
+        scenario=np.asarray(scenario, dtype=object),
+        background=np.asarray(background, dtype=object),
+        outcome=np.asarray(outcome, dtype=object),
+        pre_fork=np.concatenate(pre_fork, axis=0),
+        anchor=np.concatenate(anchor, axis=0),
+    )

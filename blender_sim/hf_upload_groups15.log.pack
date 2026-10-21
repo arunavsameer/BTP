@@ -1,0 +1,14 @@
+Found 4,002 files to upload
+Uploading... 0/4,002 files checked, 0/0 uploaded (0.00B transferred), 0 committed in 0 commit(s)
+Uploading... 768/4,002 files checked, 191/299 uploaded (1.40GB transferred), 0 committed in 0 commit(s)
+Uploading... 1,024/4,002 files checked, 291/408 uploaded (1.85GB transferred), 250 committed in 1 commit(s), validating 100%
+Uploading... 1,536/4,002 files checked, 384/534 uploaded (2.96GB transferred), 500 committed in 2 commit(s), validating 100%
+Uploading... 2,048/4,002 files checked, 618/780 uploaded (3.91GB transferred), 1,033 committed in 4 commit(s), validating 100%
+Uploading... 2,304/4,002 files checked, 839/908 uploaded (5.10GB transferred), 1,338 committed in 5 commit(s), validating 100%
+Uploading... 2,816/4,002 files checked, 946/1,115 uploaded (5.85GB transferred), 1,953 committed in 7 commit(s), validating 100%
+Uploading... 3,328/4,002 files checked, 1,168/1,228 uploaded (6.99GB transferred), 2,273 committed in 8 commit(s), validating 100%
+Uploading... 3,840/4,002 files checked, 1,333/1,458 uploaded (8.13GB transferred), 2,791 committed in 10 commit(s), validating 100%
+Uploading... 4,002/4,002 files checked, 1,483/1,578 uploaded (8.95GB transferred), 3,346 committed in 12 commit(s), validating 100%
+Uploading... 4,002/4,002 files checked, 1,598/1,600 uploaded (9.37GB transferred), 3,648 committed in 13 commit(s), validating 100%
+Upload completed in 15 commits.
+url=https://huggingface.co/datasets/Arihant2299/groups15-n400/commit/fff004a9abfd19241d94c499eadf1846421e2f36

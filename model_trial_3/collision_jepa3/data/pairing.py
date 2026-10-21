@@ -44,22 +44,29 @@ def compute_ambiguity_table(
     heatmap_tol: float,
     mask_ambiguous: bool,
     allow_partial_horizons: bool = True,
+    anchors_for_clip: dict[str, list[int]] | None = None,
 ) -> dict[tuple[str, int], dict[str, bool]]:
     """Return {(clip_id, anchor): {horizon_name: is_ambiguous}}."""
     table: dict[tuple[str, int], dict[str, bool]] = {}
-    anchors = iter_anchors(
+    default_anchors = iter_anchors(
         n_frames,
         stride,
         offsets,
         horizons,
         allow_partial_horizons=allow_partial_horizons,
     )
+
+    def anchors_of(rec: ClipRecord) -> list[int]:
+        if anchors_for_clip is not None and rec.clip_id in anchors_for_clip:
+            return [int(t) for t in anchors_for_clip[rec.clip_id]]
+        return default_anchors
+
     groups = outcome_mates(records)
 
     for rec in records:
         if not rec.valid:
             continue
-        for t in anchors:
+        for t in anchors_of(rec):
             table[(rec.clip_id, t)] = {name: False for name in horizon_names}
 
     if not mask_ambiguous:
@@ -82,7 +89,9 @@ def compute_ambiguity_table(
             h_miss = clip_heatmaps.get(miss.clip_id)
             if h_miss is None:
                 continue
-            for t in anchors:
+            for t in anchors_of(collision):
+                if (miss.clip_id, t) not in table:
+                    continue
                 history_identical = t < fork
                 if not history_identical:
                     continue

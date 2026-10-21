@@ -42,7 +42,7 @@ def direction_alignment_loss(
     right_cols: list[int],
     sample_mask: torch.Tensor | None = None,
     temperature: float = 0.08,
-    threat_threshold: float = 0.42,
+    threat_threshold: float = 0.25,
 ) -> torch.Tensor:
     pred = pred.float()
     target = target.float()

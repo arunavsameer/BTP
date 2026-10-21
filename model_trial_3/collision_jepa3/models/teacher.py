@@ -6,6 +6,7 @@ from typing import Any
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..config import heads_mode
 from .heatmap_decoder import HeatmapDecoder, HeatmapDelta, copy_residual_future
@@ -42,6 +43,15 @@ class CollisionTeacher3(nn.Module):
             spatial = getattr(backbone, "spatial")
         self.temporal_groups = int(t_prime)
         self.spatial = int(spatial)
+        dilations = cfg.get("adapter.temporal_dilations", None)
+        decoder_dilated = bool(cfg.get("adapter.decoder_dilated", True))
+        self.decode_from = str(cfg.get("adapter.decode_from", "fine")).lower()
+        if self.decode_from not in {"fine", "z"}:
+            raise ValueError(f"unsupported adapter.decode_from {self.decode_from}")
+        self.heatmap_grid = int(cfg.get("adapter.heatmap_grid", 16))
+        heatmap_pool = str(cfg.get("adapter.heatmap_pool", "max"))
+        proj_c = int(cfg.get("adapter.projection_channels", 128))
+        dec_ch = proj_c if self.decode_from == "fine" else self.z_channels
         self.adapter = SpatialTemporalAdapter(
             hidden_size=int(backbone.hidden_size),
             temporal_groups=self.temporal_groups,
@@ -49,12 +59,19 @@ class CollisionTeacher3(nn.Module):
             z_channels=self.z_channels,
             feature_grid=self.feature_grid,
             projection_channels=int(cfg.get("adapter.projection_channels", 128)),
-            temporal_blocks=int(cfg.get("adapter.temporal_blocks", 2)),
+            temporal_blocks=int(cfg.get("adapter.temporal_blocks", 4)),
             temporal_kernel=int(cfg.get("adapter.temporal_kernel", 3)),
             temporal_dilation=int(cfg.get("adapter.temporal_dilation", 1)),
+            temporal_dilations=dilations,
+            temporal_pool=str(cfg.get("adapter.temporal_pool", "softmax")),
             group_norm_groups=int(cfg.get("adapter.group_norm_groups", 8)),
         )
-        self.decoder = HeatmapDecoder(z_channels=self.z_channels)
+        self.decoder = HeatmapDecoder(
+            z_channels=dec_ch,
+            dilated=decoder_dilated,
+            out_grid=self.feature_grid,
+            pool=heatmap_pool,
+        )
         self.direct_h1s = heads_mode(cfg) == "direct_h1s"
         if self.direct_h1s:
             self.predictors = nn.ModuleDict()
@@ -67,7 +84,7 @@ class CollisionTeacher3(nn.Module):
                 {name: ResidualPredictor(self.z_channels) for name in self.horizon_names}
             )
             self.delta_heads = nn.ModuleDict(
-                {name: HeatmapDelta(self.z_channels) for name in self.horizon_names}
+                {name: HeatmapDelta(self.z_channels, dilated=decoder_dilated) for name in self.horizon_names}
             )
             self.predictor_1s = self.predictors["1s"]
             self.predictor_1_5s = self.predictors["1_5s"]
@@ -81,17 +98,33 @@ class CollisionTeacher3(nn.Module):
     def encode_tokens(self, clip: torch.Tensor) -> torch.Tensor:
         return self.backbone(clip)
 
-    def encode(self, clip: torch.Tensor | None = None, tokens: torch.Tensor | None = None) -> torch.Tensor:
+    def encode_pair(
+        self, clip: torch.Tensor | None = None, tokens: torch.Tensor | None = None
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         if tokens is None:
             if clip is None:
                 raise ValueError("encode requires clip or tokens")
             tokens = self.encode_tokens(clip)
-        return self.adapter(tokens)
+        return self.adapter.features(tokens)
 
-    def _heads(self, z_t: torch.Tensor) -> dict[str, torch.Tensor]:
+    def encode(self, clip: torch.Tensor | None = None, tokens: torch.Tensor | None = None) -> torch.Tensor:
+        z_t, _ = self.encode_pair(clip=clip, tokens=tokens)
+        return z_t
+
+    def _heatmap_feat(self, z_t: torch.Tensor, fine: torch.Tensor | None) -> torch.Tensor:
+        if self.decode_from != "fine" or fine is None:
+            return z_t
+        feat = fine
+        g = self.heatmap_grid
+        if g > 0 and (feat.shape[-2] != g or feat.shape[-1] != g):
+            feat = F.interpolate(feat, size=(g, g), mode="bilinear", align_corners=False)
+        return feat
+
+    def _heads(self, z_t: torch.Tensor, fine: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
+        feat = self._heatmap_feat(z_t, fine)
         if self.direct_h1s:
-            return {"Z_t": z_t, "Hhat_1s": self.decoder(z_t)}
-        h_now = self.decoder(z_t)
+            return {"Z_t": z_t, "Hhat_1s": self.decoder(feat)}
+        h_now = self.decoder(feat)
         out: dict[str, torch.Tensor] = {"Z_t": z_t, "Hhat_now": h_now}
         for name in self.horizon_names:
             z_hat = self.predictors[name](z_t)
@@ -103,7 +136,8 @@ class CollisionTeacher3(nn.Module):
         return out
 
     def forward(self, clip: torch.Tensor | None = None, tokens: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
-        return self._heads(self.encode(clip=clip, tokens=tokens))
+        z_t, fine = self.encode_pair(clip=clip, tokens=tokens)
+        return self._heads(z_t, fine)
 
     def adapter_parameters(self) -> list[nn.Parameter]:
         params = list(self.adapter.parameters())
@@ -157,4 +191,6 @@ class CollisionTeacher3(nn.Module):
             "spatial": self.spatial,
             "z_shape": [self.z_channels, self.feature_grid, self.feature_grid],
             "heads_mode": "direct_h1s" if self.direct_h1s else "residual",
+            "decode_from": self.decode_from,
+            "heatmap_grid": self.heatmap_grid,
         }

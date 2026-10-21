@@ -45,6 +45,8 @@ def main() -> None:
     parser.add_argument("--checkpoint-root", default=None)
     parser.add_argument("--logs-root", default=None)
     parser.add_argument("--reports-root", default=None)
+    parser.add_argument("--train-anchor-stride", type=int, default=None)
+    parser.add_argument("--val-anchor-stride", type=int, default=None)
     args = parser.parse_args()
     cfg = load_cfg(args)
     if args.frozen_epochs is not None:
@@ -73,6 +75,10 @@ def main() -> None:
         cfg.set("paths.logs_root", args.logs_root)
     if args.reports_root:
         cfg.set("paths.reports_root", args.reports_root)
+    if args.train_anchor_stride is not None:
+        cfg.set("sampling.train_anchor_stride", int(args.train_anchor_stride))
+    if args.val_anchor_stride is not None:
+        cfg.set("sampling.val_anchor_stride", int(args.val_anchor_stride))
     set_seed(int(cfg.get("project.seed", 1337)))
     configure_runtime(int(cfg.get("training.num_workers", 2)))
     log = setup_logger("train", cfg.path("paths.logs_root"))

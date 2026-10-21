@@ -1,0 +1,45 @@
+post-fork windows: 1152  occupied cells: 1882
+
+== 1. Predictions on occupied cells (GT>=0.9): fraction per 0.1 bin, 0 -> 1 ==
+[0.247 0.057 0.035 0.045 0.086 0.067 0.056 0.058 0.065 0.284]
+
+== 2. Window-level failure type (windows with an occupied cell) ==
+n windows: 232
+missed (peak pred < 0.3):          0.086
+peak>=0.3, argmax exact:           0.078
+peak>=0.3, within 1 cell:          0.353
+peak>=0.3, >=2 cells off:          0.483
+
+== 3. Side of peak cell: rows = GT side, cols = pred side [L, C, R] ==
+[[27 53 10]
+ [ 6 99 27]
+ [ 0  7  3]]
+
+== 4. Occupied-cell mean prediction by outcome, row, frame ==
+collision 0.528 n 1627
+miss 0.534 n 255
+row 0 0.33 n 132
+row 1 0.454 n 196
+row 2 0.519 n 382
+row 3 0.579 n 558
+row 4 0.555 n 614
+frame 366 0.434 n 214
+frame 372 0.663 n 236
+frame 378 0.561 n 282
+frame 384 0.217 n 296
+frame 390 0.909 n 308
+frame 396 0.447 n 358
+frame 402 0.149 n 96
+frame 408 0.749 n 92
+frame 414 n/a n 0
+
+== 5. False hotspots: empty cells (GT<0.05) with pred > 0.3 ==
+0.031
+
+== 6. Plain max vs row-weighted max: post-fork collision vs miss windows ==
+plain max          FA=0.02 recall=0.095 thr=0.983
+plain max          FA=0.05 recall=0.200 thr=0.801
+plain max          FA=0.10 recall=0.311 thr=0.509
+row-weighted max   FA=0.02 recall=0.095 thr=0.979
+row-weighted max   FA=0.05 recall=0.201 thr=0.764
+row-weighted max   FA=0.10 recall=0.306 thr=0.509

@@ -11,7 +11,7 @@ import numpy as np
 
 from .manifest import ClipRecord
 from .preprocessing import PreprocessSignature, preprocess_clip, signature_from_cfg, uint8_to_nchw01
-from .sampling import FRAME_OFFSETS, HORIZONS_FRAMES, input_indices, iter_anchors
+from .sampling import FRAME_OFFSETS, anchors_from_cfg, input_indices
 from .video_reader import decode_all_rgb
 
 logger = logging.getLogger("collision_jepa3.cache")
@@ -53,17 +53,15 @@ def prepare_frame_cache(
     sig = signature_from_cfg(cfg)
     cache_root = cfg.path("paths.cache_root")
     valid = [r for r in records if r.valid]
-    budget = float(cfg.get("cache.frame_cache_max_gb", 80) if max_gb is None else max_gb)
     estimate = estimate_frame_cache_gb(
         len(valid),
         int(cfg.get("data.expected_frames", 450)),
         int(sig.input_size),
     )
-    logger.info("frame-cache estimate %.2f GB for %d clips (budget %.2f GB)", estimate, len(valid), budget)
-    if estimate > budget:
+    logger.info("frame-cache estimate %.2f GB for %d clips", estimate, len(valid))
+    if max_gb is not None and estimate > float(max_gb):
         raise RuntimeError(
-            f"frame cache estimate {estimate:.1f} GB exceeds budget {budget:.1f} GB; "
-            "raise cache.frame_cache_max_gb or disable cache.cache_frames"
+            f"frame cache estimate {estimate:.1f} GB exceeds --max-gb {float(max_gb):.1f}"
         )
     done = 0
     skipped = 0
@@ -99,7 +97,7 @@ def prepare_frame_cache(
         )
         done += 1
         logger.info("cached %s (%d frames)", rec.clip_id, processed.shape[0])
-    return {"written": done, "reused": skipped, "estimate_gb": estimate, "budget_gb": budget}
+    return {"written": done, "reused": skipped, "estimate_gb": estimate}
 
 
 def load_cached_frames(cache_root: Path, clip_id: str, mmap: bool = True) -> np.ndarray:
@@ -121,6 +119,28 @@ def token_fingerprint(cfg, *, dummy: bool = False) -> str:
         "use_get_vision_features": cfg.get("backbone.use_get_vision_features"),
     }
     return hashlib.sha256(json.dumps(blob, sort_keys=True, default=str).encode()).hexdigest()[:16]
+
+
+def token_cache_id(cfg, *, dummy: bool = False, stride: int | None = None) -> str:
+    """Directory id for encoder tokens. Group-random and non-15 stride get a suffix."""
+    fp = token_fingerprint(cfg, dummy=dummy)
+    mode = str(cfg.get("sampling.anchor_mode", "stride"))
+    if mode == "group_random":
+        policy = {
+            "mode": "group_random",
+            "n_pre": int(cfg.get("sampling.n_pre_fork_anchors", 26)),
+            "n_post": int(cfg.get("sampling.n_post_fork_anchors", 14)),
+            "t_min": int(cfg.get("sampling.random_anchor_t_min", 90)),
+            "t_max": int(cfg.get("sampling.random_anchor_t_max", 419)),
+            "fork": int(cfg.get("sampling.fork_frame", 365)),
+            "seed": int(cfg.get("project.seed", 1337)),
+        }
+        ph = hashlib.sha256(json.dumps(policy, sort_keys=True).encode("utf-8")).hexdigest()[:8]
+        return f"{fp}_gr{ph}"
+    s = int(cfg.get("sampling.train_anchor_stride", 15) if stride is None else stride)
+    if s != 15:
+        return f"{fp}_s{s}"
+    return fp
 
 
 def estimate_token_cache_gb(n_windows: int, n_tokens: int, hidden: int, itemsize: int = 2) -> float:
@@ -201,43 +221,48 @@ class TokenCache:
         return np.asarray(arr[mapping[int(anchor)]])
 
 
+def _clip_frames_uint8(rec: ClipRecord, cfg, sig: PreprocessSignature) -> np.ndarray:
+    """Load preprocessed uint8 frames. Decode preview.mp4 when the frame cache is absent."""
+    cache_root = cfg.path("paths.cache_root")
+    npy = frame_cache_path(cache_root, rec.clip_id)
+    if bool(cfg.get("cache.cache_frames", False)) and npy.exists():
+        return load_cached_frames(cache_root, rec.clip_id, mmap=True)
+    frames, _info = decode_all_rgb(rec.video_path)
+    return preprocess_clip(frames, sig)
+
+
 def prepare_token_cache(records: list[ClipRecord], cfg, model, device: str) -> dict:
-    """Encode each valid clip's train-stride windows once. Resumable."""
+    """Encode each valid clip's windows once. Resumable. No size cap. No frame files."""
     import torch
 
     valid = [r for r in records if r.valid]
     dummy = str(getattr(model.backbone, "model_id", "")) == "dummy"
-    cache = TokenCache(cfg.path("paths.cache_root"), token_fingerprint(cfg, dummy=dummy))
+    cache = TokenCache(cfg.path("paths.cache_root"), token_cache_id(cfg, dummy=dummy))
     n_frames = int(cfg.get("data.expected_frames", 450))
     offsets = list(cfg.get("sampling.frame_offsets", FRAME_OFFSETS))
-    anchors = iter_anchors(
-        n_frames,
-        int(cfg.get("sampling.train_anchor_stride", 15)),
-        offsets,
-        list(cfg.get("sampling.horizons_frames", HORIZONS_FRAMES)),
-        allow_partial_horizons=bool(cfg.get("sampling.allow_partial_horizons", True)),
-    )
+    sig = signature_from_cfg(cfg)
     num_frames = int(cfg.get("sampling.input_frames", 16))
     if hasattr(model.backbone, "expected_tokens"):
         _t, _s, n_tokens = model.backbone.expected_tokens(num_frames)
     else:
         n_tokens = int(model.backbone.temporal_groups) * int(model.backbone.spatial) ** 2
     hidden = int(model.backbone.hidden_size)
-    estimate = estimate_token_cache_gb(len(valid) * len(anchors), n_tokens, hidden)
-    budget = float(cfg.get("cache.encoder_cache_max_gb", 120))
+    group_anchors: dict[str, list[int]] = {}
+    clip_anchors: dict[str, list[int]] = {}
+    for rec in valid:
+        gid = rec.scenario_group_id
+        if gid not in group_anchors:
+            group_anchors[gid] = anchors_from_cfg(cfg, gid, n_frames=n_frames)
+        clip_anchors[rec.clip_id] = group_anchors[gid]
+    n_windows = sum(len(a) for a in clip_anchors.values())
+    estimate = estimate_token_cache_gb(n_windows, n_tokens, hidden)
     logger.info(
-        "token-cache estimate %.2f GB for %d clips × %d windows (budget %.2f GB) fp=%s",
+        "token-cache estimate %.2f GB for %d clips (%d windows, no size cap) fp=%s",
         estimate,
         len(valid),
-        len(anchors),
-        budget,
+        n_windows,
         cache.fingerprint,
     )
-    if estimate > budget:
-        raise RuntimeError(
-            f"token cache estimate {estimate:.1f} GB exceeds budget {budget:.1f} GB; "
-            "raise cache.encoder_cache_max_gb"
-        )
     batch_size = max(1, int(cfg.get("cache.token_encode_batch_size", cfg.get("training.micro_batch_size", 8))))
     encode = model.encode_tokens if hasattr(model, "encode_tokens") else model
     written = 0
@@ -246,10 +271,11 @@ def prepare_token_cache(records: list[ClipRecord], cfg, model, device: str) -> d
     model.eval()
     try:
         for rec in valid:
+            anchors = clip_anchors[rec.clip_id]
             if cache.has_clip(rec.clip_id, anchors, n_tokens, hidden):
                 skipped += 1
                 continue
-            frames_u8 = load_cached_frames(cfg.path("paths.cache_root"), rec.clip_id, mmap=True)
+            frames_u8 = _clip_frames_uint8(rec, cfg, sig)
             rows = []
             for start in range(0, len(anchors), batch_size):
                 chunk = anchors[start : start + batch_size]
@@ -274,7 +300,7 @@ def prepare_token_cache(records: list[ClipRecord], cfg, model, device: str) -> d
                 )
             cache.save_clip(rec.clip_id, anchors, stacked)
             written += 1
-            logger.info("token-cached %s %s", rec.clip_id, tuple(stacked.shape))
+            logger.info("token-cached %s %s n=%d", rec.clip_id, tuple(stacked.shape), written + skipped)
     finally:
         if model_was_training:
             model.train()
@@ -284,8 +310,8 @@ def prepare_token_cache(records: list[ClipRecord], cfg, model, device: str) -> d
         "written": written,
         "reused": skipped,
         "estimate_gb": estimate,
-        "budget_gb": budget,
         "fingerprint": cache.fingerprint,
-        "n_windows": len(anchors),
+        "n_clips": len(valid),
+        "n_windows": n_windows,
         "token_shape": [n_tokens, hidden],
     }

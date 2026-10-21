@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import random
 from typing import Sequence
 
 FRAME_OFFSETS: tuple[int, ...] = (
@@ -82,3 +84,91 @@ def iter_anchors(
     if t_max < t_min:
         return []
     return list(range(int(t_min), int(t_max) + 1, int(stride)))
+
+
+def group_anchor_seed(scenario_group_id: str, seed: int) -> int:
+    """Stable 64-bit seed. Do not use Python's salted hash()."""
+    blob = f"{int(seed)}\0{scenario_group_id}".encode("utf-8")
+    return int.from_bytes(hashlib.sha256(blob).digest()[:8], "little")
+
+
+def sample_group_anchors(
+    scenario_group_id: str,
+    *,
+    seed: int,
+    n_pre: int,
+    n_post: int,
+    t_min: int,
+    t_max: int,
+    fork_frame: int,
+) -> list[int]:
+    """Without-replacement pre/post draw, shared by every clip in the sample folder."""
+    lo = int(t_min)
+    hi = int(t_max)
+    fork = int(fork_frame)
+    if hi < lo:
+        raise ValueError(f"empty anchor range [{lo}, {hi}]")
+    pre = list(range(lo, min(fork, hi + 1)))
+    post = list(range(max(fork, lo), hi + 1))
+    n_pre = int(n_pre)
+    n_post = int(n_post)
+    if n_pre < 0 or n_post < 0 or n_pre + n_post < 1:
+        raise ValueError(f"need a positive number of anchors, got n_pre={n_pre} n_post={n_post}")
+    if n_pre > len(pre):
+        raise ValueError(f"n_pre={n_pre} > pre-fork pool {len(pre)} ([{lo}, {fork}))")
+    if n_post > len(post):
+        raise ValueError(f"n_post={n_post} > post-fork pool {len(post)} ([{fork}, {hi}])")
+    rng = random.Random(group_anchor_seed(scenario_group_id, seed))
+    picked = rng.sample(pre, n_pre) + rng.sample(post, n_post)
+    out = sorted(int(t) for t in picked)
+    if len(set(out)) != len(out):
+        raise RuntimeError(f"duplicate anchors for {scenario_group_id}: {out}")
+    return out
+
+
+def planned_anchors_per_clip(cfg) -> int:
+    if str(cfg.get("sampling.anchor_mode", "stride")) == "group_random":
+        return int(cfg.get("sampling.n_pre_fork_anchors", 26)) + int(
+            cfg.get("sampling.n_post_fork_anchors", 14)
+        )
+    n_frames = int(cfg.get("data.expected_frames", 450))
+    return len(
+        iter_anchors(
+            n_frames,
+            int(cfg.get("sampling.train_anchor_stride", 15)),
+            cfg.get("sampling.frame_offsets"),
+            cfg.get("sampling.horizons_frames"),
+            allow_partial_horizons=bool(cfg.get("sampling.allow_partial_horizons", True)),
+        )
+    )
+
+
+def anchors_from_cfg(cfg, scenario_group_id: str, *, n_frames: int | None = None) -> list[int]:
+    """Train/val/test anchors for one sample folder. Identical for all four clips."""
+    n_frames = int(n_frames if n_frames is not None else cfg.get("data.expected_frames", 450))
+    offsets = list(cfg.get("sampling.frame_offsets", FRAME_OFFSETS))
+    horizons = list(cfg.get("sampling.horizons_frames", HORIZONS_FRAMES))
+    allow = bool(cfg.get("sampling.allow_partial_horizons", True))
+    lo, hi = valid_anchor_range(n_frames, offsets, horizons, allow_partial_horizons=allow)
+    mode = str(cfg.get("sampling.anchor_mode", "stride"))
+    if mode == "group_random":
+        t_min = max(lo, int(cfg.get("sampling.random_anchor_t_min", lo)))
+        t_max = min(hi, int(cfg.get("sampling.random_anchor_t_max", hi)))
+        return sample_group_anchors(
+            scenario_group_id,
+            seed=int(cfg.get("project.seed", 1337)),
+            n_pre=int(cfg.get("sampling.n_pre_fork_anchors", 26)),
+            n_post=int(cfg.get("sampling.n_post_fork_anchors", 14)),
+            t_min=t_min,
+            t_max=t_max,
+            fork_frame=int(cfg.get("sampling.fork_frame", 365)),
+        )
+    if mode != "stride":
+        raise ValueError(f"unsupported sampling.anchor_mode {mode}")
+    return iter_anchors(
+        n_frames,
+        int(cfg.get("sampling.train_anchor_stride", 15)),
+        offsets,
+        horizons,
+        allow_partial_horizons=allow,
+    )

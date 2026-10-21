@@ -17,7 +17,7 @@ except Exception:  # pragma: no cover
     class Dataset:  # type: ignore
         pass
 
-from .cache import TokenCache, frame_cache_path, load_cached_frames, token_fingerprint
+from .cache import TokenCache, frame_cache_path, load_cached_frames, token_cache_id
 from .heatmap_annotations import load_heatmaps, targets_for_anchor
 from .manifest import ClipRecord
 from .pairing import (
@@ -30,7 +30,14 @@ from .pairing import (
 )
 from .preprocessing import preprocess_clip, signature_from_cfg, uint8_to_nchw01
 from .paired_sampler import ClipContiguousSampler
-from .sampling import FRAME_OFFSETS, HORIZONS_FRAMES, available_horizons, input_indices, iter_anchors
+from .sampling import (
+    FRAME_OFFSETS,
+    HORIZONS_FRAMES,
+    anchors_from_cfg,
+    available_horizons,
+    input_indices,
+    iter_anchors,
+)
 from .video_reader import decode_indices_rgb
 
 
@@ -69,13 +76,26 @@ class TeacherDataset(Dataset):
         self.stride = int(cfg.get(stride_key, 15))
         self.allow_partial_horizons = bool(cfg.get("sampling.allow_partial_horizons", True))
         self.n_frames = n_frames
-        self.anchors = iter_anchors(
-            n_frames,
-            self.stride,
-            self.offsets,
-            self.horizons,
-            allow_partial_horizons=self.allow_partial_horizons,
-        )
+        self.anchor_mode = str(cfg.get("sampling.anchor_mode", "stride"))
+        self.anchors_by_clip: dict[str, list[int]] = {}
+        if self.anchor_mode == "group_random":
+            group_cache: dict[str, list[int]] = {}
+            for rec in self.records:
+                gid = rec.scenario_group_id
+                if gid not in group_cache:
+                    group_cache[gid] = anchors_from_cfg(cfg, gid, n_frames=n_frames)
+                self.anchors_by_clip[rec.clip_id] = group_cache[gid]
+            self.anchors = next(iter(self.anchors_by_clip.values())) if self.anchors_by_clip else []
+        else:
+            self.anchors = iter_anchors(
+                n_frames,
+                self.stride,
+                self.offsets,
+                self.horizons,
+                allow_partial_horizons=self.allow_partial_horizons,
+            )
+            for rec in self.records:
+                self.anchors_by_clip[rec.clip_id] = self.anchors
 
         self._heatmaps: dict[str, np.ndarray] = {}
         for rec in self.records:
@@ -103,13 +123,14 @@ class TeacherDataset(Dataset):
             heatmap_tol=float(cfg.get("sampling.heatmap_disagree_tol", 0.02)),
             mask_ambiguous=detect_ambiguous,
             allow_partial_horizons=self.allow_partial_horizons,
+            anchors_for_clip=self.anchors_by_clip,
         )
         self._collision_ids = collision_clip_by_outcome_group(self.records)
         self._outcome_ids = outcome_clip_ids_by_group(self.records)
 
         self.index: list[tuple[str, int]] = []
         for rec in self.records:
-            for t in self.anchors:
+            for t in self.anchors_by_clip[rec.clip_id]:
                 self.index.append((rec.clip_id, int(t)))
 
         self._lru: OrderedDict[str, np.ndarray] = OrderedDict()
@@ -122,7 +143,7 @@ class TeacherDataset(Dataset):
         self._token_lru: OrderedDict[str, tuple[np.ndarray, dict[int, int]]] = OrderedDict()
         if self.use_token_cache:
             self._token_cache = TokenCache(
-                self.cache_root, token_fingerprint(cfg, dummy=bool(dummy_backbone))
+                self.cache_root, token_cache_id(cfg, dummy=bool(dummy_backbone))
             )
 
     def _horizon_masked(

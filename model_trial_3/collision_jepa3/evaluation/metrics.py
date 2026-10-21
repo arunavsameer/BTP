@@ -21,15 +21,20 @@ def direction_scores_np(heatmap: np.ndarray, row_weights: list[float], left, cen
 
 
 def classify_heatmap(heatmap: np.ndarray, cfg_warning: dict) -> tuple[str, int, dict[str, float]]:
+    """Direction from unweighted side maxima. Severity from the plain map max.
+
+    Warning row weights are not applied: a far-row occupied cell can reach STOP.
+    """
+    ones = [1.0] * int(np.asarray(heatmap).shape[0])
     scores = direction_scores_np(
         heatmap,
-        cfg_warning["row_weights"],
+        ones,
         cfg_warning["left_cols"],
         cfg_warning["center_cols"],
         cfg_warning["right_cols"],
     )
     direction = max(scores, key=scores.get)
-    peak = scores[direction]
+    peak = float(np.max(np.asarray(heatmap, dtype=np.float32)))
     if peak >= float(cfg_warning["stop_threshold"]):
         sev = STOP
     elif peak >= float(cfg_warning["caution_threshold"]):

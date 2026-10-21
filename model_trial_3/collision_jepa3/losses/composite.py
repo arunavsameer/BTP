@@ -9,7 +9,14 @@ import torch
 from ..config import heads_mode, supervised_horizon_names
 from .background_consistency import background_consistency_loss
 from .direction import direction_alignment_loss
-from .heatmap import false_positive_penalty, row_priority_weights, target_weighted_mse
+from .heatmap import (
+    appear_cell_weight,
+    blob_bce,
+    false_positive_penalty,
+    row_priority_weights,
+    soft_bce,
+    target_weighted_mse,
+)
 from .residual import delta_loss
 
 
@@ -43,11 +50,19 @@ class TeacherLoss:
         self.safe_thr = float(cfg.get("loss.safe_cell_threshold", 0.05))
         self.fp_margin = float(cfg.get("loss.false_positive_margin", 0.10))
         self.dir_temp = float(cfg.get("loss.direction_temperature", 0.08))
-        self.dir_thr = float(cfg.get("loss.direction_threat_threshold", 0.42))
+        self.dir_thr = float(cfg.get("loss.direction_threat_threshold", 0.25))
         self.residual_mix = float(cfg.get("loss.delta_residual_mix", 0.5))
         self.recall_beta = float(cfg.get("loss.recall_weight_beta", 1.0))
         self.recall_hi = float(cfg.get("loss.recall_weight_hi", 0.5))
-        self.row_list = list(cfg.get("adapter.row_weights", [0.8, 0.9, 1.0, 1.1, 1.2]))
+        self.heatmap = str(cfg.get("loss.heatmap", "bce")).lower()
+        self.bce_pos_threshold = float(cfg.get("loss.bce_pos_threshold", 0.1))
+        self.bce_pos_weight = float(cfg.get("loss.bce_pos_weight", 2.0))
+        self.appear_now_threshold = float(cfg.get("loss.bce_appear_now_threshold", 0.1))
+        self.appear_future_threshold = float(cfg.get("loss.bce_appear_future_threshold", 0.5))
+        self.appear_weight = float(cfg.get("loss.bce_appear_weight", 8.0))
+        self.blob_w = float(cfg.get("loss.blob_bce_weight", 0.35))
+        self.blob_occupied_threshold = float(cfg.get("loss.blob_occupied_threshold", 0.5))
+        self.row_list = list(cfg.get("adapter.row_weights", [1.0, 1.0, 1.0, 1.0, 1.0]))
         self.left = list(cfg.get("evaluation.left_cols", [0, 1]))
         self.center = list(cfg.get("evaluation.center_cols", [2]))
         self.right = list(cfg.get("evaluation.right_cols", [3, 4]))
@@ -56,7 +71,27 @@ class TeacherLoss:
     def _row_w(self, ref: torch.Tensor) -> torch.Tensor:
         return row_priority_weights(self.row_list, ref.device, torch.float32)
 
-    def _map(self, pred, target, mask, row_w, extra=None, recall_beta: float = 1.0):
+    def _appear_w(self, h_now: torch.Tensor | None, h_tgt: torch.Tensor) -> torch.Tensor | None:
+        if h_now is None or float(self.appear_weight) == 1.0:
+            return None
+        return appear_cell_weight(
+            h_now,
+            h_tgt,
+            now_threshold=self.appear_now_threshold,
+            future_threshold=self.appear_future_threshold,
+            weight=self.appear_weight,
+        )
+
+    def _map(self, pred, target, mask, row_w=None, extra=None, recall_beta: float = 1.0, cell_weight=None):
+        if self.heatmap != "mse":
+            return soft_bce(
+                pred,
+                target,
+                sample_mask=mask,
+                pos_threshold=self.bce_pos_threshold,
+                pos_weight=self.bce_pos_weight,
+                cell_weight=cell_weight,
+            )
         return target_weighted_mse(
             pred,
             target,
@@ -68,6 +103,16 @@ class TeacherLoss:
             extra=extra,
             recall_beta=recall_beta,
             recall_hi=self.recall_hi,
+        )
+
+    def _blob(self, pred, target, mask):
+        if self.heatmap == "mse" or float(self.blob_w) == 0.0:
+            return pred.new_zeros(())
+        return blob_bce(
+            pred,
+            target,
+            sample_mask=mask,
+            occupied_threshold=self.blob_occupied_threshold,
         )
 
     def __call__(
@@ -83,7 +128,15 @@ class TeacherLoss:
             mask = batch["amb_1s"]
             valid = ~mask if mask.dtype == torch.bool else (mask < 0.5)
             h_tgt = batch["h_1s"]
-            l_h = self._map(h_hat, h_tgt, mask=valid, row_w=row_w, recall_beta=self.recall_beta)
+            l_h = self._map(
+                h_hat,
+                h_tgt,
+                mask=valid,
+                row_w=row_w,
+                recall_beta=self.recall_beta,
+                cell_weight=self._appear_w(batch.get("h_now"), h_tgt),
+            )
+            l_blob = self._blob(h_hat, h_tgt, valid)
             l_fp = false_positive_penalty(
                 h_hat, h_tgt, sample_mask=valid, safe_threshold=self.safe_thr, margin=self.fp_margin
             )
@@ -104,12 +157,14 @@ class TeacherLoss:
                 l_bg = h_hat.new_zeros(())
             terms["L_1s"] = l_h
             terms["L_future"] = l_h
+            terms["L_blob"] = l_blob
+            terms["L_blob_1s"] = l_blob
             terms["L_FP"] = l_fp
             terms["L_FP_1s"] = l_fp
             terms["L_dir"] = l_dir
             terms["L_dir_1s"] = l_dir
             terms["L_bg"] = l_bg
-            total = l_h + self.fp_w * l_fp + self.dir_w * l_dir + self.bg_w * l_bg
+            total = l_h + self.blob_w * l_blob + self.fp_w * l_fp + self.dir_w * l_dir + self.bg_w * l_bg
             terms["L_total"] = total
             return TeacherLossOutput(total=total, terms=terms)
 
@@ -119,6 +174,7 @@ class TeacherLoss:
         terms["L_now"] = l_now
 
         future_terms = []
+        blob_terms = []
         delta_terms = []
         fp_terms = []
         dir_terms = []
@@ -127,7 +183,14 @@ class TeacherLoss:
             valid = ~mask if mask.dtype == torch.bool else (mask < 0.5)
             h_tgt = batch[f"h_{name}"]
             h_hat = out[f"Hhat_{name}"]
-            l_h = self._map(h_hat, h_tgt, mask=valid, row_w=row_w)
+            l_h = self._map(
+                h_hat,
+                h_tgt,
+                mask=valid,
+                row_w=row_w,
+                cell_weight=self._appear_w(batch.get("h_now"), h_tgt),
+            )
+            l_blob = self._blob(h_hat, h_tgt, valid)
             l_d = delta_loss(
                 out[f"Delta_{name}"],
                 h_tgt,
@@ -155,19 +218,23 @@ class TeacherLoss:
             )
             w = self.horizon_w[name]
             terms[f"L_{name}"] = l_h
+            terms[f"L_blob_{name}"] = l_blob
             terms[f"L_delta_{name}"] = l_d
             terms[f"L_FP_{name}"] = l_fp
             terms[f"L_dir_{name}"] = l_dir
             future_terms.append(w * l_h)
+            blob_terms.append(w * l_blob)
             delta_terms.append(w * l_d)
             fp_terms.append(w * l_fp)
             dir_terms.append(w * l_dir)
 
         l_future = sum(future_terms)
+        l_blob = sum(blob_terms)
         l_delta = sum(delta_terms)
         l_fp = sum(fp_terms)
         l_dir = sum(dir_terms)
         terms["L_future"] = l_future
+        terms["L_blob"] = l_blob
         terms["L_delta"] = l_delta
         terms["L_FP"] = l_fp
         terms["L_dir"] = l_dir
@@ -180,6 +247,7 @@ class TeacherLoss:
 
         total = (
             l_future
+            + self.blob_w * l_blob
             + self.now_w * l_now
             + self.delta_w * l_delta
             + self.fp_w * l_fp

@@ -12,6 +12,7 @@ from collision_jepa3.data.sampling import (
     available_horizons,
     input_indices,
     iter_anchors,
+    sample_group_anchors,
     target_indices,
     valid_anchor_range,
 )
@@ -76,6 +77,38 @@ class SamplingTests(unittest.TestCase):
         self.assertFalse(avail_420["2s"])
         avail_300 = available_horizons(300, 450)
         self.assertTrue(all(avail_300.values()))
+
+
+class GroupRandomAnchorTests(unittest.TestCase):
+    KW = dict(seed=1337, n_pre=26, n_post=14, t_min=90, t_max=419, fork_frame=365)
+
+    def test_four_clips_in_a_sample_share_timestamps(self) -> None:
+        a = sample_group_anchors("sample_0000_jaywalker", **self.KW)
+        for _ in range(4):
+            self.assertEqual(a, sample_group_anchors("sample_0000_jaywalker", **self.KW))
+        self.assertEqual(len(a), 40)
+        self.assertEqual(len(set(a)), 40)
+        self.assertEqual(a, sorted(a))
+        self.assertEqual(sum(t < 365 for t in a), 26)
+        self.assertEqual(sum(t >= 365 for t in a), 14)
+        self.assertGreaterEqual(a[0], 90)
+        self.assertLessEqual(a[-1], 419)
+        self.assertNotIn(420, a)
+
+    def test_different_samples_differ(self) -> None:
+        a = sample_group_anchors("sample_0000_jaywalker", **self.KW)
+        b = sample_group_anchors("sample_0001_cube_from_left", **self.KW)
+        self.assertNotEqual(a, b)
+        self.assertEqual(len(b), 40)
+        self.assertEqual(sum(t >= 365 for t in b), 14)
+
+    def test_config_rejects_t_max_420(self) -> None:
+        from collision_jepa3.config import Config
+
+        cfg = Config.load()
+        cfg.set("sampling.random_anchor_t_max", 420)
+        with self.assertRaises(ValueError):
+            cfg.validate()
 
 
 if __name__ == "__main__":

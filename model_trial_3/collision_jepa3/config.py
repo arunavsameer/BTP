@@ -123,6 +123,23 @@ class Config:
             raise ValueError("adapter.z_channels must be 32 (student interface)")
         if int(self.get("adapter.feature_grid")) != 5:
             raise ValueError("adapter.feature_grid must be 5")
+        decode_from = str(self.get("adapter.decode_from", "fine"))
+        if decode_from not in {"fine", "z"}:
+            raise ValueError(f"unsupported adapter.decode_from {decode_from}")
+        heatmap_pool = str(self.get("adapter.heatmap_pool", "max"))
+        if heatmap_pool not in {"max", "attn", "avg"}:
+            raise ValueError(f"unsupported adapter.heatmap_pool {heatmap_pool}")
+        heatmap_grid = int(self.get("adapter.heatmap_grid", 16))
+        if heatmap_grid < 0 or (heatmap_grid not in {0} and heatmap_grid < 5):
+            raise ValueError("adapter.heatmap_grid must be 0 (native) or >= 5")
+        pool = str(self.get("adapter.temporal_pool", "softmax"))
+        if pool not in {"softmax", "mean_last"}:
+            raise ValueError(f"unsupported adapter.temporal_pool {pool}")
+        dilations = self.get("adapter.temporal_dilations", None)
+        if dilations is not None:
+            n_blocks = int(self.get("adapter.temporal_blocks", 4))
+            if len(list(dilations)) != n_blocks:
+                raise ValueError("adapter.temporal_dilations length must match temporal_blocks")
         if int(self.get("data.target_grid")) != 5:
             raise ValueError("data.target_grid must be 5")
         hw = self.get("loss.horizon_weights", {})
@@ -139,6 +156,22 @@ class Config:
         policy = str(self.get("sampling.ambiguous_policy", "mean_target"))
         if policy not in {"mean_target", "collision_target", "mask_ambiguous_pairs", "none"}:
             raise ValueError(f"unsupported sampling.ambiguous_policy {policy}")
+        anchor_mode = str(self.get("sampling.anchor_mode", "stride"))
+        if anchor_mode not in {"stride", "group_random"}:
+            raise ValueError(f"unsupported sampling.anchor_mode {anchor_mode}")
+        if anchor_mode == "group_random":
+            n_pre = int(self.get("sampling.n_pre_fork_anchors", 0))
+            n_post = int(self.get("sampling.n_post_fork_anchors", 0))
+            if n_pre + n_post < 1:
+                raise ValueError("group_random needs n_pre_fork_anchors + n_post_fork_anchors >= 1")
+            t_max = int(self.get("sampling.random_anchor_t_max", 419))
+            n_frames = int(self.get("data.expected_frames", 450))
+            hs = list(self.get("sampling.horizons_frames", [30, 45, 60]))
+            hard_max = n_frames - 1 - min(int(x) for x in hs)
+            if t_max > hard_max:
+                raise ValueError(
+                    f"sampling.random_anchor_t_max {t_max} > last 1s-valid anchor {hard_max}"
+                )
         mode = str(self.get("heads.mode", "residual"))
         if mode not in {"residual", "direct_h1s"}:
             raise ValueError(f"unsupported heads.mode {mode}")

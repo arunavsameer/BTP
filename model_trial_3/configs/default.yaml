@@ -59,6 +59,14 @@ sampling:
   # fall off the clip. Those missing horizons are masked in the loss.
   # 450-frame clip → t_max=419; stride 15 last anchor 405 (off → last 375).
   allow_partial_horizons: true
+  # group_random: 26 pre-fork + 14 post-fork timestamps, drawn once per
+  # scenario_group_id so bg0/bg1 × collision/miss share the same t's.
+  # stride: global grid (dense dump / inspect still use train_anchor_stride).
+  anchor_mode: "group_random"
+  n_pre_fork_anchors: 26
+  n_post_fork_anchors: 14
+  random_anchor_t_min: 90
+  random_anchor_t_max: 419
   train_anchor_stride: 15
   val_anchor_stride: 15
   test_anchor_stride: 15
@@ -100,11 +108,26 @@ adapter:
   projection_channels: 128
   z_channels: 32
   feature_grid: 5
-  temporal_blocks: 2
+  # 4 blocks, dilations 1/2/1/2: extra temporal RF so a 1-tubelet RGB split
+  # after the fork is visible in Z_t. Giant stays frozen.
+  temporal_blocks: 4
   temporal_kernel: 3
   temporal_dilation: 1
+  temporal_dilations: [1, 2, 1, 2]
+  # softmax: per-location learned pool over T'. mean_last: old Phase A / alpha.
+  temporal_pool: softmax
   group_norm_groups: 8
-  row_weights: [0.8, 0.9, 1.0, 1.1, 1.2]
+  # Dilated 3×3 in H decoder (and residual Δ heads). false loads old checkpoints.
+  decoder_dilated: true
+  # Heatmap reads the 128-ch map at heatmap_grid, then pools to 5×5.
+  # Z_t stays 32×5×5 (avg-pool + bottleneck) for the student.
+  # decode_from: z restores the old decoder-on-Z_t path.
+  decode_from: fine  # fine | z
+  heatmap_grid: 16   # 0 = native token spatial (16 on Giant)
+  heatmap_pool: max  # max | attn | avg
+  # Uniform: a far-vs-near tilt is untested. Put a non-flat schedule back only
+  # if a later run shows near-row errors matter more for the user.
+  row_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
 
 lora:
   enabled: true
@@ -124,15 +147,29 @@ loss:
   direction_weight: 0.05
   background_consistency_weight: 0.02
   background_target_tolerance: 0.001
+  # Heatmap reconstruction: bce (default) or mse. Residual Δ stays MSE.
+  heatmap: bce
+  bce_pos_threshold: 0.1
+  # Occupied cells (GT > threshold) vs empty. 2 = modest extra, no row weights.
+  bce_pos_weight: 2.0
+  # Extra multiplier (on top of pos_weight) for empty-now → occupied-future cells.
+  bce_appear_now_threshold: 0.1
+  bce_appear_future_threshold: 0.5
+  bce_appear_weight: 8.0
+  # Option A: BCE on 3×3 max(pred) vs 3×3 max(GT), only occupied neighbourhoods.
+  # Lighting the true cell satisfies it; a neighbour is the fallback.
+  blob_bce_weight: 0.35
+  blob_occupied_threshold: 0.5
   threat_weight_floor: 0.05
   threat_weight_scale: 4.0
   threat_weight_gamma: 2.0
   safe_cell_threshold: 0.05
   false_positive_margin: 0.10
   direction_temperature: 0.08
-  direction_threat_threshold: 0.42
+  # Matches warning.caution_threshold so direction loss sees CAUTION+ maps.
+  direction_threat_threshold: 0.25
   delta_residual_mix: 0.5
-  # 1.0 = current L_1s. >1 multiplies weight on under-predicted GT>=0.5 cells.
+  # MSE heatmap only (unused when heatmap: bce).
   recall_weight_beta: 1.0
   recall_weight_hi: 0.5
 
@@ -169,24 +206,22 @@ training:
   max_steps: 0  # 0 = one full epoch; >0 stops training after this many optimizer steps
 
 cache:
-  cache_frames: true
+  cache_frames: false
   cache_encoder_tokens: true
-  encoder_cache_max_gb: 120
   token_cache_dtype: "float16"
   token_encode_batch_size: 8
-  frame_cache_max_gb: 80
   lru_clips_in_ram: 4
 
 evaluation:
   horizons_seconds: [1.0, 1.5, 2.0]
   high_threat_threshold: 0.5
-  caution_threshold: 0.42
-  stop_threshold: 0.70
+  caution_threshold: 0.25
+  stop_threshold: 0.60
   save_overlays: true
   # Checkpoint picking uses a seeded random subset of val clips (not anchors).
   # 05_evaluate_teacher.py still runs the full split.
   val_subset_fraction: 0.25
-  row_weights: [0.5, 0.65, 0.8, 1.0, 1.0]
+  row_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
   left_cols: [0, 1]
   center_cols: [2]
   right_cols: [3, 4]
@@ -201,11 +236,14 @@ selection:
   stop_f1_weight: 0.4
 
 warning:
-  row_weights: [0.5, 0.65, 0.8, 1.0, 1.0]
+  # Plain max over the 5×5. Row weights are not a tested urgency rule; the
+  # horizon already encodes "how soon". Post-fork check: weighted peak did not
+  # beat plain max on recall @ 5% false STOPs (see reports/dense_dump/stop_peak_plain_vs_weighted.json).
+  row_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
   left_cols: [0, 1]
   center_cols: [2]
   right_cols: [3, 4]
-  caution_threshold: 0.42
-  stop_threshold: 0.70
+  caution_threshold: 0.25
+  stop_threshold: 0.60
   confirm_frames: 3
   release_frames: 5
