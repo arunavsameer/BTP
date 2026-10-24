@@ -122,10 +122,14 @@ class CollisionTeacher3(nn.Module):
 
     def _heads(self, z_t: torch.Tensor, fine: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         feat = self._heatmap_feat(z_t, fine)
+        h_now, logits_now = self.decoder.forward_with_logits(feat)
         if self.direct_h1s:
-            return {"Z_t": z_t, "Hhat_1s": self.decoder(feat)}
-        h_now = self.decoder(feat)
-        out: dict[str, torch.Tensor] = {"Z_t": z_t, "Hhat_now": h_now}
+            return {"Z_t": z_t, "Hhat_1s": h_now, "Hhat_1s_logits": logits_now}
+        out: dict[str, torch.Tensor] = {
+            "Z_t": z_t,
+            "Hhat_now": h_now,
+            "Hhat_now_logits": logits_now,
+        }
         for name in self.horizon_names:
             z_hat = self.predictors[name](z_t)
             delta = self.delta_heads[name](z_hat - z_t)

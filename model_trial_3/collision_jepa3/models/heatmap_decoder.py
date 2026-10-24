@@ -89,10 +89,28 @@ class HeatmapDecoder(nn.Module):
         self.net = _spatial_heatmap_tower(z_channels, hidden, self.dilated)
         self.pool_score = nn.Conv2d(z_channels, 1, kernel_size=1) if mode == "attn" else None
 
+    def forward_with_logits(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        """Heatmap in [0, 1] plus 5×5 logits for BCE-with-logits.
+
+        For max-pool, sigmoid(max(logits)) = max(sigmoid(logits)), so pooling
+        logits then sigmoid matches the old pool-after-sigmoid maps.
+        """
+        logits_fine = self.net(z)
+        if self.pool == "max":
+            if logits_fine.shape[-2] != self.out_grid or logits_fine.shape[-1] != self.out_grid:
+                pooled = F.adaptive_max_pool2d(logits_fine, self.out_grid)
+            else:
+                pooled = logits_fine
+            h = torch.sigmoid(pooled).squeeze(1)
+            return h, pooled.squeeze(1)
+        h_fine = torch.sigmoid(logits_fine).squeeze(1)
+        attn_logits = self.pool_score(z) if self.pool_score is not None else None
+        h = pool_heatmap(h_fine, self.out_grid, self.pool, logits=attn_logits)
+        return h, logits_fine.squeeze(1)
+
     def forward(self, z: torch.Tensor) -> torch.Tensor:
-        h_fine = torch.sigmoid(self.net(z)).squeeze(1)
-        logits = self.pool_score(z) if self.pool_score is not None else None
-        return pool_heatmap(h_fine, self.out_grid, self.pool, logits=logits)
+        h, _logits = self.forward_with_logits(z)
+        return h
 
 
 class HeatmapDelta(nn.Module):

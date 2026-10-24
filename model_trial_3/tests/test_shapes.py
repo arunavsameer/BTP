@@ -101,6 +101,7 @@ class ShapeTests(unittest.TestCase):
         self.assertEqual(tuple(out["Z_t"].shape), (2, 32, 5, 5))
         self.assertEqual(m.decode_from, "fine")
         self.assertEqual(m.decoder.net[0].in_channels, 128)
+        self.assertEqual(tuple(out["Hhat_now_logits"].shape), (2, 5, 5))
         for k in ("Hhat_now", "Hhat_1s", "Hhat_1_5s", "Hhat_2s"):
             self.assertEqual(tuple(out[k].shape), (2, 5, 5))
             self.assertGreaterEqual(float(out[k].detach().min()), 0.0)
@@ -116,7 +117,7 @@ class ShapeTests(unittest.TestCase):
         backbone = DummyVJEPA2Backbone(hidden_size=64, crop_size=64, patch_size=16, tubelet_size=2, num_frames=16)
         m = CollisionTeacher3(cfg, backbone=backbone)
         out = m(torch.rand(2, 16, 3, 64, 64))
-        self.assertEqual(set(out), {"Z_t", "Hhat_1s"})
+        self.assertEqual(set(out), {"Z_t", "Hhat_1s", "Hhat_1s_logits"})
         self.assertEqual(tuple(out["Z_t"].shape), (2, 32, 5, 5))
         self.assertEqual(tuple(out["Hhat_1s"].shape), (2, 5, 5))
 

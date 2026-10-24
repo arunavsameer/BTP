@@ -12,9 +12,14 @@ from .direction import direction_alignment_loss
 from .heatmap import (
     appear_cell_weight,
     blob_bce,
+    blob_bce_logits,
     false_positive_penalty,
     row_priority_weights,
+    safe_peak_hinge,
+    small_blob_cell_weight,
     soft_bce,
+    soft_bce_logits,
+    stop_peak_hinge,
     target_weighted_mse,
 )
 from .residual import delta_loss
@@ -62,6 +67,21 @@ class TeacherLoss:
         self.appear_weight = float(cfg.get("loss.bce_appear_weight", 8.0))
         self.blob_w = float(cfg.get("loss.blob_bce_weight", 0.35))
         self.blob_occupied_threshold = float(cfg.get("loss.blob_occupied_threshold", 0.5))
+        self.stop_hinge_w = float(cfg.get("loss.stop_hinge_weight", 0.0))
+        self.stop_hinge_margin = float(cfg.get("loss.stop_hinge_margin", 0.05))
+        self.stop_hinge_threshold = float(
+            cfg.get("loss.stop_hinge_threshold", cfg.get("warning.stop_threshold", 0.60))
+        )
+        self.small_blob_w = float(cfg.get("loss.small_blob_weight", 1.0))
+        self.small_blob_max_cells = int(cfg.get("loss.small_blob_max_cells", 4))
+        self.small_blob_occupied_threshold = float(
+            cfg.get("loss.small_blob_occupied_threshold", self.blob_occupied_threshold)
+        )
+        self.safe_hinge_w = float(cfg.get("loss.safe_hinge_weight", 0.0))
+        self.safe_hinge_margin = float(cfg.get("loss.safe_hinge_margin", 0.0))
+        self.safe_hinge_threshold = float(
+            cfg.get("loss.safe_hinge_threshold", cfg.get("warning.caution_threshold", 0.25))
+        )
         self.row_list = list(cfg.get("adapter.row_weights", [1.0, 1.0, 1.0, 1.0, 1.0]))
         self.left = list(cfg.get("evaluation.left_cols", [0, 1]))
         self.center = list(cfg.get("evaluation.center_cols", [2]))
@@ -82,8 +102,69 @@ class TeacherLoss:
             weight=self.appear_weight,
         )
 
-    def _map(self, pred, target, mask, row_w=None, extra=None, recall_beta: float = 1.0, cell_weight=None):
+    def _small_blob_w(self, h_tgt: torch.Tensor) -> torch.Tensor | None:
+        if float(self.small_blob_w) == 1.0:
+            return None
+        return small_blob_cell_weight(
+            h_tgt,
+            stop_threshold=self.stop_hinge_threshold,
+            occupied_threshold=self.small_blob_occupied_threshold,
+            max_cells=self.small_blob_max_cells,
+            weight=self.small_blob_w,
+        )
+
+    def _cell_w(self, h_now: torch.Tensor | None, h_tgt: torch.Tensor) -> torch.Tensor | None:
+        appear = self._appear_w(h_now, h_tgt)
+        small = self._small_blob_w(h_tgt)
+        if appear is None:
+            return small
+        if small is None:
+            return appear
+        return appear * small
+
+    def _stop_hinge(self, pred, target, mask):
+        if float(self.stop_hinge_w) == 0.0:
+            return pred.new_zeros(())
+        return stop_peak_hinge(
+            pred,
+            target,
+            sample_mask=mask,
+            stop_threshold=self.stop_hinge_threshold,
+            margin=self.stop_hinge_margin,
+        )
+
+    def _safe_hinge(self, pred, target, mask):
+        if float(self.safe_hinge_w) == 0.0:
+            return pred.new_zeros(())
+        return safe_peak_hinge(
+            pred,
+            target,
+            sample_mask=mask,
+            caution_threshold=self.safe_hinge_threshold,
+            margin=self.safe_hinge_margin,
+        )
+
+    def _map(
+        self,
+        pred,
+        target,
+        mask,
+        row_w=None,
+        extra=None,
+        recall_beta: float = 1.0,
+        cell_weight=None,
+        logits=None,
+    ):
         if self.heatmap != "mse":
+            if logits is not None:
+                return soft_bce_logits(
+                    logits,
+                    target,
+                    sample_mask=mask,
+                    pos_threshold=self.bce_pos_threshold,
+                    pos_weight=self.bce_pos_weight,
+                    cell_weight=cell_weight,
+                )
             return soft_bce(
                 pred,
                 target,
@@ -105,9 +186,16 @@ class TeacherLoss:
             recall_hi=self.recall_hi,
         )
 
-    def _blob(self, pred, target, mask):
+    def _blob(self, pred, target, mask, logits=None):
         if self.heatmap == "mse" or float(self.blob_w) == 0.0:
             return pred.new_zeros(())
+        if logits is not None:
+            return blob_bce_logits(
+                logits,
+                target,
+                sample_mask=mask,
+                occupied_threshold=self.blob_occupied_threshold,
+            )
         return blob_bce(
             pred,
             target,
@@ -128,15 +216,19 @@ class TeacherLoss:
             mask = batch["amb_1s"]
             valid = ~mask if mask.dtype == torch.bool else (mask < 0.5)
             h_tgt = batch["h_1s"]
+            logits = out.get("Hhat_1s_logits")
             l_h = self._map(
                 h_hat,
                 h_tgt,
                 mask=valid,
                 row_w=row_w,
                 recall_beta=self.recall_beta,
-                cell_weight=self._appear_w(batch.get("h_now"), h_tgt),
+                cell_weight=self._cell_w(batch.get("h_now"), h_tgt),
+                logits=logits,
             )
-            l_blob = self._blob(h_hat, h_tgt, valid)
+            l_blob = self._blob(h_hat, h_tgt, valid, logits=logits)
+            l_stop = self._stop_hinge(h_hat, h_tgt, valid)
+            l_safe = self._safe_hinge(h_hat, h_tgt, valid)
             l_fp = false_positive_penalty(
                 h_hat, h_tgt, sample_mask=valid, safe_threshold=self.safe_thr, margin=self.fp_margin
             )
@@ -159,18 +251,34 @@ class TeacherLoss:
             terms["L_future"] = l_h
             terms["L_blob"] = l_blob
             terms["L_blob_1s"] = l_blob
+            terms["L_stop_hinge"] = l_stop
+            terms["L_safe_hinge"] = l_safe
             terms["L_FP"] = l_fp
             terms["L_FP_1s"] = l_fp
             terms["L_dir"] = l_dir
             terms["L_dir_1s"] = l_dir
             terms["L_bg"] = l_bg
-            total = l_h + self.blob_w * l_blob + self.fp_w * l_fp + self.dir_w * l_dir + self.bg_w * l_bg
+            total = (
+                l_h
+                + self.blob_w * l_blob
+                + self.stop_hinge_w * l_stop
+                + self.safe_hinge_w * l_safe
+                + self.fp_w * l_fp
+                + self.dir_w * l_dir
+                + self.bg_w * l_bg
+            )
             terms["L_total"] = total
             return TeacherLossOutput(total=total, terms=terms)
 
         h_now_hat = out["Hhat_now"]
         row_w = self._row_w(h_now_hat)
-        l_now = self._map(h_now_hat, batch["h_now"], mask=None, row_w=row_w)
+        l_now = self._map(
+            h_now_hat,
+            batch["h_now"],
+            mask=None,
+            row_w=row_w,
+            logits=out.get("Hhat_now_logits"),
+        )
         terms["L_now"] = l_now
 
         future_terms = []
@@ -188,7 +296,7 @@ class TeacherLoss:
                 h_tgt,
                 mask=valid,
                 row_w=row_w,
-                cell_weight=self._appear_w(batch.get("h_now"), h_tgt),
+                cell_weight=self._cell_w(batch.get("h_now"), h_tgt),
             )
             l_blob = self._blob(h_hat, h_tgt, valid)
             l_d = delta_loss(

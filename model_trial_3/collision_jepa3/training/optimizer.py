@@ -20,13 +20,12 @@ def build_param_groups(adapter_params, lora_params, adapter_lr: float, lora_lr: 
     return groups
 
 
-def build_scheduler(optimizer, epochs: int, min_lr: float):
+def build_scheduler(optimizer, epochs: int, min_lr: float, warmup_epochs: int = 1):
     if epochs <= 0:
         return None
-    warmup = max(1, min(1, epochs))
-    # Tiny linear warmup of 1 epoch then cosine.
     if epochs == 1:
         return CosineAnnealingLR(optimizer, T_max=1, eta_min=min_lr)
-    warm = LinearLR(optimizer, start_factor=0.2, total_iters=1)
-    cosine = CosineAnnealingLR(optimizer, T_max=max(epochs - 1, 1), eta_min=min_lr)
-    return SequentialLR(optimizer, schedulers=[warm, cosine], milestones=[1])
+    warm_n = max(1, min(int(warmup_epochs), max(int(epochs) - 1, 1)))
+    warm = LinearLR(optimizer, start_factor=0.2, total_iters=warm_n)
+    cosine = CosineAnnealingLR(optimizer, T_max=max(int(epochs) - warm_n, 1), eta_min=min_lr)
+    return SequentialLR(optimizer, schedulers=[warm, cosine], milestones=[warm_n])

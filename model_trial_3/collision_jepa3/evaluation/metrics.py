@@ -75,6 +75,7 @@ class HorizonAccumulator:
         self.n_stop_frames = 0
         self.nuisance_n = 0
         self.miss_n = 0
+        self.safe_stop_n = 0
         self.by_outcome: dict[str, list[float]] = {}
         self.by_background: dict[str, list[float]] = {}
         self.by_scenario: dict[str, list[float]] = {}
@@ -82,6 +83,12 @@ class HorizonAccumulator:
         self.post_fork_n = 0
         self.pre_fork_mse = 0.0
         self.post_fork_mse = 0.0
+        self.pre_fork_stop_tp = 0
+        self.pre_fork_stop_n = 0
+        self.post_fork_stop_tp = 0
+        self.post_fork_stop_n = 0
+        self.post_fork_safe_n = 0
+        self.post_fork_safe_stop_n = 0
 
     def update(
         self,
@@ -129,6 +136,7 @@ class HorizonAccumulator:
         if t_sev == SAFE:
             self.n_safe_frames += 1
             self.nuisance_n += int(p_sev >= CAUTION)
+            self.safe_stop_n += int(p_sev >= STOP)
         if t_sev >= STOP:
             self.n_stop_frames += 1
             self.miss_n += int(p_sev == SAFE)
@@ -139,9 +147,18 @@ class HorizonAccumulator:
         if pre_fork:
             self.pre_fork_n += 1
             self.pre_fork_mse += mse
+            if t_stop:
+                self.pre_fork_stop_n += 1
+                self.pre_fork_stop_tp += int(p_stop)
         else:
             self.post_fork_n += 1
             self.post_fork_mse += mse
+            if t_stop:
+                self.post_fork_stop_n += 1
+                self.post_fork_stop_tp += int(p_stop)
+            if t_sev == SAFE:
+                self.post_fork_safe_n += 1
+                self.post_fork_safe_stop_n += int(p_stop)
 
     def summary(self) -> dict[str, float]:
         mse = self.sq / self.cells if self.cells else float("nan")
@@ -169,8 +186,23 @@ class HorizonAccumulator:
             "stop_f1": stop_f1,
             "nuisance": nuisance,
             "miss": miss,
+            "safe_recall": (1.0 - nuisance) if self.n_safe_frames else float("nan"),
+            "safe_stop_rate": (
+                self.safe_stop_n / self.n_safe_frames if self.n_safe_frames else float("nan")
+            ),
             "pre_fork_mse": self.pre_fork_mse / self.pre_fork_n if self.pre_fork_n else float("nan"),
             "post_fork_mse": self.post_fork_mse / self.post_fork_n if self.post_fork_n else float("nan"),
             "pre_fork_n": float(self.pre_fork_n),
             "post_fork_n": float(self.post_fork_n),
+            "pre_fork_stop_recall": (
+                self.pre_fork_stop_tp / self.pre_fork_stop_n if self.pre_fork_stop_n else float("nan")
+            ),
+            "post_fork_stop_recall": (
+                self.post_fork_stop_tp / self.post_fork_stop_n if self.post_fork_stop_n else float("nan")
+            ),
+            "pre_fork_stop_n": float(self.pre_fork_stop_n),
+            "post_fork_stop_n": float(self.post_fork_stop_n),
+            "post_fork_safe_stop_rate": (
+                self.post_fork_safe_stop_n / self.post_fork_safe_n if self.post_fork_safe_n else float("nan")
+            ),
         }

@@ -160,6 +160,18 @@ loss:
   # Lighting the true cell satisfies it; a neighbour is the fallback.
   blob_bce_weight: 0.35
   blob_occupied_threshold: 0.5
+  # Frame STOP hinge: if max(GT) >= 0.60, push max(pred) to 0.65. 0 = off.
+  stop_hinge_weight: 0.0
+  stop_hinge_margin: 0.05
+  stop_hinge_threshold: 0.60
+  # Dual of STOP hinge: if max(GT) is SAFE, push max(pred) below CAUTION.
+  safe_hinge_weight: 0.0
+  safe_hinge_margin: 0.0
+  safe_hinge_threshold: 0.25
+  # Extra cell weight on STOP maps with few occupied cells. 1 = off.
+  small_blob_weight: 1.0
+  small_blob_max_cells: 4
+  small_blob_occupied_threshold: 0.5
   threat_weight_floor: 0.05
   threat_weight_scale: 4.0
   threat_weight_gamma: 2.0
@@ -175,21 +187,31 @@ loss:
 
 optimizer:
   name: "AdamW"
-  adapter_lr: 0.001
+  # 3e-4: group-random 40 has ~1.8× more steps/epoch than stride 15.
+  adapter_lr: 0.0003
   lora_lr: 0.0001
   lora_adapter_lr: 0.0002
   weight_decay: 0.0001
   grad_clip_norm: 1.0
   scheduler: "cosine"
+  warmup_epochs: 5
   min_lr: 0.000001
 
 training:
   frozen_epochs: 8
   lora_epochs: 10
   patience: 4
+  # Do not count early-stop patience until this epoch (0 = from the start).
+  patience_start_epoch: 0
+  # prefork_stop: raise pre-fork STOP recall only while post-fork STOP stays >= floor.
+  post_fork_stop_floor: 0.90
+  safe_recall_floor: 0.82
+  stop_recall_floor: 0.75
+  max_safe_stop_rate: 0.08
   # selection: documented composite score (Phase A).
   # val_mse: stop after `patience` epochs where val heatmap MSE did not fall
   # vs the previous epoch; best.pt is that last improving epoch (x - patience).
+  # prefork_stop: pre-fork STOP frame recall with a post-fork STOP floor.
   early_stop_metric: selection
   micro_batch_size: 8
   gradient_accumulation_steps: 1

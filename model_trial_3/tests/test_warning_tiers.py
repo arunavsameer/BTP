@@ -11,7 +11,7 @@ sys.path.insert(0, str(ROOT))
 
 from collision_jepa3.config import Config
 from collision_jepa3.evaluation.labels import DEFAULT_WARNING, heatmap_near_row_max
-from collision_jepa3.evaluation.metrics import SAFE, CAUTION, STOP, classify_heatmap
+from collision_jepa3.evaluation.metrics import SAFE, CAUTION, STOP, HorizonAccumulator, classify_heatmap
 
 
 class WarningTierTests(unittest.TestCase):
@@ -41,6 +41,19 @@ class WarningTierTests(unittest.TestCase):
         self.assertEqual(sev(0.25), CAUTION)
         self.assertEqual(sev(0.59), CAUTION)
         self.assertEqual(sev(0.60), STOP)
+
+    def test_fork_stop_recall_splits(self) -> None:
+        acc = HorizonAccumulator("1s", warning=DEFAULT_WARNING)
+        stop = np.zeros((5, 5), dtype=np.float32)
+        stop[2, 2] = 0.9
+        safe = np.zeros((5, 5), dtype=np.float32)
+        acc.update(safe, stop, masked=False, outcome="collision", background="bg0", scenario="x", pre_fork=True)
+        acc.update(stop, stop, masked=False, outcome="collision", background="bg0", scenario="x", pre_fork=False)
+        s = acc.summary()
+        self.assertEqual(s["pre_fork_stop_n"], 1.0)
+        self.assertEqual(s["pre_fork_stop_recall"], 0.0)
+        self.assertEqual(s["post_fork_stop_n"], 1.0)
+        self.assertEqual(s["post_fork_stop_recall"], 1.0)
 
 
 if __name__ == "__main__":

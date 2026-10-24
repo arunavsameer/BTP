@@ -19,7 +19,17 @@ from ..utils.device import describe_hardware, select_amp_dtype
 from ..utils.logging import JsonlLogger
 from .checkpoint import extract_teacher_state, load_checkpoint, load_teacher_state, save_checkpoint
 from .early_stopping import EarlyStopping
-from .engine import assert_finite, current_lrs, horizon_mse, move_batch, selection_better, teacher_forward
+from .engine import (
+    assert_finite,
+    current_lrs,
+    horizon_mse,
+    move_batch,
+    balanced_warning_better,
+    prefork_stop_better,
+    recall5_better,
+    selection_better,
+    teacher_forward,
+)
 from .optimizer import build_param_groups, build_scheduler
 
 logger = logging.getLogger("collision_jepa3.trainer")
@@ -145,7 +155,12 @@ class TeacherTrainer:
                 float(self.cfg.get("optimizer.weight_decay", 0.0001)),
             )
         opt = torch.optim.AdamW(groups)
-        sch = build_scheduler(opt, epochs, float(self.cfg.get("optimizer.min_lr", 1e-6)))
+        sch = build_scheduler(
+            opt,
+            epochs,
+            float(self.cfg.get("optimizer.min_lr", 1e-6)),
+            warmup_epochs=int(self.cfg.get("optimizer.warmup_epochs", 1)),
+        )
         return opt, sch
 
     def _state(self, phase: str, epoch: int, optimizer, scheduler, extra: dict) -> dict[str, Any]:
@@ -218,10 +233,14 @@ class TeacherTrainer:
             logger.info("resumed %s from epoch %d step %d", phase, start_epoch, self.global_step)
         stopper = EarlyStopping(int(self.cfg.get("training.patience", 4)))
         stop_metric = str(self.cfg.get("training.early_stop_metric", "selection"))
-        if stop_metric not in {"selection", "val_mse", "recall_at_5fa"}:
+        if stop_metric not in {"selection", "val_mse", "recall_at_5fa", "prefork_stop", "balanced_warning"}:
             raise ValueError(f"unsupported training.early_stop_metric {stop_metric}")
+        patience_start = int(self.cfg.get("training.patience_start_epoch", 0))
+        post_floor = float(self.cfg.get("training.post_fork_stop_floor", 0.90))
+        safe_floor = float(self.cfg.get("training.safe_recall_floor", 0.82))
+        stop_floor = float(self.cfg.get("training.stop_recall_floor", 0.75))
+        max_safe_stop = float(self.cfg.get("training.max_safe_stop_rate", 0.08))
         prev_val_mse: float | None = None
-        prev_recall5: float | None = None
         accum = max(1, int(self.cfg.get("training.gradient_accumulation_steps", 1)))
         clip_norm = float(self.cfg.get("optimizer.grad_clip_norm", 1.0))
         last_name = f"teacher_phase_{'a' if phase == 'frozen' else 'b'}_last.pt"
@@ -267,11 +286,23 @@ class TeacherTrainer:
             sel = val.get("selection", {})
             mse = horizon_mse(val, self.cfg)
             operating = val.get("operating") or {}
+            h1s = (val.get("horizons") or {}).get("1s") or {}
             rec5 = float(operating.get("recall_at_5fa", float("nan")))
             if stop_metric == "val_mse":
                 better = prev_val_mse is None or (mse == mse and mse < prev_val_mse)
             elif stop_metric == "recall_at_5fa":
-                better = prev_recall5 is None or (rec5 == rec5 and rec5 > prev_recall5)
+                better = recall5_better(operating, self.best_sel)
+            elif stop_metric == "prefork_stop":
+                better = prefork_stop_better(h1s, self.best_sel, post_floor=post_floor)
+            elif stop_metric == "balanced_warning":
+                better = balanced_warning_better(
+                    h1s,
+                    self.best_sel,
+                    post_floor=post_floor,
+                    safe_floor=safe_floor,
+                    stop_floor=stop_floor,
+                    max_safe_stop=max_safe_stop,
+                )
             else:
                 better = selection_better(sel, self.best_sel)
             blob = self._state(phase, epoch, opt, sch, {"val": val, "train": train_means})
@@ -284,7 +315,17 @@ class TeacherTrainer:
                 tagged["best_epoch"] = epoch
                 tagged.update({k: operating.get(k) for k in (
                     "recall_at_5fa", "ap_high", "mean_pred_gt80", "mse",
-                    "threshold_5fa", "fa_at_0.5", "recall_at_0.5",
+                    "threshold_5fa", "fa_achieved_5fa", "fa_at_0.5", "recall_at_0.5",
+                )})
+                tagged.update({k: h1s.get(k) for k in (
+                    "pre_fork_stop_recall",
+                    "post_fork_stop_recall",
+                    "pre_fork_stop_n",
+                    "post_fork_stop_n",
+                    "post_fork_safe_stop_rate",
+                    "safe_recall",
+                    "stop_recall",
+                    "safe_stop_rate",
                 )})
                 self.best_sel = tagged
                 self._save(best_name, blob)
@@ -298,31 +339,47 @@ class TeacherTrainer:
                 "val_selection": sel,
                 "val_mse": mse,
                 "val_operating": operating,
+                "val_fork_stop": {
+                    "pre_fork_stop_recall": h1s.get("pre_fork_stop_recall"),
+                    "post_fork_stop_recall": h1s.get("post_fork_stop_recall"),
+                    "post_fork_safe_stop_rate": h1s.get("post_fork_safe_stop_rate"),
+                    "safe_recall": h1s.get("safe_recall"),
+                    "stop_recall": h1s.get("stop_recall"),
+                    "safe_stop_rate": h1s.get("safe_stop_rate"),
+                },
                 "gpu": describe_hardware(self.device),
             }
             self.log.write(rec)
             history.append(rec)
             logger.info(
-                "phase=%s epoch=%d L_total=%.4f val_mse=%.5f rec@5FA=%s AP=%s mean_gt80=%s val_score=%s time=%.1fs",
+                "phase=%s epoch=%d L_total=%.4f val_mse=%.5f rec@5FA=%s AP=%s SAFE=%s STOP=%s FAstop=%s preSTOP=%s postSTOP=%s time=%.1fs",
                 phase,
                 epoch,
                 train_means.get("L_total", float("nan")),
                 mse,
                 operating.get("recall_at_5fa"),
                 operating.get("ap_high"),
-                operating.get("mean_pred_gt80"),
-                sel.get("score"),
+                h1s.get("safe_recall"),
+                h1s.get("stop_recall"),
+                h1s.get("safe_stop_rate"),
+                h1s.get("pre_fork_stop_recall"),
+                h1s.get("post_fork_stop_recall"),
                 dt,
             )
             if stop_metric == "val_mse":
                 prev_val_mse = mse
-            elif stop_metric == "recall_at_5fa":
-                prev_recall5 = rec5
-            if stopper.step(better):
+            if epoch < patience_start:
+                stopper.step(True)
+            elif stopper.step(better):
                 keep = None if self.best_sel is None else self.best_sel.get("best_epoch")
-                why = {"val_mse": "val_mse", "recall_at_5fa": "recall_at_5fa"}.get(stop_metric, "val_score")
+                why = {
+                    "val_mse": "val_mse",
+                    "recall_at_5fa": "recall_at_5fa",
+                    "prefork_stop": "pre_fork_stop_recall",
+                    "balanced_warning": "min(SAFE,STOP) recall",
+                }.get(stop_metric, "val_score")
                 logger.info(
-                    "early stopping at epoch %d (%s did not improve for %d epochs); keeping epoch %s",
+                    "early stopping at epoch %d (%s did not improve for %d epochs after warmup); keeping epoch %s",
                     epoch,
                     why,
                     stopper.patience,

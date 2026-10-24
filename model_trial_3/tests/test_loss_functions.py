@@ -14,9 +14,14 @@ from collision_jepa3.losses.composite import TeacherLoss
 from collision_jepa3.losses.heatmap import (
     appear_cell_weight,
     blob_bce,
+    blob_bce_logits,
     false_positive_penalty,
     maxpool3x3,
+    safe_peak_hinge,
+    small_blob_cell_weight,
     soft_bce,
+    soft_bce_logits,
+    stop_peak_hinge,
     target_weighted_mse,
 )
 
@@ -233,6 +238,27 @@ class LossTests(unittest.TestCase):
         self.assertIsNotNone(pred.grad)
         self.assertTrue(torch.isfinite(pred.grad).all())
 
+    def test_soft_bce_logits_near_zero_has_grad(self) -> None:
+        logits = torch.full((1, 5, 5), -40.0, requires_grad=True)
+        tgt = torch.zeros(1, 5, 5)
+        tgt[0, 2, 2] = 1.0
+        loss = soft_bce_logits(logits, tgt, pos_weight=2.0)
+        loss.backward()
+        self.assertTrue(torch.isfinite(loss))
+        self.assertIsNotNone(logits.grad)
+        self.assertLess(float(logits.grad[0, 2, 2]), 0.0)
+        self.assertTrue(torch.isfinite(logits.grad).all())
+
+    def test_blob_bce_logits_near_zero_has_grad(self) -> None:
+        logits = torch.full((1, 5, 5), -40.0, requires_grad=True)
+        tgt = torch.zeros(1, 5, 5)
+        tgt[0, 2, 2] = 0.9
+        loss = blob_bce_logits(logits, tgt)
+        loss.backward()
+        self.assertGreater(float(loss), 0.0)
+        self.assertTrue(torch.isfinite(logits.grad).all())
+        self.assertLess(float(logits.grad[0, 2, 2]), 0.0)
+
     def test_recall_beta_one_matches_default(self) -> None:
         pred = torch.rand(2, 5, 5)
         tgt = torch.rand(2, 5, 5)
@@ -249,6 +275,97 @@ class LossTests(unittest.TestCase):
         a = target_weighted_mse(pred, tgt, recall_beta=1.0)
         b = target_weighted_mse(pred, tgt, recall_beta=8.0)
         self.assertGreater(float(b), float(a))
+
+    def test_stop_peak_hinge_only_on_gt_stop(self) -> None:
+        pred = torch.full((2, 5, 5), 0.40)
+        tgt = torch.zeros(2, 5, 5)
+        tgt[0, 2, 2] = 0.80
+        tgt[1, 2, 2] = 0.20
+        loss = stop_peak_hinge(pred, tgt, stop_threshold=0.60, margin=0.05)
+        self.assertAlmostEqual(float(loss), 0.25, places=5)
+        pred_ok = pred.clone()
+        pred_ok[0, 2, 2] = 0.70
+        self.assertEqual(float(stop_peak_hinge(pred_ok, tgt, stop_threshold=0.60, margin=0.05)), 0.0)
+        amb = torch.tensor([True, False])
+        self.assertEqual(float(stop_peak_hinge(pred, tgt, sample_mask=~amb)), 0.0)
+
+    def test_stop_peak_hinge_has_grad_on_peak_cell(self) -> None:
+        base = torch.zeros(1, 5, 5)
+        base[0, 1, 1] = 0.20
+        pred = base.clone().requires_grad_(True)
+        tgt = torch.zeros(1, 5, 5)
+        tgt[0, 1, 1] = 0.90
+        stop_peak_hinge(pred, tgt).backward()
+        self.assertIsNotNone(pred.grad)
+        self.assertLess(float(pred.grad[0, 1, 1]), 0.0)
+
+    def test_small_blob_upweights_two_cell_stop_not_large(self) -> None:
+        small = torch.zeros(1, 5, 5)
+        small[0, 2, 2] = 0.80
+        small[0, 2, 3] = 0.70
+        w_small = small_blob_cell_weight(small, weight=4.0, max_cells=4)
+        self.assertEqual(float(w_small[0, 2, 2]), 4.0)
+        self.assertEqual(float(w_small[0, 0, 0]), 1.0)
+        large = torch.zeros(1, 5, 5)
+        large[0, :2, :4] = 0.90
+        w_large = small_blob_cell_weight(large, weight=4.0, max_cells=4)
+        self.assertTrue(torch.equal(w_large, torch.ones_like(large)))
+
+    def test_composite_hinge_and_small_blob_raise_missed_small_stop(self) -> None:
+        cfg = Config.load()
+        cfg.set("heads.mode", "direct_h1s")
+        cfg.set("loss.stop_hinge_weight", 0.0)
+        cfg.set("loss.small_blob_weight", 1.0)
+        pred = torch.full((1, 5, 5), 0.20, requires_grad=True)
+        tgt = torch.zeros(1, 5, 5)
+        tgt[0, 2, 2] = 0.80
+        h_now = tgt.clone()
+        amb = torch.zeros(1, dtype=torch.bool)
+        batch = {"h_1s": tgt, "h_now": h_now, "amb_1s": amb}
+        out = {"Hhat_1s": pred, "Z_t": torch.zeros(1, 32, 5, 5)}
+        base = TeacherLoss(cfg)(out, batch)
+        cfg.set("loss.stop_hinge_weight", 1.0)
+        cfg.set("loss.small_blob_weight", 4.0)
+        boosted = TeacherLoss(cfg)(out, batch)
+        self.assertGreater(float(boosted.total), float(base.total))
+        self.assertGreater(float(boosted.terms["L_stop_hinge"]), 0.0)
+        boosted.total.backward()
+        self.assertTrue(torch.isfinite(pred.grad).all())
+
+    def test_safe_peak_hinge_only_on_gt_safe(self) -> None:
+        pred = torch.full((2, 5, 5), 0.50)
+        tgt = torch.zeros(2, 5, 5)
+        tgt[0, 2, 2] = 0.05
+        tgt[1, 2, 2] = 0.80
+        loss = safe_peak_hinge(pred, tgt, caution_threshold=0.25, margin=0.0)
+        self.assertAlmostEqual(float(loss), 0.25, places=5)
+        quiet = pred.clone()
+        quiet[0] = 0.10
+        self.assertEqual(float(safe_peak_hinge(quiet, tgt, caution_threshold=0.25)), 0.0)
+
+    def test_safe_hinge_does_not_touch_stop_maps(self) -> None:
+        pred = torch.full((1, 5, 5), 0.90)
+        tgt = torch.zeros(1, 5, 5)
+        tgt[0, 2, 2] = 0.80
+        self.assertEqual(float(safe_peak_hinge(pred, tgt)), 0.0)
+
+    def test_composite_safe_hinge_raises_false_stop(self) -> None:
+        cfg = Config.load()
+        cfg.set("heads.mode", "direct_h1s")
+        cfg.set("loss.stop_hinge_weight", 0.0)
+        cfg.set("loss.safe_hinge_weight", 0.0)
+        cfg.set("loss.small_blob_weight", 1.0)
+        pred = torch.full((1, 5, 5), 0.70, requires_grad=True)
+        tgt = torch.zeros(1, 5, 5)
+        batch = {"h_1s": tgt, "h_now": tgt, "amb_1s": torch.zeros(1, dtype=torch.bool)}
+        out = {"Hhat_1s": pred, "Z_t": torch.zeros(1, 32, 5, 5)}
+        base = TeacherLoss(cfg)(out, batch)
+        cfg.set("loss.safe_hinge_weight", 1.0)
+        quiet = TeacherLoss(cfg)(out, batch)
+        self.assertGreater(float(quiet.total), float(base.total))
+        self.assertGreater(float(quiet.terms["L_safe_hinge"]), 0.0)
+        quiet.total.backward()
+        self.assertTrue(torch.isfinite(pred.grad).all())
 
 
 if __name__ == "__main__":

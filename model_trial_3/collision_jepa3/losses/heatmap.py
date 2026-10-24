@@ -49,6 +49,82 @@ def appear_cell_weight(
     return torch.where(appear, w * float(weight), w)
 
 
+def small_blob_cell_weight(
+    target: torch.Tensor,
+    *,
+    stop_threshold: float = 0.60,
+    occupied_threshold: float = 0.5,
+    max_cells: int = 4,
+    weight: float = 4.0,
+) -> torch.Tensor:
+    """Upweight occupied cells on small STOP maps. Large blobs stay at 1.0.
+
+    A 2-cell pre-fork STOP would otherwise be drowned by a 7-cell post-fork map
+    in the cell-average BCE. This does not downweight large blobs.
+    """
+    tgt = target.float()
+    w = torch.ones_like(tgt)
+    if float(weight) == 1.0:
+        return w
+    occupied = tgt >= float(occupied_threshold)
+    n_occ = occupied.flatten(1).sum(dim=1)
+    peak = tgt.flatten(1).max(dim=1).values
+    small = (peak >= float(stop_threshold)) & (n_occ > 0) & (n_occ <= int(max_cells))
+    if not bool(small.any()):
+        return w
+    scale = torch.where(small, torch.full_like(n_occ, float(weight)), torch.ones_like(n_occ))
+    return torch.where(occupied, w * scale.view(-1, 1, 1), w)
+
+
+def stop_peak_hinge(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    stop_threshold: float = 0.60,
+    margin: float = 0.05,
+) -> torch.Tensor:
+    """If GT peak is STOP, push pred peak to stop_threshold + margin. Else 0.
+
+    SAFE/THREAT windows do not contribute, so miss-clip empty maps are untouched.
+    Post-fork STOP maps that already peak above the cut give ~0.
+    """
+    pred_peak = pred.float().flatten(1).max(dim=1).values
+    gt_peak = target.float().flatten(1).max(dim=1).values
+    need = gt_peak >= float(stop_threshold)
+    if sample_mask is not None:
+        need = need & sample_mask.to(dtype=torch.bool, device=pred.device).view(-1)
+    if not bool(need.any()):
+        return pred.new_zeros(())
+    gap = (float(stop_threshold) + float(margin) - pred_peak).clamp(min=0.0)
+    return gap[need].mean()
+
+
+def safe_peak_hinge(
+    pred: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    caution_threshold: float = 0.25,
+    margin: float = 0.0,
+) -> torch.Tensor:
+    """If GT peak is SAFE, push pred peak below the CAUTION cut. Else 0.
+
+    Dual of ``stop_peak_hinge``. True STOP windows are excluded, so STOP recall
+    is not pulled down. False STOP/THREAT on empty maps is.
+    """
+    pred_peak = pred.float().flatten(1).max(dim=1).values
+    gt_peak = target.float().flatten(1).max(dim=1).values
+    need = gt_peak < float(caution_threshold)
+    if sample_mask is not None:
+        need = need & sample_mask.to(dtype=torch.bool, device=pred.device).view(-1)
+    if not bool(need.any()):
+        return pred.new_zeros(())
+    cap = float(caution_threshold) - float(margin)
+    gap = (pred_peak - cap).clamp(min=0.0)
+    return gap[need].mean()
+
+
 def soft_bce(
     pred: torch.Tensor,
     target: torch.Tensor,
@@ -81,6 +157,75 @@ def soft_bce(
             return pred.new_zeros(())
     denom = w.sum().clamp(min=eps)
     return (bce * w).sum() / denom
+
+
+def _bce_cell_weights(
+    target: torch.Tensor,
+    *,
+    pos_threshold: float,
+    pos_weight: float,
+    cell_weight: torch.Tensor | None,
+    sample_mask: torch.Tensor | None,
+    eps: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    w = torch.ones_like(target, dtype=torch.float32)
+    if float(pos_weight) != 1.0:
+        w = torch.where(target > float(pos_threshold), w * float(pos_weight), w)
+    if cell_weight is not None:
+        w = w * cell_weight.to(dtype=w.dtype, device=w.device)
+    if sample_mask is not None:
+        sm = sample_mask.to(dtype=w.dtype, device=w.device).view(-1, 1, 1)
+        w = w * sm
+        if float(sample_mask.sum()) <= 0:
+            return w, target.new_zeros(())
+    denom = w.sum().clamp(min=eps)
+    return w, denom
+
+
+def soft_bce_logits(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    pos_threshold: float = 0.1,
+    pos_weight: float = 2.0,
+    cell_weight: torch.Tensor | None = None,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Per-cell BCE-with-logits. Near-zero maps still get gradient."""
+    logits = logits.float()
+    target = target.float().clamp(0.0, 1.0)
+    bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    w, denom = _bce_cell_weights(
+        target,
+        pos_threshold=pos_threshold,
+        pos_weight=pos_weight,
+        cell_weight=cell_weight,
+        sample_mask=sample_mask,
+        eps=eps,
+    )
+    if float(denom) == 0.0:
+        return logits.new_zeros(())
+    return (bce * w).sum() / denom
+
+
+def blob_bce_logits(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    occupied_threshold: float = 0.5,
+) -> torch.Tensor:
+    """BCE-with-logits on 3×3 max(logits) vs 3×3 max(GT), occupied neighbourhoods only."""
+    logit_max = maxpool3x3(logits)
+    t = maxpool3x3(target).clamp(0.0, 1.0)
+    keep = t >= float(occupied_threshold)
+    if sample_mask is not None:
+        keep = keep & sample_mask.to(dtype=torch.bool, device=logits.device).view(-1, 1, 1)
+    if not bool(keep.any()):
+        return logits.new_zeros(())
+    bce = F.binary_cross_entropy_with_logits(logit_max, t, reduction="none")
+    return bce[keep].mean()
 
 
 def maxpool3x3(x: torch.Tensor) -> torch.Tensor:

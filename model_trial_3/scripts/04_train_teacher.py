@@ -19,6 +19,7 @@ from collision_jepa3.data.preprocessing import signature_from_cfg  # noqa: E402
 from collision_jepa3.data.splits import load_splits  # noqa: E402
 from collision_jepa3.models.teacher import CollisionTeacher3  # noqa: E402
 from collision_jepa3.reproducibility import configure_runtime, set_seed  # noqa: E402
+from collision_jepa3.training.checkpoint import load_checkpoint, load_teacher_state  # noqa: E402
 from collision_jepa3.training.trainer import TeacherTrainer  # noqa: E402
 from collision_jepa3.utils.device import describe_hardware, resolve_device  # noqa: E402
 from collision_jepa3.utils.logging import setup_logger  # noqa: E402
@@ -29,6 +30,11 @@ def main() -> None:
     parser.add_argument("--phase", choices=["frozen", "lora", "both"], default="frozen")
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--resume-from", default=None)
+    parser.add_argument(
+        "--init-from",
+        default=None,
+        help="Load adapter/decoder weights only (fresh optimizer, new run dir). Does not resume epoch.",
+    )
     parser.add_argument("--dummy", action="store_true", help="Train a dummy encoder (debug only)")
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dry-run", action="store_true")
@@ -39,7 +45,16 @@ def main() -> None:
     parser.add_argument("--bg-weight", type=float, default=None, help="Override loss.background_consistency_weight")
     parser.add_argument("--heads-mode", choices=["residual", "direct_h1s"], default=None)
     parser.add_argument("--patience", type=int, default=None)
-    parser.add_argument("--early-stop-metric", choices=["selection", "val_mse", "recall_at_5fa"], default=None)
+    parser.add_argument("--patience-start-epoch", type=int, default=None)
+    parser.add_argument("--post-fork-stop-floor", type=float, default=None)
+    parser.add_argument("--stop-hinge-weight", type=float, default=None)
+    parser.add_argument("--safe-hinge-weight", type=float, default=None)
+    parser.add_argument("--small-blob-weight", type=float, default=None)
+    parser.add_argument(
+        "--early-stop-metric",
+        choices=["selection", "val_mse", "recall_at_5fa", "prefork_stop", "balanced_warning"],
+        default=None,
+    )
     parser.add_argument("--recall-beta", type=float, default=None, help="L_1s extra weight on under-predicted high-threat cells")
     parser.add_argument("--val-subset-fraction", type=float, default=None)
     parser.add_argument("--checkpoint-root", default=None)
@@ -63,6 +78,16 @@ def main() -> None:
         cfg.set("heads.mode", args.heads_mode)
     if args.patience is not None:
         cfg.set("training.patience", int(args.patience))
+    if args.patience_start_epoch is not None:
+        cfg.set("training.patience_start_epoch", int(args.patience_start_epoch))
+    if args.post_fork_stop_floor is not None:
+        cfg.set("training.post_fork_stop_floor", float(args.post_fork_stop_floor))
+    if args.stop_hinge_weight is not None:
+        cfg.set("loss.stop_hinge_weight", float(args.stop_hinge_weight))
+    if args.safe_hinge_weight is not None:
+        cfg.set("loss.safe_hinge_weight", float(args.safe_hinge_weight))
+    if args.small_blob_weight is not None:
+        cfg.set("loss.small_blob_weight", float(args.small_blob_weight))
     if args.early_stop_metric is not None:
         cfg.set("training.early_stop_metric", args.early_stop_metric)
     if args.recall_beta is not None:
@@ -118,6 +143,12 @@ def main() -> None:
     )
     model = CollisionTeacher3(cfg, dummy_backbone=dummy)
     model.to(device)
+    if args.init_from:
+        init_path = Path(args.init_from)
+        if not init_path.exists():
+            raise SystemExit(f"--init-from missing: {init_path}")
+        load_teacher_state(model, load_checkpoint(init_path, map_location=device))
+        log.info("initialized adapter/decoder from %s (fresh optimizer)", init_path)
     log.info("audit %s", model.parameter_audit())
     if args.dry_run:
         print("dry-run OK", model.parameter_audit())
