@@ -76,7 +76,15 @@ _FAMILIES: dict[str, tuple[str, ...]] = {
         "shape_near_miss", "shape_head_on", "shape_from_left", "shape_from_right",
         "shapes_on_path",
     ),
-    "ped": ("oncoming_pedestrian", "parallel_pedestrian", "sudden_stop", "child_darting"),
+    "ped": (
+        "oncoming_pedestrian",
+        "parallel_pedestrian",
+        "same_dir_closing",
+        "same_dir_hold",
+        "same_dir_pulling",
+        "sudden_stop",
+        "child_darting",
+    ),
     "erratic_car": ("car_erratic_swerve", "car_runs_off_road"),
     "crossing": (
         "crossing_street",
@@ -582,7 +590,7 @@ def _self_test() -> None:
     assert not mixed_names.issubset(CLEAR_CENTER_SCENARIOS)
     fps = int(cfg["render"]["fps"])
     assert int(round(15.0 * fps)) == int(cfg["render"]["frames_per_episode"])
-    from outcome_groups import MISS_SIDES, build_group_plan, iter_clips
+    from outcome_groups import FORKABLE_SCENARIOS, MISS_SIDES, build_group_plan, iter_clips
     g = build_group_plan(3, 11, cfg, n_bg=2)
     g2 = build_group_plan(3, 11, cfg, n_bg=2)
     assert g["samples"] == g2["samples"]
@@ -606,6 +614,10 @@ def _self_test() -> None:
     assert "tree_on_path" in catalog
     assert "lamp_on_path" in catalog
     assert "hasty_look" in catalog
+    assert "same_dir_closing" in catalog
+    assert "same_dir_hold" in catalog
+    assert "same_dir_pulling" in catalog
+    assert not {"same_dir_closing", "same_dir_hold", "same_dir_pulling"} & set(FORKABLE_SCENARIOS)
 
     parent = Path(tempfile.mkdtemp(prefix="btp_ds_"))
     existing = parent / pack_dirname(seed=1, n=2, name="groups15")

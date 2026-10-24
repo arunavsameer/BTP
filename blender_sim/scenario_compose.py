@@ -101,6 +101,18 @@ THROUGH_CROSSERS = frozenset(
     }
 )
 
+# Same-direction walker ahead (backs of heads, +s). Catch-up is not an
+# intercept you can fork, so these stay mixed-pack only. Ego is forced
+# to walk: a seated camera cannot close on someone walking away without
+# turning them around.
+SAME_DIR_FOLLOW_SCENARIOS = frozenset(
+    {
+        "same_dir_closing",
+        "same_dir_hold",
+        "same_dir_pulling",
+    }
+)
+
 # Empty sidewalk ahead: no oncoming gait traffic, threats stay in the
 # periphery until they cut in. prepare_scenario zeroes crowd/clutter,
 # locks ego to walk, and keeps the path mostly straight.
@@ -184,6 +196,10 @@ SCENARIO_ALIASES: dict[str, str] = {
     "group": "group_crossing",
     "scooter": "scooter_from_sidewalk",
     "overtake": "cyclist_overtake",
+    "follow_closing": "same_dir_closing",
+    "follow_hold": "same_dir_hold",
+    "follow_pulling": "same_dir_pulling",
+    "same_dir": "same_dir_hold",
     "door": "parked_car_door",
     "backing": "backing_vehicle",
     "reverse": "backing_vehicle",
@@ -226,6 +242,9 @@ _INJECT_PRIORITY: dict[str, int] = {
     "hasty_look": 2,
     "oncoming_pedestrian": 10,
     "parallel_pedestrian": 10,
+    "same_dir_closing": 10,
+    "same_dir_hold": 10,
+    "same_dir_pulling": 10,
     "cyclist_same_way": 10,
     "car_pass_far": 10,
     "car_approaching": 10,
@@ -279,6 +298,171 @@ _INJECT_PRIORITY: dict[str, int] = {
 }
 
 _TOKEN_SPLIT = re.compile(r"[,+\s]+")
+
+# ---------------------------------------------------------------------------
+# Same-direction follow kinematics (no bpy)
+# ---------------------------------------------------------------------------
+#
+# Ego walks +s at v_ego. The other person walks the same heading, same
+# sidewalk, starting ahead (s_other(0) > s_ego(0)):
+#
+#     d(t) = s_other(t) - s_ego(t) = d0 + (v_other - v_ego) t
+#
+# closing: v_other < v_ego, d decreases, d(T) stays ≳ 1.2 m (person ahead,
+# not a rear-end smash). hold: v_other ≈ v_ego, |d-d0| ≲ 0.5 m. pulling:
+# v_other > v_ego, start close so they do not vanish in 2 s. Never
+# oncoming (v_other > 0). Do not speed the ego to fill 15 s.
+
+
+@dataclass(frozen=True)
+class SameDirFollowPlan:
+    mode: str
+    v_ego: float
+    v_other: float
+    d0: float
+    lat_offset: float
+    duration_s: float = 15.0
+
+    def gap(self, t: float) -> float:
+        """Along-path gap d(t) = s_other(t) - s_ego(t)."""
+        return float(self.d0) + (float(self.v_other) - float(self.v_ego)) * float(t)
+
+
+_FOLLOW_MODE_ALIASES = {
+    "same_dir_closing": "closing",
+    "same_dir_hold": "hold",
+    "same_dir_pulling": "pulling",
+    "follow_closing": "closing",
+    "follow_hold": "hold",
+    "follow_pulling": "pulling",
+    "closing": "closing",
+    "hold": "hold",
+    "pulling": "pulling",
+}
+
+# Other person's walk band. Closing may go a little slower than a stroll;
+# pulling may go a little faster than a hurry. Never a statue, never a sprint.
+_FOLLOW_V_MIN = 0.50
+_FOLLOW_V_MAX = 2.55
+_FOLLOW_T = 15.0
+_FOLLOW_CLOSING_DV = 0.37
+_FOLLOW_CLOSING_D_END = 1.40
+_FOLLOW_CLOSING_D0_MIN = 4.80
+_FOLLOW_CLOSING_D0_MAX = 8.50
+_FOLLOW_HOLD_D0 = 5.20
+_FOLLOW_PULL_D0 = 3.60
+_FOLLOW_PULL_DV = 0.38
+_FOLLOW_LAT = 0.55
+
+
+def same_dir_follow_mode(name: str) -> str:
+    tok = str(name or "").strip().lower().replace("-", "_")
+    if tok in _FOLLOW_MODE_ALIASES:
+        return _FOLLOW_MODE_ALIASES[tok]
+    raise ValueError(f"unknown same-dir follow mode {name!r}")
+
+
+def same_dir_follow_plan(
+    v_ego: float,
+    mode: str,
+    *,
+    duration_s: float = _FOLLOW_T,
+    rng: Optional[random.Random] = None,
+) -> SameDirFollowPlan:
+    """Plan ``(v_other, d0, lat_offset)`` for a same-direction walker ahead.
+
+    ``v_ego`` is an input. A near-zero ego cannot catch up without the other
+    walking toward the camera, so closing/hold degrade to pulling (still +s).
+    """
+    v_ego = max(0.0, float(v_ego))
+    T = max(1.0, float(duration_s))
+    key = same_dir_follow_mode(mode)
+    lat = float(_FOLLOW_LAT)
+    if rng is not None:
+        lat = float(rng.uniform(0.40, 0.70))
+
+    # Seated / stopped: a statue is forbidden, oncoming is forbidden.
+    if v_ego < 0.45:
+        key = "pulling"
+
+    if key == "closing":
+        dv = float(_FOLLOW_CLOSING_DV)
+        if rng is not None:
+            dv = float(rng.uniform(0.30, 0.44))
+        v_other = min(v_ego - 0.12, v_ego - dv)
+        v_other = max(0.55, v_other)
+        dv = v_ego - v_other
+        d_end = float(_FOLLOW_CLOSING_D_END)
+        d0 = d_end + dv * T
+        if rng is not None:
+            d0 = d0 + float(rng.uniform(-0.30, 0.30))
+        d0 = min(max(d0, float(_FOLLOW_CLOSING_D0_MIN)), float(_FOLLOW_CLOSING_D0_MAX))
+        if d0 - dv * T < 1.20:
+            dv = (d0 - 1.25) / T
+            v_other = v_ego - dv
+            v_other = max(0.55, min(v_other, v_ego - 0.12))
+            dv = v_ego - v_other
+        return SameDirFollowPlan(
+            mode="closing", v_ego=v_ego, v_other=float(v_other),
+            d0=float(d0), lat_offset=lat, duration_s=T,
+        )
+
+    if key == "hold":
+        d0 = float(_FOLLOW_HOLD_D0)
+        v_other = v_ego
+        if rng is not None:
+            d0 = float(rng.uniform(4.70, 5.80))
+            # |Δv|·15 ≤ 0.27 m, inside the 0.5 m hold band.
+            v_other = v_ego + float(rng.uniform(-0.018, 0.018))
+        v_other = max(_FOLLOW_V_MIN, min(_FOLLOW_V_MAX, v_other))
+        return SameDirFollowPlan(
+            mode="hold", v_ego=v_ego, v_other=float(v_other),
+            d0=float(d0), lat_offset=lat, duration_s=T,
+        )
+
+    d0 = float(_FOLLOW_PULL_D0)
+    dv = float(_FOLLOW_PULL_DV)
+    if rng is not None:
+        d0 = float(rng.uniform(3.20, 4.20))
+        dv = float(rng.uniform(0.32, 0.46))
+    v_other = min(float(_FOLLOW_V_MAX), v_ego + dv)
+    if v_other - v_ego < 0.16:
+        v_other = v_ego + 0.22
+    v_other = max(v_ego + 0.16, min(_FOLLOW_V_MAX, v_other))
+    # Start close: at t=2 s they must still be a person, not a speck.
+    if d0 + (v_other - v_ego) * 2.0 > 8.0:
+        d0 = min(d0, 4.00)
+    return SameDirFollowPlan(
+        mode="pulling", v_ego=v_ego, v_other=float(v_other),
+        d0=float(d0), lat_offset=lat, duration_s=T,
+    )
+
+
+def same_dir_follow_table(
+    v_ego: float,
+    *,
+    duration_s: float = _FOLLOW_T,
+    times: Sequence[float] = (0.0, 5.0, 10.0, 15.0),
+    rng: Optional[random.Random] = None,
+) -> list[dict[str, Any]]:
+    """d(t) rows for closing / hold / pulling. Used by the self-test."""
+    rows: list[dict[str, Any]] = []
+    for mode in ("closing", "hold", "pulling"):
+        plan = same_dir_follow_plan(v_ego, mode, duration_s=duration_s, rng=rng)
+        gaps = [round(plan.gap(t), 4) for t in times]
+        rows.append(
+            {
+                "mode": plan.mode,
+                "v_ego": round(plan.v_ego, 4),
+                "v_other": round(plan.v_other, 4),
+                "d0": round(plan.d0, 4),
+                "lat_offset": round(plan.lat_offset, 4),
+                "times": [float(t) for t in times],
+                "d": gaps,
+            }
+        )
+    return rows
+
 
 _EXTENT_S = {
     "vehicle": 2.45,
@@ -852,6 +1036,47 @@ def _self_test() -> None:
     assert "scooter_from_sidewalk" in catalog
     assert "parked_car_door" in catalog
     assert "cyclist_overtake" in catalog
+    assert "same_dir_closing" in catalog
+    assert "same_dir_hold" in catalog
+    assert "same_dir_pulling" in catalog
+    from outcome_groups import FORKABLE_SCENARIOS
+    assert "same_dir_closing" not in FORKABLE_SCENARIOS
+    assert "same_dir_hold" not in FORKABLE_SCENARIOS
+    assert "same_dir_pulling" not in FORKABLE_SCENARIOS
+    assert resolve_scenario_name("follow_closing", random.Random(1), live) == "same_dir_closing"
+    assert resolve_scenario_name("follow_hold", random.Random(1), live) == "same_dir_hold"
+    assert resolve_scenario_name("follow_pulling", random.Random(1), live) == "same_dir_pulling"
+    times = (0.0, 5.0, 10.0, 15.0)
+    print("same-dir follow d(t)  [along-path gap, metres]")
+    for v_ego in (0.80, 1.35, 1.90):
+        print(f"  v_ego={v_ego:.2f} m/s")
+        for row in same_dir_follow_table(v_ego, times=times):
+            d = row["d"]
+            print(
+                f"    {row['mode']:8s}  v_other={row['v_other']:.3f}  "
+                f"d0={row['d0']:.2f}  d(0/5/10/15)={d[0]:.2f}/{d[1]:.2f}/{d[2]:.2f}/{d[3]:.2f}"
+            )
+            assert row["v_other"] > 0.0
+            if row["mode"] == "closing":
+                assert row["v_other"] < v_ego - 0.10
+                assert d[0] > d[1] > d[2] > d[3]
+                assert d[3] >= 1.15
+                assert d[0] >= 4.50
+            elif row["mode"] == "hold":
+                assert abs(row["v_other"] - v_ego) <= 0.03
+                assert all(abs(x - d[0]) <= 0.50 for x in d)
+                assert 4.40 <= d[0] <= 6.20
+            else:
+                assert row["v_other"] > v_ego + 0.15
+                assert d[0] < d[1] < d[2] < d[3]
+                assert d[0] >= 3.00
+                assert d[0] + (row["v_other"] - v_ego) * 2.0 <= 8.50
+    # RNG jitter must keep the inequalities.
+    jitter = same_dir_follow_table(1.35, rng=random.Random(7))
+    jc, jh, jp = jitter
+    assert jc["d"][0] > jc["d"][-1] >= 1.15
+    assert all(abs(x - jh["d"][0]) <= 0.50 for x in jh["d"])
+    assert jp["d"][0] < jp["d"][-1]
     assert "backing_vehicle" in catalog
     assert "crossing_head_on" in catalog
     assert "periph_empty" in catalog

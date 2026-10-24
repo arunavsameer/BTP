@@ -22,6 +22,7 @@ from scenario_compose import (
     CLEAR_CENTER_SCENARIOS,
     CROSS_EGO_SCENARIOS,
     CROSS_GAP_SCENARIOS,
+    SAME_DIR_FOLLOW_SCENARIOS,
     SPARSE_SCENARIOS,
     ComposeSession,
     all_scenario_names,
@@ -31,6 +32,7 @@ from scenario_compose import (
     pick_scenario,
     pick_scenarios,
     resolve_scenario_name,
+    same_dir_follow_plan,
     sort_for_inject,
 )
 
@@ -4136,9 +4138,10 @@ class WorldGenerator:
             self.force_ego_mode = "crosswalk"
         elif any(n == "hasty_look" for n in names):
             self.force_ego_mode = "hasty"
-        elif any(n in CLEAR_CENTER_SCENARIOS for n in names):
-            # Look down the empty sidewalk so the image centre stays cold
-            # until a side actor actually cuts in.
+        elif any(n in CLEAR_CENTER_SCENARIOS or n in SAME_DIR_FOLLOW_SCENARIOS for n in names):
+            # Clear-center: look down the empty sidewalk. Same-dir follow:
+            # both must walk +s — a seated ego cannot catch up without
+            # turning the other person around.
             self.force_ego_mode = "walk"
         else:
             self.force_ego_mode = ""
@@ -4153,6 +4156,11 @@ class WorldGenerator:
             self.cfg["world"]["n_background_vehicles"] = (0, 0)
             self.cfg["world"]["poisson"]["n_ground_static"] = (0, 2)
             self.cfg["world"]["poisson"]["n_head_hazards"] = (0, 0)
+        if any(n in SAME_DIR_FOLLOW_SCENARIOS for n in names):
+            # Extra sidewalk people (often oncoming) steal the frame from
+            # the titled walker-ahead. Cars stay; the only pedestrian is
+            # the injected same-direction person.
+            self.cfg["world"]["n_background_pedestrians"] = (0, 0)
         if any(n in CLEAR_CENTER_SCENARIOS for n in names):
             self._prepare_clear_center()
 
@@ -4543,6 +4551,9 @@ class WorldGenerator:
                 tau=float(self.cfg["scenarios"]["oncoming_ped_tau"]), dlat="opposite",
             ),
             "parallel_pedestrian": lambda r: self._inject_parallel_person(r),
+            "same_dir_closing": lambda r: self._inject_same_dir_follow(r, mode="closing"),
+            "same_dir_hold": lambda r: self._inject_same_dir_follow(r, mode="hold"),
+            "same_dir_pulling": lambda r: self._inject_same_dir_follow(r, mode="pulling"),
             "cyclist_same_way": lambda r: self._inject_cyclist_same_way(r),
             "car_pass_far": lambda r: self._inject_car_lane(
                 r, far=True, obj_speed=self.rng.uniform(5.5, 8.0),
@@ -5965,6 +5976,34 @@ class WorldGenerator:
             actor, s, lat,
             speed=float(rig.walk_speed),
             behavior="parallel",
+            allow_sidewalk=True,
+            pad=0.35,
+        )
+
+    def _inject_same_dir_follow(self, rig: Any, *, mode: str) -> None:
+        """Person ahead on the same sidewalk, walking away (+s).
+
+        ``mode`` is closing / hold / pulling. Speeds the *other* person
+        relative to ego; never uses oncoming τ, never ``lat_target`` (that
+        would yaw them toward the kerb). Stays ahead of the camera.
+        """
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        v_ego = float(self._ego_speed(rig))
+        plan = same_dir_follow_plan(v_ego, mode, rng=self.rng)
+        d0 = float(plan.d0)
+        if self._compose is not None:
+            d0 = d0 + self._compose.take_group_offset("along")
+        # Keep them in the walking FOV, not a 14.3 s intercept lead.
+        d0 = min(max(d0, 2.60), 11.0)
+        s = min(max(s0 + d0, s0 + 2.40), self.state.road.length - 4.0)
+        # Negative dlat = toward the facade, same sidewalk as ego.
+        lat = self._resolve_lat(-float(plan.lat_offset), L, 0.35)
+        actor = self._spawn_kind("person", s, lat, heading_sign=1.0)
+        self._bind(
+            actor, s, lat,
+            speed=float(plan.v_other),
+            behavior=f"same_dir_{plan.mode}",
             allow_sidewalk=True,
             pad=0.35,
         )

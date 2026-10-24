@@ -137,12 +137,12 @@ JSON 3-D vectors are **Y-up** `(X right, Y height, Z forward)`. The sim itself i
 
 ## Scenarios
 
-`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **63** named injectors (55 in the auto mix, plus 8 empty-center / side-threat names). **21** of them are `--groups` forkable (`FORKABLE_SCENARIOS`). `--list-scenarios` is the live catalog.
+`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **66** named injectors (58 in the auto mix, plus 8 empty-center / side-threat names). **21** of them are `--groups` forkable (`FORKABLE_SCENARIOS`). `--list-scenarios` is the live catalog.
 
 | Bucket | Names |
 | --- | --- |
-| Safe | `safe_walk`, `empty_street`, `oncoming_pedestrian`, `parallel_pedestrian`, `cyclist_same_way`, `car_pass_far`, `car_approaching`, `distant_jaywalk`, `pothole_offset`, `parked_car_opposite`, `crossing_street`, `cyclist_overtake`, `hasty_look` |
-| Near miss | `near_miss_pass`, `jaywalker_offset`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_away`, `cyclist_near_miss`, `car_near_miss_lane`, `car_cross_front`, `cube_near_miss`, `shape_near_miss`, `pothole_near`, `tree_near`, `lamp_near`, `cyclist_weaving`, `group_crossing`, `scooter_from_sidewalk`, `parked_car_door` |
+| Safe | `safe_walk`, `empty_street`, `oncoming_pedestrian`, `parallel_pedestrian`, `same_dir_hold`, `same_dir_pulling`, `cyclist_same_way`, `car_pass_far`, `car_approaching`, `distant_jaywalk`, `pothole_offset`, `parked_car_opposite`, `crossing_street`, `cyclist_overtake`, `hasty_look` |
+| Near miss | `near_miss_pass`, `jaywalker_offset`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_away`, `same_dir_closing`, `cyclist_near_miss`, `car_near_miss_lane`, `car_cross_front`, `cube_near_miss`, `shape_near_miss`, `pothole_near`, `tree_near`, `lamp_near`, `cyclist_weaving`, `group_crossing`, `scooter_from_sidewalk`, `parked_car_door` |
 | Critical | `jaywalker`, `jaywalker_turn_toward`, `sudden_stop`, `swerve_vehicle`, `pothole_on_path`, `tree_on_path`, `lamp_on_path`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `shapes_on_path`, `car_cut_in`, `cyclist_head_on`, `head_level_projectile`, `car_cross_critical`, `car_erratic_swerve`, `car_runs_off_road`, `child_darting`, `crossing_car_side`, `crossing_head_on`, `backing_vehicle` |
 
 **Compounds.** Several injectors in one street. Tokens split on `,`, `+`, or spaces. A lone `auto` inside a list is itself a random draw (`pothole,auto` = pothole plus one extra event).
@@ -189,6 +189,9 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `group` | `group_crossing` |
 | `scooter` | `scooter_from_sidewalk` |
 | `overtake` | `cyclist_overtake` |
+| `follow_closing` | `same_dir_closing` |
+| `follow_hold` / `same_dir` | `same_dir_hold` |
+| `follow_pulling` | `same_dir_pulling` |
 | `door` | `parked_car_door` |
 | `backing` / `reverse` | `backing_vehicle` |
 | `periph` / `clear_center` / `side_empty` | `periph_empty` |
@@ -208,6 +211,8 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `empty_street` | safe | no | Almost no background people/cars/clutter. In a compound it still sparsifies; the other names still inject. |
 | `oncoming_pedestrian` | safe | no | Person on the opposite sidewalk walking toward you (large CPA). |
 | `parallel_pedestrian` | safe | no | Person same way, slightly toward the curb, a few metres ahead. |
+| `same_dir_hold` | safe | no | Person walking **away** on the same sidewalk, matched speed, a few metres ahead (gap holds). |
+| `same_dir_pulling` | safe | no | Person walking away on the same sidewalk, faster than you, pulling ahead. |
 | `cyclist_same_way` | safe | no | Bike in the far lane, same direction. |
 | `car_pass_far` | safe | no | Oncoming car in the far lane (~14.4 s). |
 | `car_approaching` | safe | no | Oncoming car in the near lane unless a through-crosser is also in the mix (then far). |
@@ -222,6 +227,7 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `jaywalker_from_left` | near | yes | Through-cross from the left (HFOV-edge start, walking by t≤6 s). Groups force a collision-course CPA. |
 | `jaywalker_from_right` | near | yes | Same from the right. |
 | `jaywalker_turn_away` | near | no | Enters from a corridor edge, turns, walks **with** you ahead. |
+| `same_dir_closing` | near | no | Person walking **away** on the same sidewalk; you are catching up (gap shrinks, they stay ahead). |
 | `cyclist_near_miss` | near | no | Oncoming bike, ~1 m CPA. |
 | `car_near_miss_lane` | near | no | Oncoming car in the near lane, ~1 m CPA. |
 | `car_cross_front` | near | no | Vehicle crossing in front, ~1 m CPA. |

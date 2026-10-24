@@ -412,6 +412,8 @@ CONFIG: dict[str, Any] = {
             "empty_street",
             "oncoming_pedestrian",
             "parallel_pedestrian",
+            "same_dir_hold",
+            "same_dir_pulling",
             "cyclist_same_way",
             "car_pass_far",
             "car_approaching",
@@ -428,6 +430,7 @@ CONFIG: dict[str, Any] = {
             "jaywalker_from_left",
             "jaywalker_from_right",
             "jaywalker_turn_away",
+            "same_dir_closing",
             "cyclist_near_miss",
             "car_near_miss_lane",
             "car_cross_front",
@@ -533,6 +536,13 @@ CONFIG: dict[str, Any] = {
         "cube_head_tau": 14.3,
         "cyclist_head_tau": 14.25,
         "cross_car_tau": 14.3,
+        # Same-direction walker ahead. Other person's speed is relative to
+        # ego; the ego gait is not sped up to fill 15 s. Not an intercept
+        # (no τ≈14.3). d(t)=s_other-s_ego; closing stays ahead (d(15)≳1.4 m).
+        "same_dir_lat_m": (0.40, 0.70),
+        "same_dir_closing_d_end_m": 1.40,
+        "same_dir_hold_lead_m": 5.20,
+        "same_dir_pull_lead_m": 3.60,
         # Shared-prefix outcome groups (gen_dataset --groups).
         # Hit in the last second so the collision still fills the frame;
         # fork ~2 s earlier so misses are visible going left / right.

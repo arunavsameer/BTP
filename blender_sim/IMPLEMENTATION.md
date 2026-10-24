@@ -994,7 +994,7 @@ Shared helpers:
 - `_inject_jaywalk_turn` — corridor-edge entry, then `turn_t` blends into along-track toward or away from the camera.
 - `_inject_static_shapes` — `n=1` one cube; `n=0` draws 2–4 mixed shapes. On gait, 2.55 m apart, lead `static_shape_lead_m` (16.0 m) + static stride.
 - `_inject_pothole` — lead from config, `dlat` 0 / 0.85 / 1.80. On-gait: pothole/crater/broken_slab. Offset may also be debris.
-- `_inject_car_lane` / `_inject_parallel_person` / `_inject_cyclist_same_way` / `_inject_distant_jaywalk` / `_inject_parked_car` / `_inject_sudden_stop` / `_inject_cut_in` / `_inject_weaving` / `_inject_run_off_road` / `_inject_child_dart` / `_inject_head_cube` — see §15.
+- `_inject_car_lane` / `_inject_parallel_person` / `_inject_same_dir_follow` / `_inject_cyclist_same_way` / `_inject_distant_jaywalk` / `_inject_parked_car` / `_inject_sudden_stop` / `_inject_cut_in` / `_inject_weaving` / `_inject_run_off_road` / `_inject_child_dart` / `_inject_head_cube` — see §15.
 
 There is **no** per-frame N-body. If two injectors still overlap after 18 nudges, `reserve` commits the last candidate (best-effort). The corridor clamp still keeps everyone on the street.
 
@@ -1015,6 +1015,8 @@ CLI parse + Frenet occupancy. Injector **bodies** stay in `world_generator.py` s
 **`SPARSE_SCENARIOS`.** `{empty_street}` plus every `CLEAR_CENTER` name — zeroes background peds/cars and most clutter.
 
 **`CLEAR_CENTER_SCENARIOS`.** `periph_empty`, `periph_car_side`, `periph_parked`, `periph_ped_side`, `periph_car_turn`, `periph_car_runoff`, `periph_ped_cut`, `periph_child_cut`. Empty sidewalk ahead; injected actors stay in a side lane or enter from a corridor edge. Not in `--scenario auto`. `gen_dataset.py --theme peripheral` is the pack.
+
+**`SAME_DIR_FOLLOW_SCENARIOS`.** `same_dir_closing`, `same_dir_hold`, `same_dir_pulling`. Person ahead on the same sidewalk walking **away** (`heading_sign=+1`, `speed>0`). Not forkable. `prepare_scenario` forces ego `walk` and zeroes background pedestrians so an oncoming extra does not steal the frame. Aliases: `follow_closing` / `follow_hold` / `follow_pulling`.
 
 **`NEAR_LANE_LOCKED`.** Cut-in / graze / swerve / weave / run-off **must** keep the near lane. Occupancy staggers `s` instead of flipping the lane.
 
@@ -1203,6 +1205,8 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 
 **Weave** (`_inject_weaving`): `weave_amp` / `weave_hz` on the Actor. Deterministic sine, **not** fBm — the injector aims the swing at the walker’s line. Amplitude is exactly `weave_amp`. \(\tau\sim U(13.4,14.5)\).
 
+**Same-direction follow** (`_inject_same_dir_follow`, plan in `same_dir_follow_plan`): other person on the same sidewalk, offset ~0.4–0.7 m toward the facade, facing +s (away). \(d(t)=s_{\mathrm{other}}-s_{\mathrm{ego}}\). Ego speed is an input — do not speed the ego to fill 15 s. **closing** \(v_{\mathrm{other}}<v_{\mathrm{ego}}\), \(d\) falls, \(d(15)\gtrsim 1.4\) m (still ahead, not a rear-end smash). **hold** \(v_{\mathrm{other}}\approx v_{\mathrm{ego}}\), \(|d-d_0|\lesssim 0.5\) m, lead ~5.2 m. **pulling** \(v_{\mathrm{other}}>v_{\mathrm{ego}}\), start ~3.6 m so they stay in FOV. No `lat_target`, no oncoming \(\tau\approx 14.3\). Not in `FORKABLE_SCENARIOS`.
+
 ### 15.2 One row per named scenario
 
 | Name | Bucket | Mechanism |
@@ -1221,6 +1225,8 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 \*Peripheral names live in `peripheral_safe` / `peripheral_critical`, not the auto mix.
 | `oncoming_pedestrian` | safe | Opposite sidewalk (`dlat="opposite"`), 0.95–1.30 m/s, \(\tau=14.2\). CPA stays large. |
 | `parallel_pedestrian` | safe | Same way, +0.80 m toward the curb, 6 m ahead, ego speed. |
+| `same_dir_hold` | safe | Same sidewalk, facing away, matched speed, ~5.2 m ahead. `--groups` no. |
+| `same_dir_pulling` | safe | Same sidewalk, facing away, faster than ego, starts ~3.6 m ahead. `--groups` no. |
 | `cyclist_same_way` | safe | Far lane, same way, bike speed, 12 m ahead. |
 | `car_pass_far` | safe | Oncoming, far lane, 5.5–8.0 m/s, \(\tau=14.4\). |
 | `car_approaching` | safe | Oncoming, near lane unless a through-crosser is present (then far). 5.0–7.0 m/s, \(\tau=14.3\). CPA still > 1.5 m because the lane offset is ~1.75 m. |
@@ -1231,6 +1237,7 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `jaywalker_offset` | near | Through-cross, CPA 1.0, from left. |
 | `jaywalker_from_left` / `_right` | near | Through-cross, CPA 1.0, forced side. `--groups` yes (`force_critical` makes CPA 0.12). |
 | `jaywalker_turn_away` | near | Corridor-edge entry, merge off the gait, then walk the same way. |
+| `same_dir_closing` | near | Same sidewalk, facing away; ego catching up (\(v_{\mathrm{other}}<v_{\mathrm{ego}}\)), \(d(15)\gtrsim 1.4\) m. `--groups` no. |
 | `cyclist_near_miss` | near | Oncoming bike, `dlat=1.0`, \(\tau=14.2\). |
 | `car_near_miss_lane` | near | Oncoming car, `dlat=1.0`, \(\tau=14.3\), pad 1.05, **near lane locked**. |
 | `car_cross_front` | near | Through-cross vehicle, CPA 1.0, random side, 2.2–3.4 m/s (`cross_car_meet_s=14.35`). |
@@ -1267,7 +1274,7 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `crossing_head_on` | critical | Same injector with `far=True` (far driving lane) while the ego crosses. Same look-vs-car risk; not forkable. |
 | `backing_vehicle` | critical | Car ~12.5 m ahead, `look_flip`, slow reverse (`ds < 0`) toward the walker. |
 
-Aliases that resolve into this table are in §12.1. `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, tree, lamp, car, cyclist, cube, shape, ped, erratic_car, crossing, sidewalk_dyn.
+Aliases that resolve into this table are in §12.1 (`follow_closing` / `follow_hold` / `follow_pulling`). `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, tree, lamp, car, cyclist, cube, shape, ped (includes the three `same_dir_*` names), erratic_car, crossing, sidewalk_dyn.
 
 `--groups` / `FORKABLE_SCENARIOS` (21): `jaywalker`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_toward`, `swerve_vehicle`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `car_cut_in`, `cyclist_head_on`, `car_cross_critical`, `car_runs_off_road`, `child_darting`, `crossing_car_side`, `periph_car_turn`, `periph_ped_cut`, `periph_child_cut`. `safe_walk` is **not** in this set. Static holes / lamps / `shapes_on_path` are not either. Group packs set `force_critical=True` and default ego `walk` (seated remapped to walk; `CROSS_EGO` names still force `crosswalk`).
 
@@ -1836,7 +1843,7 @@ Add energy + elevation ranges and a weight. Teach `apply_domain_randomization` c
 | `python spatial_threat.py` | Fast vs far head-on; on-gait hole mid; offset hole cold; Frenet `path_lat=0` on a curve; close jaywalker; oncoming person ~5.5 m amber / 11 m cold; on-gait tree ~4.5 m warm; far-lane miss cold; seated 2 m ~0 / overlap high; 3 m glancing crosser warns; right-side through-crosser not mirrored; splat no bleed; no NaN |
 | `python spatial_overlay.py` | PPM header, filter graph parses |
 | `python camera_kinematics.py` | Halt gain is 1→0→1 with zero derivative at the joints; only crosswalk/diagonal blend gaze with lateral |
-| `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only |
+| `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only, same-dir follow \(d(t)\) inequalities |
 | `python outcome_groups.py` | Folder names; collision vs miss laterals; one miss side per sample (50/50, mixed L/R); wall-side car miss goes far-lane; 15 s diverge/hit |
 | `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds; 15 s frames; group plan length (2 outcomes × K bg); lighting slots unique per bg |
 | `python remux_spatial_from_json.py --clip DIR` | Rewrites overlay from `preview.mp4` + annotations; not a unit test |
