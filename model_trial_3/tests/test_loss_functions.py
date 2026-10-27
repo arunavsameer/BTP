@@ -15,6 +15,7 @@ from collision_jepa3.losses.heatmap import (
     appear_cell_weight,
     blob_bce,
     blob_bce_logits,
+    disappear_cell_weight,
     false_positive_penalty,
     maxpool3x3,
     safe_peak_hinge,
@@ -142,6 +143,23 @@ class LossTests(unittest.TestCase):
         self.assertEqual(float(w[0, 2, 2]), 8.0)
         self.assertEqual(float(w[0, 1, 1]), 1.0)
 
+    def test_disappear_cell_weight_only_occupied_to_empty(self) -> None:
+        h_now = torch.zeros(1, 5, 5)
+        h_now[0, 0, 0] = 0.8
+        h_now[0, 2, 2] = 0.8
+        h_fut = torch.zeros(1, 5, 5)
+        h_fut[0, 0, 0] = 0.9
+        w = disappear_cell_weight(h_now, h_fut, now_threshold=0.5, future_threshold=0.1, weight=8.0)
+        self.assertEqual(float(w[0, 0, 0]), 1.0)
+        self.assertEqual(float(w[0, 2, 2]), 8.0)
+        self.assertEqual(float(w[0, 1, 1]), 1.0)
+
+    def test_disappear_does_not_fire_on_empty_hold(self) -> None:
+        h_now = torch.zeros(1, 5, 5)
+        h_fut = torch.zeros(1, 5, 5)
+        w = disappear_cell_weight(h_now, h_fut, weight=8.0)
+        self.assertTrue(torch.equal(w, torch.ones_like(h_fut)))
+
     def test_soft_bce_appear_weight_upweights_new_cells(self) -> None:
         pred = torch.full((1, 5, 5), 0.01)
         tgt = torch.zeros(1, 5, 5)
@@ -160,6 +178,9 @@ class LossTests(unittest.TestCase):
         self.assertEqual(cfg.get("loss.bce_appear_weight"), 8.0)
         self.assertEqual(cfg.get("loss.bce_appear_now_threshold"), 0.1)
         self.assertEqual(cfg.get("loss.bce_appear_future_threshold"), 0.5)
+        self.assertEqual(cfg.get("loss.bce_disappear_weight"), 1.0)
+        self.assertEqual(cfg.get("loss.bce_disappear_now_threshold"), 0.5)
+        self.assertEqual(cfg.get("loss.bce_disappear_future_threshold"), 0.1)
         self.assertEqual(cfg.get("loss.blob_bce_weight"), 0.35)
         self.assertEqual(cfg.get("loss.blob_occupied_threshold"), 0.5)
         cfg.set("heads.mode", "direct_h1s")
@@ -190,6 +211,23 @@ class LossTests(unittest.TestCase):
         out = {"Hhat_1s": pred, "Z_t": torch.zeros(1, 32, 5, 5)}
         high = TeacherLoss(cfg)(out, batch)
         cfg.set("loss.bce_appear_weight", 1.0)
+        low = TeacherLoss(cfg)(out, batch)
+        self.assertGreater(float(high.terms["L_1s"]), float(low.terms["L_1s"]))
+
+    def test_composite_disappear_weight_raises_false_occupied(self) -> None:
+        cfg = Config.load()
+        cfg.set("heads.mode", "direct_h1s")
+        cfg.set("loss.bce_appear_weight", 1.0)
+        pred = torch.full((1, 5, 5), 0.01)
+        pred[0, 2, 2] = 0.90
+        tgt = torch.zeros(1, 5, 5)
+        h_now = torch.zeros(1, 5, 5)
+        h_now[0, 2, 2] = 0.9
+        batch = {"h_1s": tgt, "h_now": h_now, "amb_1s": torch.zeros(1, dtype=torch.bool)}
+        out = {"Hhat_1s": pred, "Z_t": torch.zeros(1, 32, 5, 5)}
+        cfg.set("loss.bce_disappear_weight", 8.0)
+        high = TeacherLoss(cfg)(out, batch)
+        cfg.set("loss.bce_disappear_weight", 1.0)
         low = TeacherLoss(cfg)(out, batch)
         self.assertGreater(float(high.terms["L_1s"]), float(low.terms["L_1s"]))
 
@@ -286,6 +324,15 @@ class LossTests(unittest.TestCase):
         pred_ok = pred.clone()
         pred_ok[0, 2, 2] = 0.70
         self.assertEqual(float(stop_peak_hinge(pred_ok, tgt, stop_threshold=0.60, margin=0.05)), 0.0)
+        miss = stop_peak_hinge(pred, tgt, stop_threshold=0.60, pred_target=0.30)
+        self.assertAlmostEqual(float(miss), 0.0, places=5)
+        pred_miss = pred.clone()
+        pred_miss[0] = 0.10
+        self.assertAlmostEqual(
+            float(stop_peak_hinge(pred_miss, tgt, stop_threshold=0.60, pred_target=0.30)),
+            0.20,
+            places=5,
+        )
         amb = torch.tensor([True, False])
         self.assertEqual(float(stop_peak_hinge(pred, tgt, sample_mask=~amb)), 0.0)
 

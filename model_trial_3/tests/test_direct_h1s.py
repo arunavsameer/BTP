@@ -29,7 +29,17 @@ class DirectH1sTests(unittest.TestCase):
         backbone = DummyVJEPA2Backbone(hidden_size=64, crop_size=64, num_frames=16)
         m = CollisionTeacher3(cfg, backbone=backbone)
         out = m(torch.rand(2, 16, 3, 64, 64))
-        self.assertEqual(set(out), {"Z_t", "Hhat_1s", "Hhat_1s_logits"})
+        self.assertEqual(
+            set(out),
+            {
+                "Z_t",
+                "Hhat_1s",
+                "Hhat_1s_logits",
+                "Hhat_close",
+                "Hhat_close_logits",
+                "Hhat_precision_logits",
+            },
+        )
         self.assertEqual(tuple(out["Z_t"].shape), (2, 32, 5, 5))
         self.assertEqual(tuple(out["Hhat_1s"].shape), (2, 5, 5))
         self.assertEqual(tuple(out["Hhat_1s_logits"].shape), (2, 5, 5))

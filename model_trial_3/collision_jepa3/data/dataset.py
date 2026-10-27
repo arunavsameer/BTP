@@ -18,6 +18,8 @@ except Exception:  # pragma: no cover
         pass
 
 from .cache import TokenCache, frame_cache_path, load_cached_frames, token_cache_id
+from .closing_map import load_closing_maps
+from .extra_same_dir import apply_extra_same_dir_splits
 from .heatmap_annotations import load_heatmaps, targets_for_anchor
 from .manifest import ClipRecord
 from .pairing import (
@@ -64,6 +66,7 @@ class TeacherDataset(Dataset):
         self.use_frame_cache = (
             bool(cfg.get("cache.cache_frames", True)) if use_frame_cache is None else use_frame_cache
         )
+        splits = apply_extra_same_dir_splits(splits, records, cfg)
         groups = set(splits.get(split, []))
         self.records = [r for r in records if r.valid and r.scenario_group_id in groups]
         self.records_by_id = {r.clip_id: r for r in self.records}
@@ -104,6 +107,23 @@ class TeacherDataset(Dataset):
                 expected_frames=n_frames,
                 grid=int(cfg.get("data.target_grid", 5)),
             )
+        self.use_closing = float(cfg.get("loss.close_weight", 0.0)) > 0.0
+        self._close_maps: dict[str, np.ndarray] = {}
+        self._occ_maps: dict[str, np.ndarray] = {}
+        if self.use_closing:
+            grid = int(cfg.get("data.target_grid", 5))
+            width = int(cfg.get("data.source_width", 1920))
+            height = int(cfg.get("data.source_height", 1080))
+            for rec in self.records:
+                close, occ = load_closing_maps(
+                    rec.annotations_path,
+                    grid=grid,
+                    width=width,
+                    height=height,
+                    expected_frames=n_frames,
+                )
+                self._close_maps[rec.clip_id] = close
+                self._occ_maps[rec.clip_id] = occ
 
         self.ambiguous_policy = str(cfg.get("sampling.ambiguous_policy", "mean_target"))
         detect_ambiguous = self.ambiguous_policy in {
@@ -332,6 +352,17 @@ class TeacherDataset(Dataset):
             "amb_1_5s": np.bool_(self._horizon_masked("1_5s", amb, avail, replaced)),
             "amb_2s": np.bool_(self._horizon_masked("2s", amb, avail, replaced)),
         }
+        if self.use_closing:
+            zeros = np.zeros((int(self.cfg.get("data.target_grid", 5)),) * 2, dtype=np.float32)
+            t1 = int(t) + int(self.horizons[0])
+            cmap = self._close_maps.get(clip_id)
+            omap = self._occ_maps.get(clip_id)
+            sample["h_close"] = (
+                np.asarray(cmap[t1], dtype=np.float32) if cmap is not None and 0 <= t1 < len(cmap) else zeros
+            )
+            sample["close_mask"] = (
+                np.asarray(omap[t1], dtype=np.float32) if omap is not None and 0 <= t1 < len(omap) else zeros
+            )
         if tokens is not None:
             sample["tokens"] = tokens
         else:
@@ -396,4 +427,7 @@ def collate_teacher_batch(samples: list[dict[str, Any]]) -> dict[str, Any]:
         out["tokens"] = stack("tokens")
     if "frames" in samples[0]:
         out["frames"] = stack("frames")
+    if "h_close" in samples[0]:
+        out["h_close"] = stack("h_close")
+        out["close_mask"] = stack("close_mask")
     return out

@@ -14,6 +14,7 @@ from scripts._common import add_config_args, load_cfg  # noqa: E402
 from collision_jepa3.config import dump_resolved  # noqa: E402
 from collision_jepa3.data.cache import prepare_token_cache  # noqa: E402
 from collision_jepa3.data.dataset import TeacherDataset, build_dataloader  # noqa: E402
+from collision_jepa3.data.extra_same_dir import extra_same_dir_groups  # noqa: E402
 from collision_jepa3.data.manifest import load_manifest  # noqa: E402
 from collision_jepa3.data.preprocessing import signature_from_cfg  # noqa: E402
 from collision_jepa3.data.splits import load_splits  # noqa: E402
@@ -47,9 +48,21 @@ def main() -> None:
     parser.add_argument("--patience", type=int, default=None)
     parser.add_argument("--patience-start-epoch", type=int, default=None)
     parser.add_argument("--post-fork-stop-floor", type=float, default=None)
+    parser.add_argument("--stop-recall-floor", type=float, default=None)
+    parser.add_argument("--safe-recall-floor", type=float, default=None)
     parser.add_argument("--stop-hinge-weight", type=float, default=None)
+    parser.add_argument("--stop-hinge-target", type=float, default=None)
     parser.add_argument("--safe-hinge-weight", type=float, default=None)
     parser.add_argument("--small-blob-weight", type=float, default=None)
+    parser.add_argument("--disappear-weight", type=float, default=None)
+    parser.add_argument("--close-weight", type=float, default=None)
+    parser.add_argument("--beta-nll-weight", type=float, default=None)
+    parser.add_argument("--evidential-weight", type=float, default=None)
+    parser.add_argument("--prob-stop-weight", type=float, default=None)
+    parser.add_argument("--prob-safe-weight", type=float, default=None)
+    parser.add_argument("--adapter-lr", type=float, default=None)
+    parser.add_argument("--warmup-epochs", type=int, default=None)
+    parser.add_argument("--max-safe-stop-rate", type=float, default=None)
     parser.add_argument(
         "--early-stop-metric",
         choices=["selection", "val_mse", "recall_at_5fa", "prefork_stop", "balanced_warning"],
@@ -62,6 +75,14 @@ def main() -> None:
     parser.add_argument("--reports-root", default=None)
     parser.add_argument("--train-anchor-stride", type=int, default=None)
     parser.add_argument("--val-anchor-stride", type=int, default=None)
+    parser.add_argument(
+        "--extra-same-dir",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use extra_same_dir sample_min..sample_max in train (default: yaml, on). --no-extra-same-dir turns them off.",
+    )
+    parser.add_argument("--extra-same-dir-min", type=int, default=None)
+    parser.add_argument("--extra-same-dir-max", type=int, default=None)
     args = parser.parse_args()
     cfg = load_cfg(args)
     if args.frozen_epochs is not None:
@@ -82,12 +103,36 @@ def main() -> None:
         cfg.set("training.patience_start_epoch", int(args.patience_start_epoch))
     if args.post_fork_stop_floor is not None:
         cfg.set("training.post_fork_stop_floor", float(args.post_fork_stop_floor))
+    if args.stop_recall_floor is not None:
+        cfg.set("training.stop_recall_floor", float(args.stop_recall_floor))
+    if args.safe_recall_floor is not None:
+        cfg.set("training.safe_recall_floor", float(args.safe_recall_floor))
     if args.stop_hinge_weight is not None:
         cfg.set("loss.stop_hinge_weight", float(args.stop_hinge_weight))
+    if args.stop_hinge_target is not None:
+        cfg.set("loss.stop_hinge_target", float(args.stop_hinge_target))
     if args.safe_hinge_weight is not None:
         cfg.set("loss.safe_hinge_weight", float(args.safe_hinge_weight))
     if args.small_blob_weight is not None:
         cfg.set("loss.small_blob_weight", float(args.small_blob_weight))
+    if args.disappear_weight is not None:
+        cfg.set("loss.bce_disappear_weight", float(args.disappear_weight))
+    if args.close_weight is not None:
+        cfg.set("loss.close_weight", float(args.close_weight))
+    if args.beta_nll_weight is not None:
+        cfg.set("loss.beta_nll_weight", float(args.beta_nll_weight))
+    if args.evidential_weight is not None:
+        cfg.set("loss.evidential_weight", float(args.evidential_weight))
+    if args.prob_stop_weight is not None:
+        cfg.set("loss.prob_stop_weight", float(args.prob_stop_weight))
+    if args.prob_safe_weight is not None:
+        cfg.set("loss.prob_safe_weight", float(args.prob_safe_weight))
+    if args.max_safe_stop_rate is not None:
+        cfg.set("training.max_safe_stop_rate", float(args.max_safe_stop_rate))
+    if args.adapter_lr is not None:
+        cfg.set("optimizer.adapter_lr", float(args.adapter_lr))
+    if args.warmup_epochs is not None:
+        cfg.set("optimizer.warmup_epochs", int(args.warmup_epochs))
     if args.early_stop_metric is not None:
         cfg.set("training.early_stop_metric", args.early_stop_metric)
     if args.recall_beta is not None:
@@ -104,6 +149,12 @@ def main() -> None:
         cfg.set("sampling.train_anchor_stride", int(args.train_anchor_stride))
     if args.val_anchor_stride is not None:
         cfg.set("sampling.val_anchor_stride", int(args.val_anchor_stride))
+    if args.extra_same_dir is not None:
+        cfg.set("data.extra_same_dir.enabled", bool(args.extra_same_dir))
+    if args.extra_same_dir_min is not None:
+        cfg.set("data.extra_same_dir.sample_min", int(args.extra_same_dir_min))
+    if args.extra_same_dir_max is not None:
+        cfg.set("data.extra_same_dir.sample_max", int(args.extra_same_dir_max))
     set_seed(int(cfg.get("project.seed", 1337)))
     configure_runtime(int(cfg.get("training.num_workers", 2)))
     log = setup_logger("train", cfg.path("paths.logs_root"))
@@ -133,13 +184,18 @@ def main() -> None:
             n_before,
             len(val_ds),
         )
+    extra_on = bool(cfg.get("data.extra_same_dir.enabled", True))
+    extra_groups = extra_same_dir_groups(records, cfg)
+    extra_n = sum(1 for r in train_ds.records if r.scenario_group_id in extra_groups)
     log.info(
-        "train clips=%d anchors=%d  val clips=%d anchors=%d  amb=%s",
+        "train clips=%d anchors=%d  val clips=%d anchors=%d  amb=%s  extra_same_dir=%s extra_clips=%d",
         len(train_ds.records),
         len(train_ds),
         len(val_ds.clip_ids()),
         len(val_ds),
         train_ds.ambiguity_counts(),
+        extra_on,
+        extra_n,
     )
     model = CollisionTeacher3(cfg, dummy_backbone=dummy)
     model.to(device)

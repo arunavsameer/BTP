@@ -72,6 +72,10 @@ class CollisionTeacher3(nn.Module):
             out_grid=self.feature_grid,
             pool=heatmap_pool,
         )
+        self.close_head = nn.Conv2d(self.z_channels, 1, kernel_size=1)
+        # Mean-precision Beta: φ = 1 + softplus(raw). On Z_t so uncertainty
+        # is a motion property of the latent, not a copy of the heatmap.
+        self.evidence_head = nn.Conv2d(self.z_channels, 1, kernel_size=1)
         self.direct_h1s = heads_mode(cfg) == "direct_h1s"
         if self.direct_h1s:
             self.predictors = nn.ModuleDict()
@@ -123,12 +127,25 @@ class CollisionTeacher3(nn.Module):
     def _heads(self, z_t: torch.Tensor, fine: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
         feat = self._heatmap_feat(z_t, fine)
         h_now, logits_now = self.decoder.forward_with_logits(feat)
+        close_logits = self.close_head(z_t).squeeze(1)
+        close = torch.sigmoid(close_logits)
+        precision_logits = self.evidence_head(z_t).squeeze(1)
         if self.direct_h1s:
-            return {"Z_t": z_t, "Hhat_1s": h_now, "Hhat_1s_logits": logits_now}
+            return {
+                "Z_t": z_t,
+                "Hhat_1s": h_now,
+                "Hhat_1s_logits": logits_now,
+                "Hhat_close": close,
+                "Hhat_close_logits": close_logits,
+                "Hhat_precision_logits": precision_logits,
+            }
         out: dict[str, torch.Tensor] = {
             "Z_t": z_t,
             "Hhat_now": h_now,
             "Hhat_now_logits": logits_now,
+            "Hhat_close": close,
+            "Hhat_close_logits": close_logits,
+            "Hhat_precision_logits": precision_logits,
         }
         for name in self.horizon_names:
             z_hat = self.predictors[name](z_t)
@@ -148,6 +165,8 @@ class CollisionTeacher3(nn.Module):
         params += list(self.decoder.parameters())
         params += list(self.predictors.parameters())
         params += list(self.delta_heads.parameters())
+        params += list(self.close_head.parameters())
+        params += list(self.evidence_head.parameters())
         return params
 
     def lora_parameters(self) -> list[nn.Parameter]:

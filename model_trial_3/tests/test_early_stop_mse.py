@@ -105,6 +105,22 @@ class ValMseStopTests(unittest.TestCase):
         self.assertFalse(balanced_warning_better(louder, good, max_safe_stop=0.08, safe_floor=0.82))
         self.assertTrue(balanced_warning_better(balanced, good, max_safe_stop=0.08))
 
+    def test_balanced_warning_allows_post_just_under_090_when_floor_088(self) -> None:
+        ep0 = {
+            "safe_recall": 0.946,
+            "stop_recall": 0.678,
+            "post_fork_stop_recall": 0.902,
+            "safe_stop_rate": 0.015,
+        }
+        ep5 = {
+            "safe_recall": 0.932,
+            "stop_recall": 0.707,
+            "post_fork_stop_recall": 0.893,
+            "safe_stop_rate": 0.016,
+        }
+        self.assertFalse(balanced_warning_better(ep5, ep0, post_floor=0.90))
+        self.assertTrue(balanced_warning_better(ep5, ep0, post_floor=0.88, stop_floor=0.67))
+
 
 if __name__ == "__main__":
     unittest.main()

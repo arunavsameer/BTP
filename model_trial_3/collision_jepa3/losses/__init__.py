@@ -1,8 +1,18 @@
+from .beta_evidence import (
+    beta_nll,
+    cell_stop_probability,
+    evidential_mistake_penalty,
+    noisy_or_stop,
+    precision_from_logits,
+    prob_safe_hinge,
+    prob_stop_hinge,
+)
 from .composite import TeacherLoss, TeacherLossOutput
 from .heatmap import (
     appear_cell_weight,
     blob_bce,
     blob_bce_logits,
+    disappear_cell_weight,
     false_positive_penalty,
     safe_peak_hinge,
     small_blob_cell_weight,
@@ -13,11 +23,19 @@ from .heatmap import (
 )
 
 __all__ = [
+    "beta_nll",
+    "cell_stop_probability",
+    "evidential_mistake_penalty",
+    "noisy_or_stop",
+    "precision_from_logits",
+    "prob_safe_hinge",
+    "prob_stop_hinge",
     "TeacherLoss",
     "TeacherLossOutput",
     "appear_cell_weight",
     "blob_bce",
     "blob_bce_logits",
+    "disappear_cell_weight",
     "false_positive_penalty",
     "safe_peak_hinge",
     "small_blob_cell_weight",

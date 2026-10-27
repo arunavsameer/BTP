@@ -8,11 +8,18 @@ import torch
 
 from ..config import heads_mode, supervised_horizon_names
 from .background_consistency import background_consistency_loss
+from .beta_evidence import (
+    beta_nll,
+    evidential_mistake_penalty,
+    prob_safe_hinge,
+    prob_stop_hinge,
+)
 from .direction import direction_alignment_loss
 from .heatmap import (
     appear_cell_weight,
     blob_bce,
     blob_bce_logits,
+    disappear_cell_weight,
     false_positive_penalty,
     row_priority_weights,
     safe_peak_hinge,
@@ -65,6 +72,10 @@ class TeacherLoss:
         self.appear_now_threshold = float(cfg.get("loss.bce_appear_now_threshold", 0.1))
         self.appear_future_threshold = float(cfg.get("loss.bce_appear_future_threshold", 0.5))
         self.appear_weight = float(cfg.get("loss.bce_appear_weight", 8.0))
+        self.disappear_now_threshold = float(cfg.get("loss.bce_disappear_now_threshold", 0.5))
+        self.disappear_future_threshold = float(cfg.get("loss.bce_disappear_future_threshold", 0.1))
+        self.disappear_weight = float(cfg.get("loss.bce_disappear_weight", 1.0))
+        self.close_w = float(cfg.get("loss.close_weight", 0.0))
         self.blob_w = float(cfg.get("loss.blob_bce_weight", 0.35))
         self.blob_occupied_threshold = float(cfg.get("loss.blob_occupied_threshold", 0.5))
         self.stop_hinge_w = float(cfg.get("loss.stop_hinge_weight", 0.0))
@@ -72,6 +83,8 @@ class TeacherLoss:
         self.stop_hinge_threshold = float(
             cfg.get("loss.stop_hinge_threshold", cfg.get("warning.stop_threshold", 0.60))
         )
+        raw_target = cfg.get("loss.stop_hinge_target", None)
+        self.stop_hinge_target = None if raw_target is None else float(raw_target)
         self.small_blob_w = float(cfg.get("loss.small_blob_weight", 1.0))
         self.small_blob_max_cells = int(cfg.get("loss.small_blob_max_cells", 4))
         self.small_blob_occupied_threshold = float(
@@ -82,6 +95,12 @@ class TeacherLoss:
         self.safe_hinge_threshold = float(
             cfg.get("loss.safe_hinge_threshold", cfg.get("warning.caution_threshold", 0.25))
         )
+        self.beta_nll_w = float(cfg.get("loss.beta_nll_weight", 0.0))
+        self.evidential_w = float(cfg.get("loss.evidential_weight", 0.0))
+        self.prob_stop_w = float(cfg.get("loss.prob_stop_weight", 0.0))
+        self.prob_safe_w = float(cfg.get("loss.prob_safe_weight", 0.0))
+        self.prob_stop_target = float(cfg.get("loss.prob_stop_target", 0.75))
+        self.prob_safe_cap = float(cfg.get("loss.prob_safe_cap", 0.15))
         self.row_list = list(cfg.get("adapter.row_weights", [1.0, 1.0, 1.0, 1.0, 1.0]))
         self.left = list(cfg.get("evaluation.left_cols", [0, 1]))
         self.center = list(cfg.get("evaluation.center_cols", [2]))
@@ -102,6 +121,17 @@ class TeacherLoss:
             weight=self.appear_weight,
         )
 
+    def _disappear_w(self, h_now: torch.Tensor | None, h_tgt: torch.Tensor) -> torch.Tensor | None:
+        if h_now is None or float(self.disappear_weight) == 1.0:
+            return None
+        return disappear_cell_weight(
+            h_now,
+            h_tgt,
+            now_threshold=self.disappear_now_threshold,
+            future_threshold=self.disappear_future_threshold,
+            weight=self.disappear_weight,
+        )
+
     def _small_blob_w(self, h_tgt: torch.Tensor) -> torch.Tensor | None:
         if float(self.small_blob_w) == 1.0:
             return None
@@ -114,13 +144,29 @@ class TeacherLoss:
         )
 
     def _cell_w(self, h_now: torch.Tensor | None, h_tgt: torch.Tensor) -> torch.Tensor | None:
-        appear = self._appear_w(h_now, h_tgt)
-        small = self._small_blob_w(h_tgt)
-        if appear is None:
-            return small
-        if small is None:
-            return appear
-        return appear * small
+        parts = [self._appear_w(h_now, h_tgt), self._disappear_w(h_now, h_tgt), self._small_blob_w(h_tgt)]
+        out = None
+        for w in parts:
+            if w is None:
+                continue
+            out = w if out is None else out * w
+        return out
+
+    def _close(self, pred, target, occ, mask):
+        if float(self.close_w) == 0.0 or pred is None or target is None:
+            if pred is not None:
+                return pred.new_zeros(())
+            if target is not None:
+                return target.new_zeros(())
+            return torch.zeros(())
+        return soft_bce(
+            pred,
+            target,
+            sample_mask=mask,
+            pos_threshold=0.5,
+            pos_weight=2.0,
+            cell_weight=occ,
+        )
 
     def _stop_hinge(self, pred, target, mask):
         if float(self.stop_hinge_w) == 0.0:
@@ -131,6 +177,7 @@ class TeacherLoss:
             sample_mask=mask,
             stop_threshold=self.stop_hinge_threshold,
             margin=self.stop_hinge_margin,
+            pred_target=self.stop_hinge_target,
         )
 
     def _safe_hinge(self, pred, target, mask):
@@ -143,6 +190,54 @@ class TeacherLoss:
             caution_threshold=self.safe_hinge_threshold,
             margin=self.safe_hinge_margin,
         )
+
+    def _precision_logits(self, out: dict, ref: torch.Tensor) -> torch.Tensor:
+        raw = out.get("Hhat_precision_logits")
+        if raw is None:
+            return ref.new_zeros(ref.shape)
+        return raw
+
+    def _beta_terms(self, pred, precision_logits, target, mask, cell_weight=None):
+        if float(self.beta_nll_w) == 0.0:
+            l_beta = pred.new_zeros(())
+        else:
+            l_beta = beta_nll(
+                pred,
+                precision_logits,
+                target,
+                sample_mask=mask,
+                cell_weight=cell_weight,
+            )
+        if float(self.evidential_w) == 0.0:
+            l_evi = pred.new_zeros(())
+        else:
+            l_evi = evidential_mistake_penalty(
+                pred, precision_logits, target, sample_mask=mask
+            )
+        if float(self.prob_stop_w) == 0.0:
+            l_pstop = pred.new_zeros(())
+        else:
+            l_pstop = prob_stop_hinge(
+                pred,
+                precision_logits,
+                target,
+                sample_mask=mask,
+                gt_stop=self.stop_hinge_threshold,
+                target_prob=self.prob_stop_target,
+            )
+        if float(self.prob_safe_w) == 0.0:
+            l_psafe = pred.new_zeros(())
+        else:
+            l_psafe = prob_safe_hinge(
+                pred,
+                precision_logits,
+                target,
+                sample_mask=mask,
+                caution=self.safe_hinge_threshold,
+                cap_prob=self.prob_safe_cap,
+                stop_threshold=self.stop_hinge_threshold,
+            )
+        return l_beta, l_evi, l_pstop, l_psafe
 
     def _map(
         self,
@@ -247,12 +342,30 @@ class TeacherLoss:
                 l_bg = background_consistency_loss(out["Z_t"], z_bg_pair)
             else:
                 l_bg = h_hat.new_zeros(())
+            l_close = self._close(
+                out.get("Hhat_close"),
+                batch.get("h_close"),
+                batch.get("close_mask"),
+                valid,
+            )
+            l_beta, l_evi, l_pstop, l_psafe = self._beta_terms(
+                h_hat,
+                self._precision_logits(out, h_hat),
+                h_tgt,
+                valid,
+                cell_weight=self._cell_w(batch.get("h_now"), h_tgt),
+            )
             terms["L_1s"] = l_h
             terms["L_future"] = l_h
             terms["L_blob"] = l_blob
             terms["L_blob_1s"] = l_blob
             terms["L_stop_hinge"] = l_stop
             terms["L_safe_hinge"] = l_safe
+            terms["L_close"] = l_close
+            terms["L_beta"] = l_beta
+            terms["L_evidential"] = l_evi
+            terms["L_prob_stop"] = l_pstop
+            terms["L_prob_safe"] = l_psafe
             terms["L_FP"] = l_fp
             terms["L_FP_1s"] = l_fp
             terms["L_dir"] = l_dir
@@ -263,6 +376,11 @@ class TeacherLoss:
                 + self.blob_w * l_blob
                 + self.stop_hinge_w * l_stop
                 + self.safe_hinge_w * l_safe
+                + self.close_w * l_close
+                + self.beta_nll_w * l_beta
+                + self.evidential_w * l_evi
+                + self.prob_stop_w * l_pstop
+                + self.prob_safe_w * l_psafe
                 + self.fp_w * l_fp
                 + self.dir_w * l_dir
                 + self.bg_w * l_bg

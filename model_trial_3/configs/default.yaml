@@ -27,6 +27,14 @@ data:
   skip_incomplete: true
   use_spatial_annotations: true
   never_use_overlay_as_input: true
+  # Same-dir extras on disk (sample_0207..0229, miss_left/bg_00 only).
+  # On: add those groups to train. Off: ignore them. Default on.
+  # Does not change the original val/test split.
+  extra_same_dir:
+    enabled: true
+    sample_min: 207
+    sample_max: 229
+    split: train
   min_decoded_frames: 450
   heatmap_value_min: 0.0
   heatmap_value_max: 1.0
@@ -156,6 +164,12 @@ loss:
   bce_appear_now_threshold: 0.1
   bce_appear_future_threshold: 0.5
   bce_appear_weight: 8.0
+  # Dual: occupied-now → empty-future (receding / walk-away). 1 = off.
+  bce_disappear_now_threshold: 0.5
+  bce_disappear_future_threshold: 0.1
+  bce_disappear_weight: 1.0
+  # Train-only 5×5 approaching aux on Z_t from annotations.json. 0 = off.
+  close_weight: 0.0
   # Option A: BCE on 3×3 max(pred) vs 3×3 max(GT), only occupied neighbourhoods.
   # Lighting the true cell satisfies it; a neighbour is the fallback.
   blob_bce_weight: 0.35
@@ -164,6 +178,8 @@ loss:
   stop_hinge_weight: 0.0
   stop_hinge_margin: 0.05
   stop_hinge_threshold: 0.60
+  # If set, pred peak target (e.g. 0.30 for miss-only). null = threshold + margin.
+  stop_hinge_target: null
   # Dual of STOP hinge: if max(GT) is SAFE, push max(pred) below CAUTION.
   safe_hinge_weight: 0.0
   safe_hinge_margin: 0.0
@@ -172,6 +188,15 @@ loss:
   small_blob_weight: 1.0
   small_blob_max_cells: 4
   small_blob_occupied_threshold: 0.5
+  # Beta mean-precision evidential heatmap (Ferrari 2004; Amini NeurIPS 2020).
+  # 0 = off. φ = 1+softplus(evidence_head). NLL is a proper scoring rule.
+  beta_nll_weight: 0.0
+  evidential_weight: 0.0
+  # Noisy-OR P(any cell H ≥ 0.60) hinges. Independent of the mean-peak hinges.
+  prob_stop_weight: 0.0
+  prob_safe_weight: 0.0
+  prob_stop_target: 0.75
+  prob_safe_cap: 0.15
   threat_weight_floor: 0.05
   threat_weight_scale: 4.0
   threat_weight_gamma: 2.0

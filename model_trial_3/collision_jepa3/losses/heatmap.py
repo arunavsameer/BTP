@@ -49,6 +49,27 @@ def appear_cell_weight(
     return torch.where(appear, w * float(weight), w)
 
 
+def disappear_cell_weight(
+    h_now: torch.Tensor,
+    h_future: torch.Tensor,
+    *,
+    now_threshold: float = 0.5,
+    future_threshold: float = 0.1,
+    weight: float = 8.0,
+) -> torch.Tensor:
+    """Extra multiplier on cells occupied now that are empty at the future map.
+
+    Dual of ``appear_cell_weight``. Receding / walk-away cells would otherwise
+    be treated like any other negative. Hold extras (empty now and empty 1s)
+    do not fire this term.
+    """
+    w = torch.ones_like(h_future, dtype=torch.float32)
+    if float(weight) == 1.0:
+        return w
+    disappear = (h_now.float() >= float(now_threshold)) & (h_future.float() < float(future_threshold))
+    return torch.where(disappear, w * float(weight), w)
+
+
 def small_blob_cell_weight(
     target: torch.Tensor,
     *,
@@ -83,11 +104,13 @@ def stop_peak_hinge(
     sample_mask: torch.Tensor | None = None,
     stop_threshold: float = 0.60,
     margin: float = 0.05,
+    pred_target: float | None = None,
 ) -> torch.Tensor:
-    """If GT peak is STOP, push pred peak to stop_threshold + margin. Else 0.
+    """If GT peak is STOP, push pred peak to ``pred_target``. Else 0.
 
-    SAFE/THREAT windows do not contribute, so miss-clip empty maps are untouched.
-    Post-fork STOP maps that already peak above the cut give ~0.
+    Default ``pred_target`` is ``stop_threshold + margin`` (0.65). A lower
+    target (e.g. 0.30) only lifts STOP→SAFE misses without demanding a 0.65
+    peak. SAFE/THREAT windows do not contribute.
     """
     pred_peak = pred.float().flatten(1).max(dim=1).values
     gt_peak = target.float().flatten(1).max(dim=1).values
@@ -96,7 +119,8 @@ def stop_peak_hinge(
         need = need & sample_mask.to(dtype=torch.bool, device=pred.device).view(-1)
     if not bool(need.any()):
         return pred.new_zeros(())
-    gap = (float(stop_threshold) + float(margin) - pred_peak).clamp(min=0.0)
+    target_peak = float(stop_threshold) + float(margin) if pred_target is None else float(pred_target)
+    gap = (target_peak - pred_peak).clamp(min=0.0)
     return gap[need].mean()
 
 
