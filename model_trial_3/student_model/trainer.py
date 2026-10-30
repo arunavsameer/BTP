@@ -217,7 +217,15 @@ class StudentTrainer:
             operating = val.get("operating") or {}
             h1s = (val.get("horizons") or {}).get("1s") or {}
             latent = val.get("latent") or {}
-            if stop_metric == "latent_l1":
+            if stop_metric == "blob_l1":
+                cur = latent.get("blob_l1")
+                prev = None if self.best_sel is None else self.best_sel.get("latent_blob_l1")
+                better = cur is not None and cur == cur and (prev is None or float(cur) < float(prev) - 1e-8)
+            elif stop_metric == "small_stop_recall":
+                cur = latent.get("small_stop_recall")
+                prev = None if self.best_sel is None else self.best_sel.get("small_stop_recall")
+                better = cur is not None and cur == cur and (prev is None or float(cur) > float(prev) + 1e-8)
+            elif stop_metric == "latent_l1":
                 cur = latent.get("l1")
                 prev = None if self.best_sel is None else self.best_sel.get("latent_l1")
                 better = cur is not None and cur == cur and (prev is None or float(cur) < float(prev) - 1e-8)
@@ -246,6 +254,8 @@ class StudentTrainer:
                 tagged["best_epoch"] = epoch
                 tagged["latent_l1"] = latent.get("l1")
                 tagged["latent_cos"] = latent.get("cos")
+                tagged["latent_blob_l1"] = latent.get("blob_l1")
+                tagged["small_stop_recall"] = latent.get("small_stop_recall")
                 tagged.update(
                     {
                         k: operating.get(k)
@@ -301,15 +311,20 @@ class StudentTrainer:
             self.log.write(rec)
             history.append(rec)
             logger.info(
-                "epoch=%d L_feat=%.4f L_total=%.4f val_L1=%s val_cos=%s rec@5FA=%s SAFE=%s STOP=%s time=%.1fs",
+                "epoch=%d L_feat=%.4f L_h=%s L_stop=%s L_safe=%s L_total=%.4f val_L1=%s blob_L1=%s val_cos=%s rec@5FA=%s SAFE=%s STOP=%s smallSTOP=%s time=%.1fs",
                 epoch,
                 train_means.get("L_feat", float("nan")),
+                train_means.get("L_h"),
+                train_means.get("L_stop"),
+                train_means.get("L_safe"),
                 train_means.get("L_total", float("nan")),
                 latent.get("l1"),
+                latent.get("blob_l1"),
                 latent.get("cos"),
                 operating.get("recall_at_5fa"),
                 h1s.get("safe_recall"),
                 h1s.get("stop_recall"),
+                latent.get("small_stop_recall"),
                 dt,
             )
             if epoch < patience_start:

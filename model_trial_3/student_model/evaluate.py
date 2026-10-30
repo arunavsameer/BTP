@@ -13,6 +13,8 @@ from collision_jepa3.evaluation.metrics import HorizonAccumulator
 from collision_jepa3.evaluation.operating_point import operating_metrics
 from collision_jepa3.training.engine import composite_score, move_batch
 
+from .loss import blob_weights, spatial_l1, weighted_l1
+
 
 def student_forward(model, batch) -> dict[str, torch.Tensor]:
     if "frames" not in batch:
@@ -40,7 +42,15 @@ def evaluate_student(model, loader, cfg, device: str, loss_fn=None, teacher=None
     loss_n = 0
     latent_l1 = 0.0
     latent_cos = 0.0
+    latent_blob_l1 = 0.0
     latent_n = 0
+    small_stop_n = 0
+    small_stop_tp = 0
+    stop_thr = float(cfg.get("warning.stop_threshold", 0.60))
+    caution_thr = float(cfg.get("warning.caution_threshold", 0.25))
+    energy_alpha = float(cfg.get("student.energy_alpha", 4.0))
+    appear_boost = float(cfg.get("student.appear_boost", 4.0))
+    stop_boost = float(cfg.get("student.stop_boost", 2.0))
     for batch in loader:
         batch = move_batch(batch, device)
         out = student_forward(model, batch)
@@ -50,7 +60,16 @@ def evaluate_student(model, loader, cfg, device: str, loss_fn=None, teacher=None
             t_out = {"F": fine, "Z_t": z}
             p = out["F"].float()
             t = fine.float()
-            latent_l1 += float((p - t).abs().mean())
+            w = blob_weights(
+                t,
+                batch.get("h_now"),
+                batch.get("h_1s"),
+                energy_alpha=energy_alpha,
+                appear_boost=appear_boost,
+                stop_boost=stop_boost,
+            )
+            latent_l1 += float(spatial_l1(p, t))
+            latent_blob_l1 += float(weighted_l1(p, t, w))
             pn = torch.nn.functional.normalize(p.flatten(1), dim=1, eps=1e-6)
             tn = torch.nn.functional.normalize(t.flatten(1), dim=1, eps=1e-6)
             latent_cos += float((pn * tn).sum(dim=1).mean())
@@ -83,6 +102,15 @@ def evaluate_student(model, loader, cfg, device: str, loss_fn=None, teacher=None
             pred_1s.append(preds[i])
             gt_1s.append(trues[i])
             valid_1s.append(np.full(preds[i].shape, not masked, dtype=bool))
+            if (not masked) and float(trues[i].max()) >= stop_thr:
+                n_occ = int((trues[i] >= 0.50).sum())
+                empty_now = False
+                if "h_now" in batch:
+                    empty_now = float(batch["h_now"][i].float().max()) < caution_thr
+                if n_occ <= 2 or empty_now:
+                    small_stop_n += 1
+                    if float(preds[i].max()) >= stop_thr:
+                        small_stop_tp += 1
     horizon_summaries = {n: (acc["1s"].summary() if n == "1s" else {}) for n in names}
     result = {
         "horizons": horizon_summaries,
@@ -96,8 +124,19 @@ def evaluate_student(model, loader, cfg, device: str, loss_fn=None, teacher=None
         )
     if loss_n:
         result["loss"] = {k: v / loss_n for k, v in loss_sums.items()}
+    result["latent"] = {
+        "small_stop_n": small_stop_n,
+        "small_stop_tp": small_stop_tp,
+        "small_stop_recall": (small_stop_tp / small_stop_n) if small_stop_n else None,
+    }
     if latent_n:
-        result["latent"] = {"l1": latent_l1 / latent_n, "cos": latent_cos / latent_n}
+        result["latent"].update(
+            {
+                "l1": latent_l1 / latent_n,
+                "cos": latent_cos / latent_n,
+                "blob_l1": latent_blob_l1 / latent_n,
+            }
+        )
     result["subgroups"] = {
         "outcome": _mean_map(acc["1s"].by_outcome),
         "background": _mean_map(acc["1s"].by_background),

@@ -24,7 +24,7 @@ from collision_jepa3.training.checkpoint import load_checkpoint, load_teacher_st
 from collision_jepa3.utils.device import describe_hardware, resolve_device  # noqa: E402
 from collision_jepa3.utils.logging import setup_logger  # noqa: E402
 
-from student_model.dataset import StudentDataset, build_student_loader  # noqa: E402
+from student_model.dataset import StudentDataset, build_student_loader, upsample_small_appear  # noqa: E402
 from student_model.evaluate import evaluate_student  # noqa: E402
 from student_model.student import CollisionStudent, MAX_PARAMS, load_frozen_teacher_heads  # noqa: E402
 from student_model.trainer import StudentTrainer  # noqa: E402
@@ -102,6 +102,43 @@ def _apply_g_recipe(cfg, args) -> None:
         cfg.set("student.hint_lr", float(args.hint_lr))
     if getattr(args, "decoder_lr", None) is not None:
         cfg.set("student.decoder_lr", float(args.decoder_lr))
+    if getattr(args, "energy_alpha", None) is not None:
+        cfg.set("student.energy_alpha", float(args.energy_alpha))
+    if getattr(args, "appear_boost", None) is not None:
+        cfg.set("student.appear_boost", float(args.appear_boost))
+    if getattr(args, "stop_boost", None) is not None:
+        cfg.set("student.stop_boost", float(args.stop_boost))
+    if getattr(args, "upsample_repeats", None) is not None:
+        cfg.set("student.upsample_repeats", int(args.upsample_repeats))
+    if getattr(args, "h_weight", None) is not None:
+        cfg.set("student.h_weight", float(args.h_weight))
+    if getattr(args, "peak_stop_weight", None) is not None:
+        cfg.set("student.peak_stop_weight", float(args.peak_stop_weight))
+    if getattr(args, "peak_safe_weight", None) is not None:
+        cfg.set("student.peak_safe_weight", float(args.peak_safe_weight))
+    if getattr(args, "logit_weight", None) is not None:
+        cfg.set("student.logit_weight", float(args.logit_weight))
+    if getattr(args, "encoder_variant", None) is not None:
+        cfg.set("student.encoder_variant", str(args.encoder_variant))
+
+
+def _to_device(module, device: str, *, tries: int = 18, delay: float = 10.0):
+    """Move to GPU with retries for transient CUDA busy/unavailable on shared nodes."""
+    import time
+
+    last: BaseException | None = None
+    for attempt in range(int(tries)):
+        try:
+            return module.to(device)
+        except Exception as exc:
+            last = exc
+            msg = str(exc).lower()
+            if "busy" not in msg and "unavailable" not in msg:
+                raise
+            print(f"cuda busy, retry {attempt + 1}/{tries}: {exc}", flush=True)
+            time.sleep(float(delay) * (1 if attempt < 3 else 2))
+    assert last is not None
+    raise last
 
 
 def build_frozen_teacher(cfg, ckpt: Path, device: str):
@@ -117,7 +154,7 @@ def build_frozen_teacher(cfg, ckpt: Path, device: str):
     teacher = CollisionTeacher3(cfg, backbone=backbone)
     blob = load_checkpoint(ckpt, map_location="cpu")
     load_teacher_state(teacher, blob, strict=False)
-    teacher.to(device).eval()
+    _to_device(teacher, device).eval()
     for p in teacher.parameters():
         p.requires_grad_(False)
     return teacher, blob
@@ -146,7 +183,16 @@ def main() -> None:
     parser.add_argument("--warmup-epochs", type=int, default=None)
     parser.add_argument(
         "--early-stop-metric",
-        choices=["selection", "val_mse", "recall_at_5fa", "prefork_stop", "balanced_warning", "latent_l1"],
+        choices=[
+            "selection",
+            "val_mse",
+            "recall_at_5fa",
+            "prefork_stop",
+            "balanced_warning",
+            "latent_l1",
+            "blob_l1",
+            "small_stop_recall",
+        ],
         default=None,
     )
     parser.add_argument("--val-subset-fraction", type=float, default=None)
@@ -183,6 +229,15 @@ def main() -> None:
     )
     parser.add_argument("--frame-cache-workers", type=int, default=8)
     parser.add_argument("--frame-cache-max-gb", type=float, default=80.0)
+    parser.add_argument("--energy-alpha", type=float, default=None)
+    parser.add_argument("--appear-boost", type=float, default=None)
+    parser.add_argument("--stop-boost", type=float, default=None)
+    parser.add_argument("--upsample-repeats", type=int, default=None)
+    parser.add_argument("--h-weight", type=float, default=None)
+    parser.add_argument("--peak-stop-weight", type=float, default=None)
+    parser.add_argument("--peak-safe-weight", type=float, default=None)
+    parser.add_argument("--logit-weight", type=float, default=None)
+    parser.add_argument("--encoder-variant", choices=["lat", "fast"], default=None)
     args = parser.parse_args()
     cfg = load_cfg(args)
     _apply_g_recipe(cfg, args)
@@ -194,8 +249,6 @@ def main() -> None:
     setup_logger("student_model.trainer", cfg.path("paths.logs_root"))
     setup_logger("student_model.prepare_frames", cfg.path("paths.logs_root"))
     log.info("resolved config: %s", json.dumps(dump_resolved(cfg)["_resolved"], indent=2))
-    device = resolve_device(args.device)
-    log.info("hardware %s", describe_hardware(device, "student_g"))
 
     teacher_ckpt = Path(args.teacher_ckpt)
     if not teacher_ckpt.is_absolute():
@@ -222,6 +275,11 @@ def main() -> None:
         print("frame cache", cache_stats, flush=True)
     train_ds = StudentDataset(cfg, records, "train", splits, dummy_backbone=False)
     val_ds = StudentDataset(cfg, records, "val", splits, dummy_backbone=False)
+    up_repeats = int(cfg.get("student.upsample_repeats", 0) or 0)
+    if up_repeats > 0:
+        up_stats = upsample_small_appear(train_ds, repeats=up_repeats)
+        log.info("upsample small-appear %s", up_stats)
+        print("upsample small-appear", up_stats, flush=True)
     frac = float(cfg.get("evaluation.val_subset_fraction", 1.0))
     if 0.0 < frac < 1.0 and len(val_ds):
         val_ds.subsample_clips(frac, int(cfg.get("project.seed", 1337)))
@@ -238,10 +296,14 @@ def main() -> None:
         extra_n,
     )
 
+    # CUDA must not be initialized before the frame-cache process pool, or
+    # fork-after-CUDA leaves the GPU busy/unavailable on shared DGX nodes.
+    device = resolve_device(args.device)
+    log.info("hardware %s", describe_hardware(device, "student_g"))
     teacher, blob = build_frozen_teacher(cfg, teacher_ckpt, device)
     student = CollisionStudent(cfg)
     load_frozen_teacher_heads(student, blob)
-    student.to(device)
+    _to_device(student, device)
     audit = student.parameter_audit()
     log.info("student audit %s", audit)
     if audit["total"] >= MAX_PARAMS:

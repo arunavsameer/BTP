@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from collision_jepa3.models.heatmap_decoder import HeatmapDecoder
 from collision_jepa3.models.vjepa_backbone import IMAGENET_MEAN, IMAGENET_STD
 
-from .encoder import StudentEncoder
+from .encoder import build_student_encoder
 
 MAX_PARAMS = 1_000_000
 
@@ -89,7 +89,9 @@ class CollisionStudent(nn.Module):
         self.z_channels = z_ch
         self.feature_grid = grid
         self.fine_channels = proj
-        self.encoder = StudentEncoder(out_channels=proj)
+        variant = "lat" if cfg is None else str(cfg.get("student.encoder_variant", "lat"))
+        self.encoder_variant = variant
+        self.encoder = build_student_encoder(variant, out_channels=proj)
         self.predictor = JEPAPredictor(proj, grid=16)
         self.bottleneck = _teacher_bottleneck(z_ch, proj)
         self.norm = nn.LayerNorm(z_ch)
@@ -129,6 +131,22 @@ class CollisionStudent(nn.Module):
 
     def encode_fine(self, clip: torch.Tensor) -> torch.Tensor:
         return self.predict_fine(self.encode_context(clip))
+
+    def infer(self, clip: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Deployment forward: skip the predictor (near-identity, extra latency)."""
+        fine = self.encode_context(clip)
+        z_t = self.z_from_fine(fine)
+        h, logits = self.decoder.forward_with_logits(fine)
+        close_logits = self.close_head(z_t).squeeze(1)
+        return {
+            "F_ctx": fine,
+            "F": fine,
+            "Z_t": z_t,
+            "Hhat_1s": h,
+            "Hhat_1s_logits": logits,
+            "Hhat_close": torch.sigmoid(close_logits),
+            "Hhat_close_logits": close_logits,
+        }
 
     def z_from_fine(self, fine: torch.Tensor) -> torch.Tensor:
         pooled = F.adaptive_avg_pool2d(fine, self.feature_grid)
@@ -176,6 +194,7 @@ class CollisionStudent(nn.Module):
             "encoder": int(sum(p.numel() for p in self.encoder.parameters())),
             "predictor": int(sum(p.numel() for p in self.predictor.parameters())),
             "decoder": int(sum(p.numel() for p in self.decoder.parameters())),
+            "encoder_variant": self.encoder_variant,
             "under_1m": total < MAX_PARAMS,
         }
 

@@ -14,7 +14,7 @@ from collision_jepa3.models.teacher import CollisionTeacher3
 from collision_jepa3.models.vjepa_backbone import DummyVJEPA2Backbone
 from collision_jepa3.training.checkpoint import extract_teacher_state
 
-from student_model.loss import StudentLoss, spatial_cosine, spatial_l1
+from student_model.loss import StudentLoss, blob_weights, spatial_cosine, spatial_l1, weighted_l1
 from student_model.student import MAX_PARAMS, CollisionStudent, load_frozen_teacher_heads
 
 
@@ -33,6 +33,21 @@ def _dummy_teacher(cfg):
 
 
 class StudentTests(unittest.TestCase):
+    def test_fast_encoder_is_smaller_same_shapes(self) -> None:
+        cfg = _cfg()
+        cfg.set("student.encoder_variant", "fast")
+        m = CollisionStudent(cfg)
+        full = CollisionStudent(_cfg())
+        audit = m.parameter_audit()
+        self.assertLess(audit["total"], MAX_PARAMS)
+        self.assertLess(audit["encoder"], full.parameter_audit()["encoder"])
+        clip = torch.rand(2, 16, 3, 256, 256)
+        out = m(clip)
+        inf = m.infer(clip)
+        self.assertEqual(tuple(out["F"].shape), (2, 128, 16, 16))
+        self.assertEqual(tuple(out["Hhat_1s"].shape), (2, 5, 5))
+        self.assertEqual(tuple(inf["F"].shape), (2, 128, 16, 16))
+
     def test_under_one_million_params(self) -> None:
         m = CollisionStudent(_cfg())
         audit = m.parameter_audit()
@@ -109,6 +124,67 @@ class StudentTests(unittest.TestCase):
         s_out = {"F": torch.randn(1, 128, 16, 16, requires_grad=True)}
         packed = StudentLoss(cfg)(s_out, {}, None, epoch=0)
         self.assertLess(float(packed.total.abs()), 1e-8)
+
+    def test_blob_weight_penalizes_appear_cells(self) -> None:
+        f_t = torch.zeros(1, 4, 16, 16)
+        f_t[:, :, 0, 0] = 3.0
+        h_now = torch.zeros(1, 5, 5)
+        h_1s = torch.zeros(1, 5, 5)
+        h_1s[:, 0, 0] = 0.90
+        w = blob_weights(f_t, h_now, h_1s, energy_alpha=4.0, appear_boost=4.0, stop_boost=2.0)
+        self.assertGreater(float(w[0, 0, 0, 0]), float(w[0, 0, 8, 8]))
+        pred = f_t.clone()
+        pred[:, :, 0, 0] = 0.0
+        pred[:, :, 8, 8] = 3.0
+        miss_blob = weighted_l1(pred, f_t, w)
+        pred2 = f_t.clone()
+        pred2[:, :, 8, 8] = 3.0
+        miss_bg = weighted_l1(pred2, f_t, w)
+        self.assertGreater(float(miss_blob), float(miss_bg))
+
+    def test_last_tubelet_skip_present(self) -> None:
+        m = CollisionStudent(_cfg())
+        self.assertTrue(hasattr(m.encoder, "last_gate"))
+        self.assertEqual(int(m.encoder.last_gate.numel()), 1)
+        self.assertEqual(float(m.encoder.last_gate.item()), 0.0)
+
+    def test_teacher_heatmap_kd_keeps_decoder_frozen(self) -> None:
+        cfg = _cfg()
+        cfg.set("student.h_weight", 1.0)
+        cfg.set("student.peak_stop_weight", 1.0)
+        cfg.set("student.peak_safe_weight", 1.0)
+        m = CollisionStudent(cfg)
+        clip = torch.rand(2, 16, 3, 256, 256)
+        out = m(clip)
+        t_out = {
+            "F": torch.randn_like(out["F"]),
+            "Z_t": torch.randn_like(out["Z_t"]),
+            "Hhat_1s": torch.ones_like(out["Hhat_1s"]),
+        }
+        packed = StudentLoss(cfg)(
+            out, {"h_now": torch.zeros(2, 5, 5), "h_1s": torch.ones(2, 5, 5)}, t_out, epoch=0
+        )
+        packed.total.backward()
+        self.assertGreater(float(packed.terms["L_stop"].detach()), 0.0)
+        self.assertIsNone(m.decoder.net[0].weight.grad)
+        self.assertTrue(any(p.grad is not None for p in m.encoder.parameters()))
+
+    def test_cellwise_safe_hinge_on_background(self) -> None:
+        cfg = _cfg()
+        cfg.set("student.h_weight", 1.0)
+        cfg.set("student.peak_stop_weight", 1.0)
+        cfg.set("student.peak_safe_weight", 1.0)
+        h_s = torch.full((1, 5, 5), 0.90, requires_grad=True)
+        h_t = torch.zeros(1, 5, 5)
+        h_t[0, 0, 0] = 0.90
+        packed = StudentLoss(cfg)(
+            {"F": torch.zeros(1, 128, 16, 16), "Hhat_1s": h_s},
+            {},
+            {"F": torch.zeros(1, 128, 16, 16), "Hhat_1s": h_t},
+        )
+        self.assertGreater(float(packed.terms["L_safe"].detach()), 0.0)
+        packed.total.backward()
+        self.assertIsNotNone(h_s.grad)
 
 
 if __name__ == "__main__":

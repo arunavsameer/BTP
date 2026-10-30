@@ -76,6 +76,7 @@ class StudentEncoder(nn.Module):
         )
         self.extra = InvertedResidual2p1d(out_channels, expand=2, time_dilation=1)
         self.time_pool = TemporalSoftmaxPool(out_channels, int(temporal_groups))
+        self.last_gate = nn.Parameter(torch.tensor(0.0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """x: [B, 3, T, H, W] ImageNet-normalised. Returns [B, 128, 16, 16]."""
@@ -84,4 +85,44 @@ class StudentEncoder(nn.Module):
         y = self.proj(y)
         y = self.high(y)
         y = self.extra(y)
-        return self.time_pool(y)
+        return self.time_pool(y) + self.last_gate * y[:, :, -1]
+
+
+class StudentEncoderFast(nn.Module):
+    """Thin 64-ch 3D trunk, then 1×1 to G's 128×16×16 fine map."""
+
+    def __init__(self, width: int = 64, out_channels: int = 128, temporal_groups: int = 8):
+        super().__init__()
+        self.out_channels = int(out_channels)
+        self.stem = nn.Sequential(
+            nn.Conv3d(3, width, kernel_size=(2, 16, 16), stride=(2, 16, 16)),
+            nn.GroupNorm(8, width),
+            nn.GELU(),
+        )
+        self.low = InvertedResidual2p1d(width, expand=2, time_dilation=1)
+        self.high = nn.Sequential(
+            InvertedResidual2p1d(width, expand=2, time_dilation=1),
+            InvertedResidual2p1d(width, expand=2, time_dilation=2),
+            InvertedResidual2p1d(width, expand=2, time_dilation=1),
+        )
+        self.time_pool = TemporalSoftmaxPool(width, int(temporal_groups))
+        self.to_fine = nn.Sequential(
+            nn.Conv2d(width, out_channels, kernel_size=1),
+            nn.GroupNorm(8, out_channels),
+            nn.GELU(),
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        y = self.stem(x)
+        y = self.low(y)
+        y = self.high(y)
+        return self.to_fine(self.time_pool(y))
+
+
+def build_student_encoder(variant: str = "lat", out_channels: int = 128) -> nn.Module:
+    name = str(variant or "lat").lower()
+    if name in {"lat", "default", "full"}:
+        return StudentEncoder(out_channels=out_channels)
+    if name in {"fast", "lat_fast"}:
+        return StudentEncoderFast(out_channels=out_channels)
+    raise ValueError(f"unknown student encoder variant {variant!r}")
