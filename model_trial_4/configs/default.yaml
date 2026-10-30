@@ -1,0 +1,171 @@
+project:
+  name: collision_jepa_model_trial_4
+  seed: 1337
+
+paths:
+  # Relative dataset paths resolve against the workspace (parent of model_trial_4).
+  # Relative checkpoint/log paths resolve against model_trial_4/.
+  dataset_root: "blender_sim/datasets/groups15_n400_s67_n400"
+  manifest: "cache/manifest.jsonl"
+  split_file: "cache/splits.json"
+  # Shared frozen-encoder token cache. Fingerprint matches Trial 3 when backbone
+  # and sampling fields below are unchanged, so tokens are not re-encoded.
+  cache_root: "/raid/asrivastava/VJEPA2_BTP/model_trial_3/cache"
+  checkpoint_root: "checkpoints"
+  logs_root: "logs"
+  reports_root: "reports"
+  visualizations_root: "visualizations"
+  hf_cache_dir: "/raid/asrivastava/VJEPA2_BTP/model_trial_2/hf_cache"
+  hf_cache_fallback: "hf_cache"
+
+data:
+  fps_expected: 30
+  expected_frames: 450
+  source_height: 1080
+  source_width: 1920
+  target_grid: 5
+  skip_incomplete: true
+  use_spatial_annotations: true
+  never_use_overlay_as_input: true
+  extra_same_dir:
+    enabled: true
+    sample_min: 207
+    sample_max: 229
+    split: train
+  min_decoded_frames: 450
+  heatmap_value_min: 0.0
+  heatmap_value_max: 1.0
+
+preprocessing:
+  input_size: 256
+  preserve_fov: true
+  resize_mode: "letterbox"
+  pad_value: 0
+  use_checkpoint_normalization: true
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]
+  random_horizontal_flip: false
+  random_geometric_augmentation: false
+  photometric_augmentation: false
+  normalize_in_backbone: true
+
+sampling:
+  history_seconds: 3.0
+  input_frames: 16
+  input_spacing_frames: 6
+  frame_offsets: [-90, -84, -78, -72, -66, -60, -54, -48, -42, -36, -30, -24, -18, -12, -6, 0]
+  horizons_frames: [30, 45, 60]
+  horizon_names: ["1s", "1_5s", "2s"]
+  allow_partial_horizons: true
+  anchor_mode: "group_random"
+  n_pre_fork_anchors: 26
+  n_post_fork_anchors: 14
+  random_anchor_t_min: 90
+  random_anchor_t_max: 419
+  train_anchor_stride: 15
+  val_anchor_stride: 15
+  test_anchor_stride: 15
+  fork_frame: 365
+  mask_ambiguous_pairs: true
+  ambiguous_policy: "mean_target"
+  heatmap_disagree_tol: 0.02
+  rgb_history_l1_tol: 0.002
+  background_target_tolerance: 0.001
+
+splits:
+  train_fraction: 0.70
+  val_fraction: 0.15
+  test_fraction: 0.15
+  stratify_by: "scenario_type"
+
+backbone:
+  model_id: "facebook/vjepa2-vitg-fpc64-256"
+  fallback_model_id: "facebook/vjepa2-vitl-fpc64-256"
+  input_resolution: 256
+  tuning_mode: "frozen"
+  mixed_precision: true
+  torch_dtype: "bfloat16"
+  gradient_checkpointing: false
+  attention_implementation: "sdpa"
+  skip_predictor: true
+  use_get_vision_features: true
+
+heads:
+  mode: now
+
+loss:
+  now_weight: 1.0
+  # Selector weight for the now map. Sampling still names the three future horizons.
+  horizon_weights:
+    now: 1.0
+  heatmap: bce
+  bce_pos_threshold: 0.1
+  bce_pos_weight: 2.0
+  row_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
+  safe_cell_threshold: 0.05
+  # Used only when loss.heatmap is mse.
+  threat_weight_floor: 0.05
+  threat_weight_scale: 4.0
+  threat_weight_gamma: 2.0
+  recall_weight_beta: 1.0
+  recall_weight_hi: 0.5
+
+optimizer:
+  name: "AdamW"
+  adapter_lr: 0.0003
+  weight_decay: 0.0001
+  grad_clip_norm: 1.0
+  scheduler: "cosine"
+  warmup_epochs: 5
+  min_lr: 0.000001
+
+training:
+  frozen_epochs: 8
+  patience: 4
+  patience_start_epoch: 0
+  early_stop_metric: selection
+  micro_batch_size: 8
+  gradient_accumulation_steps: 1
+  num_workers: 2
+  prefetch_factor: 2
+  pin_memory: true
+  amp: true
+  amp_dtype: "bfloat16"
+  clip_contiguous_sampling: true
+  log_every_steps: 10
+  save_every_epoch: true
+  max_steps: 0
+
+cache:
+  cache_frames: false
+  cache_encoder_tokens: true
+  token_cache_dtype: "float16"
+  token_encode_batch_size: 8
+  lru_clips_in_ram: 4
+
+evaluation:
+  high_threat_threshold: 0.5
+  caution_threshold: 0.25
+  stop_threshold: 0.60
+  val_subset_fraction: 0.25
+  left_cols: [0, 1]
+  center_cols: [2]
+  right_cols: [3, 4]
+
+selection:
+  nuisance_weight: 0.5
+  miss_weight: 0.5
+  max_nuisance: 0.20
+  max_miss: 0.25
+  future_recall_weight: 0.6
+  stop_f1_weight: 0.4
+
+warning:
+  row_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
+  left_cols: [0, 1]
+  center_cols: [2]
+  right_cols: [3, 4]
+  caution_threshold: 0.25
+  stop_threshold: 0.60
+  confirm_frames: 3
+  release_frames: 5
