@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train the frozen now-only Collision-JEPA teacher."""
+"""Train the frozen 1s-ahead Collision-JEPA teacher."""
 
 from __future__ import annotations
 

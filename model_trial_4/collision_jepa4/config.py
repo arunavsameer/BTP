@@ -127,8 +127,8 @@ class Config:
         row_w = list(self.get("loss.row_weights", []))
         if len(row_w) != 5:
             raise ValueError("loss.row_weights must have length 5")
-        if "now" not in self.get("loss.horizon_weights", {}):
-            raise ValueError("loss.horizon_weights missing now")
+        if "1s" not in self.get("loss.horizon_weights", {}):
+            raise ValueError("loss.horizon_weights missing 1s")
         mode = str(self.get("preprocessing.resize_mode"))
         if mode not in {"letterbox", "checkpoint_center_crop"}:
             raise ValueError(f"unsupported resize_mode {mode}")
@@ -155,18 +155,30 @@ class Config:
                 raise ValueError(
                     f"sampling.random_anchor_t_max {t_max} > last 1s-valid anchor {hard_max}"
                 )
-        mode = str(self.get("heads.mode", "now"))
-        if mode != "now":
+        mode = str(self.get("heads.mode", "direct_h1s"))
+        if mode != "direct_h1s":
             raise ValueError(f"unsupported heads.mode {mode}")
 
 
 def heads_mode(cfg: "Config" | Any) -> str:
-    return str(cfg.get("heads.mode", "now"))
+    return str(cfg.get("heads.mode", "direct_h1s"))
 
 
 def supervised_horizon_names(cfg: "Config" | Any) -> list[str]:
-    """Maps the loss and the checkpoint selector score. The now head is the only output."""
-    return ["now"]
+    """Maps the loss and the checkpoint selector score. The 1s head is the only output."""
+    return ["1s"]
+
+
+def pred_map_key(_cfg: "Config" | Any | None = None) -> str:
+    return "Hhat_1s"
+
+
+def pred_logits_key(_cfg: "Config" | Any | None = None) -> str:
+    return "Hhat_1s_logits"
+
+
+def target_map_key(_cfg: "Config" | Any | None = None) -> str:
+    return "h_1s"
 
 
 def dump_resolved(cfg: Config) -> dict[str, Any]:

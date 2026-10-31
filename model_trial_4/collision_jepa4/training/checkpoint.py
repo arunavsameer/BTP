@@ -1,4 +1,4 @@
-"""Checkpoint save/load for the now-only trunk."""
+"""Checkpoint save/load for the 1s-ahead trunk."""
 
 from __future__ import annotations
 

@@ -128,6 +128,6 @@ class CollisionTrunk(nn.Module):
         logits_coarse = F.adaptive_max_pool2d(logits_fine, (5, 5))
         return {
             "logits_fine": logits_fine,
-            "Hhat_now_logits": logits_coarse.squeeze(1),
-            "Hhat_now": torch.sigmoid(logits_coarse).squeeze(1),
+            "Hhat_1s_logits": logits_coarse.squeeze(1),
+            "Hhat_1s": torch.sigmoid(logits_coarse).squeeze(1),
         }

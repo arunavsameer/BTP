@@ -91,13 +91,13 @@ backbone:
   use_get_vision_features: true
 
 heads:
-  mode: now
+  mode: direct_h1s
 
 loss:
   now_weight: 1.0
-  # Selector weight for the now map. Sampling still names the three future horizons.
+  # Selector weight for the 1s map. RGB still ends at t; the label is H(t+30).
   horizon_weights:
-    now: 1.0
+    1s: 1.0
   heatmap: bce
   bce_pos_threshold: 0.1
   bce_pos_weight: 2.0

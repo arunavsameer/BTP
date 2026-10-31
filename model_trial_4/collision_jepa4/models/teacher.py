@@ -1,4 +1,4 @@
-"""Collision teacher: frozen V-JEPA plus the now-only trunk."""
+"""Collision teacher: frozen V-JEPA plus the 1s-ahead trunk."""
 
 from __future__ import annotations
 
@@ -54,8 +54,8 @@ class CollisionTeacher4(nn.Module):
             tokens = self.encode_tokens(clip)
         packed = self.trunk(tokens)
         return {
-            "Hhat_now": packed["Hhat_now"],
-            "Hhat_now_logits": packed["Hhat_now_logits"],
+            "Hhat_1s": packed["Hhat_1s"],
+            "Hhat_1s_logits": packed["Hhat_1s_logits"],
         }
 
     def trunk_parameters(self) -> list[nn.Parameter]:
@@ -79,7 +79,7 @@ class CollisionTeacher4(nn.Module):
             "hidden_size": int(self.backbone.hidden_size),
             "temporal_groups": self.temporal_groups,
             "spatial": self.spatial,
-            "heads_mode": "now",
+            "heads_mode": "direct_h1s",
         }
         if int(self.backbone.hidden_size) == 1408:
             audit["trunk_matches_spec"] = trunk_n == TRUNK_PARAMS_1408

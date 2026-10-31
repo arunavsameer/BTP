@@ -44,13 +44,13 @@ def main() -> None:
     model = CollisionTeacher4(cfg, backbone=backbone).to(device)
     clip = torch.rand(2, 16, 3, 256, 256, device=device)
     out = model(clip)
-    assert out["Hhat_now"].shape == (2, 5, 5)
-    assert out["Hhat_now_logits"].shape == (2, 5, 5)
-    probs = out["Hhat_now"].detach()
+    assert out["Hhat_1s"].shape == (2, 5, 5)
+    assert out["Hhat_1s_logits"].shape == (2, 5, 5)
+    probs = out["Hhat_1s"].detach()
     assert torch.isfinite(probs).all()
     assert float(probs.min()) > 0.0
     assert float(probs.max()) < 1.0
-    batch = {"h_now": torch.rand(2, 5, 5, device=device)}
+    batch = {"h_1s": torch.rand(2, 5, 5, device=device)}
     loss = TeacherLoss(cfg)(out, batch)
     loss.total.backward()
     for p in model.backbone.parameters():

@@ -1,4 +1,4 @@
-"""Collision-JEPA Model Trial 4: now-only V-JEPA teacher."""
+"""Collision-JEPA Model Trial 4: 1s-ahead V-JEPA teacher."""
 
 from .config import Config
 

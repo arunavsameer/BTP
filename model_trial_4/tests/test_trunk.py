@@ -1,4 +1,4 @@
-"""Shape, parameter, LayerNorm, and one-step BCE checks for the now-only trunk."""
+"""Shape, parameter, LayerNorm, and one-step BCE checks for the 1s-ahead trunk."""
 
 from __future__ import annotations
 
@@ -46,9 +46,9 @@ class TrunkTests(unittest.TestCase):
         self.assertEqual(tuple(fused.shape), (2, 48, 16, 16))
         out = trunk(tokens)
         self.assertEqual(tuple(out["logits_fine"].shape), (2, 1, 16, 16))
-        self.assertEqual(tuple(out["Hhat_now_logits"].shape), (2, 5, 5))
-        self.assertEqual(tuple(out["Hhat_now"].shape), (2, 5, 5))
-        probs = out["Hhat_now"].detach()
+        self.assertEqual(tuple(out["Hhat_1s_logits"].shape), (2, 5, 5))
+        self.assertEqual(tuple(out["Hhat_1s"].shape), (2, 5, 5))
+        probs = out["Hhat_1s"].detach()
         self.assertGreater(float(probs.min()), 0.0)
         self.assertLess(float(probs.max()), 1.0)
 
@@ -82,7 +82,7 @@ class TrunkTests(unittest.TestCase):
         self.assertTrue(all(not p.requires_grad for p in model.backbone.parameters()))
         tokens = torch.randn(2, 2048, 1408)
         out = model(tokens=tokens)
-        loss = TeacherLoss(Config.load())(out, {"h_now": torch.rand(2, 5, 5)})
+        loss = TeacherLoss(Config.load())(out, {"h_1s": torch.rand(2, 5, 5)})
         loss.total.backward()
         self.assertIsNotNone(model.trunk.projection.weight.grad)
         self.assertTrue(torch.isfinite(model.trunk.projection.weight.grad).all())
@@ -90,7 +90,18 @@ class TrunkTests(unittest.TestCase):
             self.assertIsNone(p.grad)
         clip = torch.rand(1, 16, 3, 256, 256)
         clip_out = model(clip=clip)
-        self.assertEqual(tuple(clip_out["Hhat_now"].shape), (1, 5, 5))
+        self.assertEqual(tuple(clip_out["Hhat_1s"].shape), (1, 5, 5))
+
+    def test_loss_reads_h1s_not_h_now(self) -> None:
+        model = _teacher()
+        tokens = torch.randn(1, 2048, 1408)
+        out = model(tokens=tokens)
+        loss_fn = TeacherLoss(Config.load())
+        h1s = torch.ones(1, 5, 5)
+        a = loss_fn(out, {"h_1s": h1s, "h_now": torch.zeros(1, 5, 5)})
+        b = loss_fn(out, {"h_1s": h1s, "h_now": torch.ones(1, 5, 5)})
+        self.assertAlmostEqual(float(a.total), float(b.total), places=5)
+        self.assertIn("L_1s", a.as_floats())
 
 
 if __name__ == "__main__":

@@ -1,15 +1,15 @@
 #!/bin/bash
-# Frozen now-only teacher (trial 4). Reuses the trial 3 token cache.
+# Frozen 1s-ahead teacher (trial 4). Reuses the trial 3 token cache.
 # Does not encode tokens, does not build a frame cache, does not touch trial 3 checkpoints.
 #
 # From the login node, after model_trial_4 is on the box:
 #   cd /home/asrivastava/VJEPA2_BTP/BTP/model_trial_4
 #   squeue -u asrivastava          # must be < 2 running jobs
 #   mkdir -p logs
-#   sbatch submit_teacher_now_v1.sh
+#   sbatch submit_teacher_h1s_v1.sh
 #
-#SBATCH --job-name=cjepa4_now_v1
-#SBATCH --output=logs/slurm_teacher_now_v1_%j.out
+#SBATCH --job-name=cjepa4_h1s_v1
+#SBATCH --output=logs/slurm_teacher_h1s_v1_%j.out
 #SBATCH --partition=gpu
 #SBATCH --qos=iitdgx
 #SBATCH --gres=gpu:1
@@ -19,7 +19,7 @@
 set -euo pipefail
 
 if [[ -z "${SLURM_JOB_ID:-}" ]]; then
-  echo "Refusing to train outside SLURM. From model_trial_4/: sbatch submit_teacher_now_v1.sh" >&2
+  echo "Refusing to train outside SLURM. From model_trial_4/: sbatch submit_teacher_h1s_v1.sh" >&2
   exit 1
 fi
 
@@ -28,7 +28,7 @@ MT3=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3
 RAID_CACHE=/raid/asrivastava/VJEPA2_BTP/model_trial_3/cache
 TOKEN_ID=f0878f26dd0029c5_gr16333c81
 TOKEN_DIR=${RAID_CACHE}/tokens/${TOKEN_ID}
-TAG=teacher_now_v1
+TAG=teacher_h1s_v1
 PY=/raid/money/miniconda3/bin/python
 
 cd "$ROOT"

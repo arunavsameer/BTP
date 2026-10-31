@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate a now-only teacher checkpoint on val or test."""
+"""Evaluate a 1s-ahead teacher checkpoint on val or test."""
 
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def main() -> None:
     write_json(out_json, metrics)
     write_metrics_csv(out_csv, metrics["horizons"])
     log.info("wrote %s", out_json)
-    print(json.dumps({"selection": metrics["selection"], "now": metrics["now"]}, indent=2, default=str))
+    print(json.dumps({"selection": metrics["selection"], "1s": metrics["1s"]}, indent=2, default=str))
 
 
 if __name__ == "__main__":

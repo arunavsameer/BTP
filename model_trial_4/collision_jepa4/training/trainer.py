@@ -177,12 +177,12 @@ class TeacherTrainer:
                 n_steps += 1
                 if log_every > 0 and n_steps % log_every == 0:
                     logger.info(
-                        "epoch=%d step=%d/%s L_total=%.4f L_now=%.4f",
+                        "epoch=%d step=%d/%s L_total=%.4f L_1s=%.4f",
                         epoch,
                         n_steps,
                         len(self.train_loader),
                         terms.get("L_total", float("nan")),
-                        terms.get("L_now", float("nan")),
+                        terms.get("L_1s", float("nan")),
                     )
                 if max_steps > 0 and n_steps >= max_steps:
                     logger.info("stopping epoch early after max_steps=%d", max_steps)
@@ -199,7 +199,7 @@ class TeacherTrainer:
             val = self._validate()
             sel = val.get("selection", {})
             mse = horizon_mse(val, self.cfg)
-            now = (val.get("horizons") or {}).get("now") or {}
+            h1s = (val.get("horizons") or {}).get("1s") or {}
             if stop_metric == "val_mse":
                 better = prev_val_mse is None or (mse == mse and mse < prev_val_mse)
             else:
@@ -212,9 +212,9 @@ class TeacherTrainer:
                 tagged = dict(sel)
                 tagged["val_mse"] = mse
                 tagged["best_epoch"] = epoch
-                tagged["stop_f1"] = now.get("stop_f1")
-                tagged["nuisance"] = now.get("nuisance")
-                tagged["miss"] = now.get("miss")
+                tagged["stop_f1"] = h1s.get("stop_f1")
+                tagged["nuisance"] = h1s.get("nuisance")
+                tagged["miss"] = h1s.get("miss")
                 self.best_sel = tagged
                 self._save(best_name, blob)
             dt = time.perf_counter() - t0
@@ -225,39 +225,39 @@ class TeacherTrainer:
                 "lrs": current_lrs(opt),
                 "train": train_means,
                 "val_selection": sel,
-                "val_now": now,
+                "val_1s": h1s,
                 "val_mse": mse,
                 "gpu": describe_hardware(self.device),
             }
             self.log.write(rec)
             history.append(rec)
             logger.info(
-                "epoch=%d L_total=%.4f L_now=%.4f val_mse=%.5f score=%s eligible=%s time=%.1fs",
+                "epoch=%d L_total=%.4f L_1s=%.4f val_mse=%.5f score=%s eligible=%s time=%.1fs",
                 epoch,
                 train_means.get("L_total", float("nan")),
-                train_means.get("L_now", float("nan")),
+                train_means.get("L_1s", float("nan")),
                 mse,
                 sel.get("score"),
                 sel.get("eligible"),
                 dt,
             )
             logger.info(
-                "epoch=%d val now: ht_p=%.3f ht_r=%.3f ht_f1=%.3f dir_acc=%.3f "
+                "epoch=%d val 1s: ht_p=%.3f ht_r=%.3f ht_f1=%.3f dir_acc=%.3f "
                 "stop_p=%.3f stop_r=%.3f stop_f1=%.3f safe_r=%.3f nuisance=%.3f miss=%.3f "
                 "pre_stop_r=%.3f post_stop_r=%.3f",
                 epoch,
-                float(now.get("high_threat_precision", float("nan"))),
-                float(now.get("high_threat_recall", float("nan"))),
-                float(now.get("high_threat_f1", float("nan"))),
-                float(now.get("direction_accuracy", float("nan"))),
-                float(now.get("stop_precision", float("nan"))),
-                float(now.get("stop_recall", float("nan"))),
-                float(now.get("stop_f1", float("nan"))),
-                float(now.get("safe_recall", float("nan"))),
-                float(now.get("nuisance", float("nan"))),
-                float(now.get("miss", float("nan"))),
-                float(now.get("pre_fork_stop_recall", float("nan"))),
-                float(now.get("post_fork_stop_recall", float("nan"))),
+                float(h1s.get("high_threat_precision", float("nan"))),
+                float(h1s.get("high_threat_recall", float("nan"))),
+                float(h1s.get("high_threat_f1", float("nan"))),
+                float(h1s.get("direction_accuracy", float("nan"))),
+                float(h1s.get("stop_precision", float("nan"))),
+                float(h1s.get("stop_recall", float("nan"))),
+                float(h1s.get("stop_f1", float("nan"))),
+                float(h1s.get("safe_recall", float("nan"))),
+                float(h1s.get("nuisance", float("nan"))),
+                float(h1s.get("miss", float("nan"))),
+                float(h1s.get("pre_fork_stop_recall", float("nan"))),
+                float(h1s.get("post_fork_stop_recall", float("nan"))),
             )
             if stop_metric == "val_mse":
                 prev_val_mse = mse

@@ -1,4 +1,4 @@
-"""Batch movement, finite checks, and now-map checkpoint selection."""
+"""Batch movement, finite checks, and 1s-map checkpoint selection."""
 
 from __future__ import annotations
 
@@ -36,7 +36,7 @@ def current_lrs(optimizer) -> list[float]:
 
 
 def horizon_mse(val: dict[str, Any], cfg) -> float:
-    """Unweighted heatmap MSE of the supervised now map."""
+    """Unweighted heatmap MSE of the supervised 1s map."""
     names = supervised_horizon_names(cfg)
     horizons = val.get("horizons") or {}
     vals: list[float] = []
@@ -53,7 +53,7 @@ def horizon_mse(val: dict[str, Any], cfg) -> float:
 
 
 def selection_better(cur: dict[str, Any], best: dict[str, Any] | None) -> bool:
-    """Prefer an eligible now-map score, then the numeric score."""
+    """Prefer an eligible 1s-map score, then the numeric score."""
     if best is None:
         return True
     c_el = bool(cur.get("eligible", False))
@@ -64,7 +64,7 @@ def selection_better(cur: dict[str, Any], best: dict[str, Any] | None) -> bool:
 
 
 def composite_score(metrics: dict[str, Any], cfg) -> dict[str, Any]:
-    """Score the now map: high-threat recall + STOP F1, with nuisance and miss gates."""
+    """Score the 1s map: high-threat recall + STOP F1, with nuisance and miss gates."""
     names = supervised_horizon_names(cfg)
     hw = cfg.get("loss.horizon_weights")
     wsum = sum(float(hw[n]) for n in names) or 1.0
