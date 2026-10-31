@@ -2,7 +2,7 @@
 
 Token layout is [B, T*H*W, C] with T=8, H=W=16, C=1408 for ViT-G.
 Depthwise branches use bias=False. Every other convolution uses bias=True,
-which is what the 347,745 parameter count assumes.
+which is what the 396,369 parameter count assumes.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Linear 1408→128 plus two blocks, downsample, fusion, decoder, and the 1×1 head.
-TRUNK_PARAMS_1408 = 347_745
+# Linear 1408→144 plus two blocks, downsample, fusion, decoder, and the 1×1 head.
+TRUNK_PARAMS_1408 = 396_369
 
 
 def channel_layernorm(norm: nn.LayerNorm, x: torch.Tensor) -> torch.Tensor:
@@ -29,7 +29,7 @@ def channel_layernorm(norm: nn.LayerNorm, x: torch.Tensor) -> torch.Tensor:
 class SpatiotemporalBlock(nn.Module):
     """Two depthwise branches, pointwise mix, per-location LayerNorm, residual."""
 
-    def __init__(self, channels: int = 128):
+    def __init__(self, channels: int = 144):
         super().__init__()
         c = int(channels)
         self.branch_a = nn.Conv3d(
@@ -63,7 +63,7 @@ class CollisionTrunk(nn.Module):
         hidden_size: int = 1408,
         temporal_groups: int = 8,
         spatial: int = 16,
-        channels: int = 128,
+        channels: int = 144,
     ):
         super().__init__()
         self.hidden_size = int(hidden_size)
@@ -93,7 +93,7 @@ class CollisionTrunk(nn.Module):
         return self.temporal_groups * self.spatial * self.spatial
 
     def project(self, tokens: torch.Tensor) -> torch.Tensor:
-        """[B, N, C] → [B, 128, 8, 16, 16]."""
+        """[B, N, C] → [B, 144, 8, 16, 16]."""
         b, n, c = tokens.shape
         expected = self.expected_tokens()
         if n != expected:
