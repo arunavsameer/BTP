@@ -102,6 +102,16 @@ class SmootherTests(unittest.TestCase):
         self.assertTrue(torch.equal(out["Hhat_1s"], out["Hhat_1s_raw"]))
         self.assertTrue(torch.equal(out["Hhat_1s_logits"], out["Hhat_1s_raw_logits"]))
 
+    def test_bf16_saturated_maps_have_finite_logits(self) -> None:
+        mix = ConsistencySmoother(window=4, tau_init=0.5)
+        raw = torch.ones(4, 5, 5, dtype=torch.bfloat16)
+        out = mix(raw, clip_ids=["c"] * 4)
+        self.assertTrue(torch.isfinite(out["Hhat_1s"]).all())
+        self.assertTrue(torch.isfinite(out["Hhat_1s_logits"]).all())
+        self.assertEqual(out["Hhat_1s_logits"].dtype, torch.float32)
+        loss = TeacherLoss(Config.load())(out, {"h_1s": torch.ones(4, 5, 5)})
+        self.assertTrue(torch.isfinite(loss.total))
+
     def test_checkpoint_roundtrip_keeps_tau(self) -> None:
         model = _teacher()
         with torch.no_grad():

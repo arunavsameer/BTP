@@ -4,14 +4,25 @@
 per-cell spread over a short window of *raw* 5x5 maps, never ``|raw - final|``.
 The first snapshot of a clip copies raw. ``tau`` is initialized high so training
 starts near ``alpha ≈ 1``.
+
+Mix and logit run in fp32 with autocast off. In bfloat16, ``1 - 1e-4`` rounds
+to 1, so ``logit(sigmoid(z))`` becomes Inf and BCE NaNs.
 """
 
 from __future__ import annotations
 
 import math
+from contextlib import nullcontext
 
 import torch
 import torch.nn as nn
+
+
+def _autocast_off(device: torch.device):
+    kind = device.type
+    if kind in {"cuda", "cpu", "mps"}:
+        return torch.autocast(device_type=kind, enabled=False)
+    return nullcontext()
 
 
 def occupancy_weighted_std(maps: torch.Tensor) -> torch.Tensor:
@@ -34,7 +45,8 @@ def occupancy_weighted_std(maps: torch.Tensor) -> torch.Tensor:
 
 
 def safe_logit(prob: torch.Tensor, eps: float = 1e-4) -> torch.Tensor:
-    p = prob.clamp(eps, 1.0 - eps)
+    """Logit in fp32. bf16 cannot represent ``1 - 1e-4``, so clamp there is a no-op."""
+    p = prob.float().clamp(eps, 1.0 - eps)
     return torch.log(p) - torch.log1p(-p)
 
 
@@ -76,42 +88,45 @@ class ConsistencySmoother(nn.Module):
         elif len(clip_ids) != batch:
             raise ValueError(f"clip_ids length {len(clip_ids)} != batch {batch}")
 
-        hist = list(self._raw_hist)
-        final = self._final
-        clip_id = self._clip_id
-        mixed: list[torch.Tensor] = []
-        alphas: list[torch.Tensor] = []
-        tau = self.tau().to(dtype=raw_probs.dtype)
+        with _autocast_off(raw_probs.device):
+            raw_probs_f = raw_probs.float()
+            hist = list(self._raw_hist)
+            final = self._final
+            clip_id = self._clip_id
+            mixed: list[torch.Tensor] = []
+            alphas: list[torch.Tensor] = []
+            tau = self.tau().float()
 
-        for i in range(batch):
-            cid = str(clip_ids[i])
-            if cid != clip_id:
-                hist = []
-                final = None
-                clip_id = cid
-            raw_i = raw_probs[i]
-            window = (hist + [raw_i])[-self.window :]
-            std = occupancy_weighted_std(torch.stack(window, dim=0))
-            alpha = torch.exp(-std / tau)
-            if final is None:
-                final_i = raw_i
-                alpha_i = raw_i.new_ones(())
-            else:
-                alpha_i = alpha
-                final_i = alpha_i * raw_i + (1.0 - alpha_i) * final
-            mixed.append(final_i)
-            alphas.append(alpha_i.reshape(()))
-            hist = window
-            final = final_i
+            for i in range(batch):
+                cid = str(clip_ids[i])
+                if cid != clip_id:
+                    hist = []
+                    final = None
+                    clip_id = cid
+                raw_i = raw_probs_f[i]
+                window = (hist + [raw_i])[-self.window :]
+                std = occupancy_weighted_std(torch.stack(window, dim=0))
+                alpha = torch.exp(-std / tau).clamp(0.0, 1.0)
+                if final is None:
+                    final_i = raw_i
+                    alpha_i = raw_i.new_ones(())
+                else:
+                    alpha_i = alpha
+                    final_i = alpha_i * raw_i + (1.0 - alpha_i) * final
+                mixed.append(final_i)
+                alphas.append(alpha_i.reshape(()))
+                hist = window
+                final = final_i
 
-        self._raw_hist = [t.detach() for t in hist]
-        self._final = None if final is None else final.detach()
-        self._clip_id = clip_id
+            self._raw_hist = [t.detach() for t in hist]
+            self._final = None if final is None else final.detach()
+            self._clip_id = clip_id
 
-        probs = torch.stack(mixed, dim=0)
-        alpha = torch.stack(alphas, dim=0)
-        return {
-            "Hhat_1s": probs,
-            "Hhat_1s_logits": safe_logit(probs),
-            "alpha": alpha,
-        }
+            probs = torch.stack(mixed, dim=0)
+            alpha = torch.stack(alphas, dim=0)
+            logits = safe_logit(probs)
+            return {
+                "Hhat_1s": probs,
+                "Hhat_1s_logits": logits,
+                "alpha": alpha,
+            }

@@ -25,7 +25,7 @@ The trunk still emits a raw 5×5 map. A one-parameter mixer then writes the map 
 
 `alpha = exp(-std / tau)`, `final = alpha * raw + (1 - alpha) * previous_final`.
 
-`std` is occupancy-weighted per-cell spread over the last `smoother.window` (default 4) **raw** maps of the same clip. It does not use `|raw - final|`. The first snapshot of a clip copies raw. `tau` starts at `smoother.tau_init: 0.5` so `alpha` begins high; training learns `log tau` with the trunk. Clip-contiguous sampling is required so a batch is time order inside a clip. State resets on a new `clip_id`, at each epoch, and at the start of eval. `Hhat_1s` / `Hhat_1s_logits` are the mixed map; `Hhat_1s_raw` is the trunk output.
+`std` is occupancy-weighted per-cell spread over the last `smoother.window` (default 4) **raw** maps of the same clip. It does not use `|raw - final|`. The first snapshot of a clip copies raw. `tau` starts at `smoother.tau_init: 0.5` so `alpha` begins high; training learns `log tau` with the trunk. Mix and logit stay in fp32 (AMP bfloat16 cannot represent `1 - 1e-4`, so `logit(1)` was Inf). Clip-contiguous sampling is required so a batch is time order inside a clip. State resets on a new `clip_id`, at each epoch, and at the start of eval. `Hhat_1s` / `Hhat_1s_logits` are the mixed map; `Hhat_1s_raw` is the trunk output.
 
 ## Caveats
 
