@@ -11,9 +11,10 @@ from ..config import supervised_horizon_names
 
 def teacher_forward(model, batch):
     """Use cached encoder tokens when present; otherwise run the backbone on frames."""
+    clip_ids = batch.get("clip_id")
     if "tokens" in batch:
-        return model(tokens=batch["tokens"])
-    return model(clip=batch["frames"])
+        return model(tokens=batch["tokens"], clip_ids=clip_ids)
+    return model(clip=batch["frames"], clip_ids=clip_ids)
 
 
 def move_batch(batch: dict, device: str) -> dict:

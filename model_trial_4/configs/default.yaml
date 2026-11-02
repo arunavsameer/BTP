@@ -93,6 +93,14 @@ backbone:
 heads:
   mode: direct_h1s
 
+smoother:
+  enabled: true
+  # Last 4 raw 5x5 maps. At 0.2 s ticks that is 0.6 s; with group_random
+  # anchors it is the last 4 sampled times in the clip.
+  window: 4
+  # exp(-std / tau). Start high so alpha begins near 1 on calm maps.
+  tau_init: 0.5
+
 loss:
   now_weight: 1.0
   # Selector weight for the 1s map. RGB still ends at t; the label is H(t+30).

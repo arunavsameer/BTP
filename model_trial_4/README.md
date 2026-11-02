@@ -1,6 +1,6 @@
 # Model trial 4
 
-1s-ahead collision teacher. A frozen V-JEPA 2 ViT-G encodes the 16-frame clip that ends at anchor `t`. The trunk below is the only trained network. It emits `Hhat_1s` and `Hhat_1s_logits`, both `[B, 5, 5]`, trained against the heatmap at `t+30` (`h_1s`). There is no `Z_t`, no now-map head, no later-horizon head, and no LoRA phase.
+1s-ahead collision teacher. A frozen V-JEPA 2 ViT-G encodes the 16-frame clip that ends at anchor `t`. The trunk below plus a one-parameter consistency mixer are the trained network. The mixer emits `Hhat_1s` and `Hhat_1s_logits`, both `[B, 5, 5]`, trained against the heatmap at `t+30` (`h_1s`). There is no `Z_t`, no now-map head, no later-horizon head, and no LoRA phase.
 
 The dataset, pairing, and anchor rules match trial 3. `h_now`, `h_1_5s`, and `h_2s` stay in the batch; the loss and checkpoint selector only read `h_1s`. Training uses BCE-with-logits (`L_1s`, occupied-cell pos weight 2). Ambiguous pre-fork 1s maps use the collision/miss mean (`sampling.ambiguous_policy: mean_target`). Row weights apply only if `loss.heatmap` is set to `mse`.
 
@@ -18,6 +18,14 @@ Encoder tokens are reused from the trial 3 cache (`paths.cache_root`). Checkpoin
 6. Adaptive max-pool to `5×5`, then sigmoid.
 
 The trunk has 383,265 parameters when the encoder width is 1408.
+
+## Consistency mixer
+
+The trunk still emits a raw 5×5 map. A one-parameter mixer then writes the map that the loss and the vest see:
+
+`alpha = exp(-std / tau)`, `final = alpha * raw + (1 - alpha) * previous_final`.
+
+`std` is occupancy-weighted per-cell spread over the last `smoother.window` (default 4) **raw** maps of the same clip. It does not use `|raw - final|`. The first snapshot of a clip copies raw. `tau` starts at `smoother.tau_init: 0.5` so `alpha` begins high; training learns `log tau` with the trunk. Clip-contiguous sampling is required so a batch is time order inside a clip. State resets on a new `clip_id`, at each epoch, and at the start of eval. `Hhat_1s` / `Hhat_1s_logits` are the mixed map; `Hhat_1s_raw` is the trunk output.
 
 ## Caveats
 
