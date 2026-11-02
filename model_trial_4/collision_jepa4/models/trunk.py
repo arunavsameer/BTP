@@ -2,7 +2,7 @@
 
 Token layout is [B, T*H*W, C] with T=8, H=W=16, C=1408 for ViT-G.
 Depthwise branches use bias=False. Every other convolution uses bias=True,
-which is what the 396,369 parameter count assumes.
+which is what the 383,265 parameter count assumes.
 """
 
 from __future__ import annotations
@@ -11,8 +11,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Linear 1408→144 plus two blocks, downsample, fusion, decoder, and the 1×1 head.
-TRUNK_PARAMS_1408 = 396_369
+# Linear 1408→128 plus two blocks, downsample, fusion, and the 16×16 dilated head.
+TRUNK_PARAMS_1408 = 383_265
 
 
 def channel_layernorm(norm: nn.LayerNorm, x: torch.Tensor) -> torch.Tensor:
@@ -26,10 +26,34 @@ def channel_layernorm(norm: nn.LayerNorm, x: torch.Tensor) -> torch.Tensor:
     return y.movedim(-1, 1).contiguous()
 
 
+class RightAlignedStride2Time(nn.Module):
+    """Kernel-3 stride-2 along time, last window centered on the last tubelet.
+
+    Symmetric pad would look at tubelets (5, 6, 7) and center on 6. Right-pad 1
+    instead so the last output looks at (6, 7, pad) and is centered on 7, which
+    holds RGB frames t-6 and t. Tubelet 6 (t-18, t-12) still sits in the kernel.
+    """
+
+    def __init__(self, in_channels: int, out_channels: int):
+        super().__init__()
+        self.conv = nn.Conv3d(
+            in_channels,
+            out_channels,
+            kernel_size=(3, 1, 1),
+            stride=(2, 1, 1),
+            padding=0,
+            bias=True,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # x: [B, C, T, H, W]. Pad T on the right only.
+        return self.conv(F.pad(x, (0, 0, 0, 0, 0, 1)))
+
+
 class SpatiotemporalBlock(nn.Module):
     """Two depthwise branches, pointwise mix, per-location LayerNorm, residual."""
 
-    def __init__(self, channels: int = 144):
+    def __init__(self, channels: int = 128):
         super().__init__()
         c = int(channels)
         self.branch_a = nn.Conv3d(
@@ -63,7 +87,7 @@ class CollisionTrunk(nn.Module):
         hidden_size: int = 1408,
         temporal_groups: int = 8,
         spatial: int = 16,
-        channels: int = 144,
+        channels: int = 128,
     ):
         super().__init__()
         self.hidden_size = int(hidden_size)
@@ -76,24 +100,26 @@ class CollisionTrunk(nn.Module):
             )
         self.projection = nn.Linear(self.hidden_size, self.channels)
         self.blocks = nn.Sequential(SpatiotemporalBlock(self.channels), SpatiotemporalBlock(self.channels))
-        self.temporal_downsample = nn.Conv3d(
-            self.channels,
-            96,
-            kernel_size=(3, 1, 1),
-            stride=(2, 1, 1),
-            padding=(1, 0, 0),
-            bias=True,
-        )
+        self.temporal_downsample = RightAlignedStride2Time(self.channels, 96)
         self.temporal_collapse = nn.Conv3d(96, 48, kernel_size=(4, 1, 1), stride=1, padding=0, bias=True)
         self.temporal_fusion = nn.Conv2d(144, 48, kernel_size=1, bias=True)
-        self.decoder = nn.Conv2d(48, 16, kernel_size=3, padding=1, bias=True)
-        self.prediction = nn.Conv2d(16, 1, kernel_size=1, bias=True)
+        # Spatial mix at 48 channels, then a two-step readout 48→16→1 so logits
+        # are not collapsed from 48 in a single 1×1.
+        self.decoder = nn.Sequential(
+            nn.Conv2d(48, 48, kernel_size=3, padding=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 48, kernel_size=3, padding=2, dilation=2, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(48, 16, kernel_size=1, bias=True),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(16, 1, kernel_size=1, bias=True),
+        )
 
     def expected_tokens(self) -> int:
         return self.temporal_groups * self.spatial * self.spatial
 
     def project(self, tokens: torch.Tensor) -> torch.Tensor:
-        """[B, N, C] → [B, 144, 8, 16, 16]."""
+        """[B, N, C] → [B, 128, 8, 16, 16]."""
         b, n, c = tokens.shape
         expected = self.expected_tokens()
         if n != expected:
@@ -110,8 +136,8 @@ class CollisionTrunk(nn.Module):
     def aggregate(self, x: torch.Tensor) -> torch.Tensor:
         """[B, 96, 4, 16, 16] → [B, 48, 16, 16].
 
-        Path B is the last downsampled slice (tubelets 5–7, centered on 6),
-        not the original last RGB frame.
+        Path B is the last downsampled slice. After right-aligned stride-2
+        that window is tubelets (6, 7, pad), centered on 7 (RGB t-6 and t).
         """
         if x.shape[2] != 4:
             raise RuntimeError(f"temporal collapse expects T=4, got {tuple(x.shape)}")
@@ -123,8 +149,7 @@ class CollisionTrunk(nn.Module):
         x = self.blocks(self.project(tokens))
         x = self.temporal_downsample(x)
         x = self.aggregate(x)
-        x = F.relu(self.decoder(x))
-        logits_fine = self.prediction(x)
+        logits_fine = self.decoder(x)
         logits_coarse = F.adaptive_max_pool2d(logits_fine, (5, 5))
         return {
             "logits_fine": logits_fine,

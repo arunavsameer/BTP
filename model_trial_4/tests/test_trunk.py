@@ -37,9 +37,9 @@ class TrunkTests(unittest.TestCase):
         trunk = CollisionTrunk()
         tokens = torch.randn(2, 2048, 1408)
         projected = trunk.project(tokens)
-        self.assertEqual(tuple(projected.shape), (2, 144, 8, 16, 16))
+        self.assertEqual(tuple(projected.shape), (2, 128, 8, 16, 16))
         mixed = trunk.blocks(projected)
-        self.assertEqual(tuple(mixed.shape), (2, 144, 8, 16, 16))
+        self.assertEqual(tuple(mixed.shape), (2, 128, 8, 16, 16))
         down = trunk.temporal_downsample(mixed)
         self.assertEqual(tuple(down.shape), (2, 96, 4, 16, 16))
         fused = trunk.aggregate(down)
@@ -51,6 +51,19 @@ class TrunkTests(unittest.TestCase):
         probs = out["Hhat_1s"].detach()
         self.assertGreater(float(probs.min()), 0.0)
         self.assertLess(float(probs.max()), 1.0)
+
+    def test_last_downsample_slice_ignores_early_tubelets(self) -> None:
+        trunk = CollisionTrunk()
+        base = torch.randn(1, 128, 8, 16, 16)
+        last0 = trunk.temporal_downsample(base)[:, :, -1]
+        early = base.clone()
+        early[:, :, :6] = early[:, :, :6] + 3.0
+        last_early = trunk.temporal_downsample(early)[:, :, -1]
+        self.assertTrue(torch.allclose(last0, last_early, atol=1e-5, rtol=1e-5))
+        late = base.clone()
+        late[:, :, 7] = late[:, :, 7] + 3.0
+        last_late = trunk.temporal_downsample(late)[:, :, -1]
+        self.assertFalse(torch.allclose(last0, last_late, atol=1e-4, rtol=1e-4))
 
     def test_parameter_count(self) -> None:
         trunk = CollisionTrunk()
