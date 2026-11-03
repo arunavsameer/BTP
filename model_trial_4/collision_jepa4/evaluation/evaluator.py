@@ -14,8 +14,6 @@ from .metrics import HorizonAccumulator
 @torch.no_grad()
 def evaluate_loader(model, loader, cfg, device: str, loss_fn=None) -> dict[str, Any]:
     model.eval()
-    if hasattr(model, "reset_smoother"):
-        model.reset_smoother()
     warn = cfg.get("warning")
     acc = HorizonAccumulator(
         "1s",

@@ -69,13 +69,7 @@ class TeacherTrainer:
             out = teacher_forward(self.model, batch)
             packed = self.loss_fn(out, batch)
         assert_finite(packed.total, "L_total")
-        terms = packed.as_floats()
-        if "alpha" in out:
-            terms["alpha"] = float(out["alpha"].detach().float().mean())
-        smoother = getattr(self.model, "smoother", None)
-        if smoother is not None:
-            terms["tau"] = float(smoother.tau().detach())
-        return packed.total, terms
+        return packed.total, packed.as_floats()
 
     def _make_optimizer(self, epochs: int):
         opt = build_optimizer(
@@ -162,8 +156,6 @@ class TeacherTrainer:
             if hasattr(sampler, "set_epoch"):
                 sampler.set_epoch(epoch)
             self.model.train()
-            if hasattr(self.model, "reset_smoother"):
-                self.model.reset_smoother()
             t0 = time.perf_counter()
             running: dict[str, float] = {}
             n_steps = 0
@@ -185,14 +177,12 @@ class TeacherTrainer:
                 n_steps += 1
                 if log_every > 0 and n_steps % log_every == 0:
                     logger.info(
-                        "epoch=%d step=%d/%s L_total=%.4f L_1s=%.4f alpha=%.3f tau=%.3f",
+                        "epoch=%d step=%d/%s L_total=%.4f L_1s=%.4f",
                         epoch,
                         n_steps,
                         len(self.train_loader),
                         terms.get("L_total", float("nan")),
                         terms.get("L_1s", float("nan")),
-                        terms.get("alpha", float("nan")),
-                        terms.get("tau", float("nan")),
                     )
                 if max_steps > 0 and n_steps >= max_steps:
                     logger.info("stopping epoch early after max_steps=%d", max_steps)

@@ -21,20 +21,11 @@ def load_checkpoint(path: str | Path, map_location: str = "cpu") -> dict[str, An
 
 
 def extract_teacher_state(model) -> dict[str, Any]:
-    blob: dict[str, Any] = {
+    return {
         "trunk": model.trunk.state_dict(),
         "lora_enabled": False,
     }
-    smoother = getattr(model, "smoother", None)
-    if smoother is not None:
-        blob["smoother"] = smoother.state_dict()
-    return blob
 
 
 def load_teacher_state(model, blob: dict[str, Any], *, strict: bool = True) -> None:
     model.trunk.load_state_dict(blob["trunk"], strict=strict)
-    smoother = getattr(model, "smoother", None)
-    if smoother is not None and "smoother" in blob:
-        smoother.load_state_dict(blob["smoother"], strict=strict)
-    if hasattr(model, "reset_smoother"):
-        model.reset_smoother()

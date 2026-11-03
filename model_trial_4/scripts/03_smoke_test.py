@@ -60,13 +60,9 @@ def main() -> None:
             raise RuntimeError("backbone received a gradient")
     if model.trunk.projection.weight.grad is None:
         raise RuntimeError("projection received no gradient")
-    if model.smoother.log_tau.grad is None:
-        raise RuntimeError("smoother tau received no gradient")
     audit = model.parameter_audit()
     if int(audit["trunk"]) != TRUNK_PARAMS_1408:
         raise RuntimeError(f"trunk params {audit['trunk']} != {TRUNK_PARAMS_1408}")
-    if int(audit["smoother"]) != 1:
-        raise RuntimeError(f"smoother params {audit['smoother']} != 1")
     blob = extract_teacher_state(model)
     load_teacher_state(model, blob)
     report = {

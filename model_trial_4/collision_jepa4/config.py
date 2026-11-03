@@ -158,12 +158,6 @@ class Config:
         mode = str(self.get("heads.mode", "direct_h1s"))
         if mode != "direct_h1s":
             raise ValueError(f"unsupported heads.mode {mode}")
-        window = int(self.get("smoother.window", 4))
-        if window < 2:
-            raise ValueError(f"smoother.window must be >= 2, got {window}")
-        tau_init = float(self.get("smoother.tau_init", 0.5))
-        if tau_init <= 0.0:
-            raise ValueError(f"smoother.tau_init must be > 0, got {tau_init}")
 
 
 def heads_mode(cfg: "Config" | Any) -> str:
