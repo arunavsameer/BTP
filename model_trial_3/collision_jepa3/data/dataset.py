@@ -30,8 +30,10 @@ from .pairing import (
     compute_ambiguity_table,
     outcome_clip_ids_by_group,
 )
+from .pair_variance import pair_targets_for_window
 from .preprocessing import preprocess_clip, signature_from_cfg, uint8_to_nchw01
 from .paired_sampler import ClipContiguousSampler
+from .pair_batching import PairAwareBatchSampler, build_pair_batch_indices
 from .sampling import (
     FRAME_OFFSETS,
     HORIZONS_FRAMES,
@@ -125,6 +127,9 @@ class TeacherDataset(Dataset):
                 self._close_maps[rec.clip_id] = close
                 self._occ_maps[rec.clip_id] = occ
 
+        self.use_variance = bool(cfg.get("adapter.variance_head", False)) or float(
+            cfg.get("loss.var_weight", 0.0)
+        ) > 0.0
         self.ambiguous_policy = str(cfg.get("sampling.ambiguous_policy", "mean_target"))
         detect_ambiguous = self.ambiguous_policy in {
             "mean_target",
@@ -165,6 +170,25 @@ class TeacherDataset(Dataset):
             self._token_cache = TokenCache(
                 self.cache_root, token_cache_id(cfg, dummy=bool(dummy_backbone))
             )
+        self._pair_meta_done = False
+        self._pair_rows: set[int] = set()
+        self._pair_gt_valid: np.ndarray | None = None
+        self._pair_sampler_pairs: list[tuple[int, int]] = []
+        self._pair_sampler_unpaired: list[int] = []
+        bg = cfg.get("training.bg_reg") or {}
+        self._bg_reg_train = (
+            self.split == "train"
+            and bool(bg.get("enabled"))
+            and (
+                bool(bg.get("pair_consistency"))
+                or bool(bg.get("targeted_dropout"))
+                or bool(bg.get("random_dropout"))
+                or bool(bg.get("clean_anchored_dropout"))
+                or bool(bg.get("pair_counterfactual_shrink"))
+            )
+        )
+        if self._bg_reg_train:
+            self.ensure_pair_batch_metadata()
 
     def _horizon_masked(
         self,
@@ -272,18 +296,9 @@ class TeacherDataset(Dataset):
         ]
         return mates[0] if len(mates) == 1 else None
 
-    def __getitem__(self, i: int) -> dict[str, Any]:
-        clip_id, t = self.index[i]
+    def _training_targets(self, clip_id: str, t: int) -> tuple[dict[str, np.ndarray], set[str]]:
+        """Future heatmap training labels at anchor t (same path as ``__getitem__``)."""
         rec = self.records_by_id[clip_id]
-        tokens = None
-        frames = None
-        if self.use_token_cache and self._token_cache is not None:
-            try:
-                tokens = self._load_tokens(clip_id, t)
-            except (FileNotFoundError, KeyError, OSError):
-                tokens = None
-        if tokens is None:
-            frames = self._load_input_clip(rec, t)
         tg = targets_for_anchor(
             self._heatmaps[clip_id],
             t,
@@ -317,6 +332,27 @@ class TeacherDataset(Dataset):
                 horizon_names=self.horizon_names,
                 available=avail,
             )
+        return tg, replaced
+
+    def h1s_at_anchor(self, clip_id: str, t: int) -> np.ndarray:
+        tg, _ = self._training_targets(clip_id, t)
+        return np.asarray(tg["h_1s"], dtype=np.float32)
+
+    def __getitem__(self, i: int) -> dict[str, Any]:
+        clip_id, t = self.index[i]
+        rec = self.records_by_id[clip_id]
+        tokens = None
+        frames = None
+        if self.use_token_cache and self._token_cache is not None:
+            try:
+                tokens = self._load_tokens(clip_id, t)
+            except (FileNotFoundError, KeyError, OSError):
+                tokens = None
+        if tokens is None:
+            frames = self._load_input_clip(rec, t)
+        tg, replaced = self._training_targets(clip_id, t)
+        amb = self.ambiguity.get((clip_id, t), {n: False for n in self.horizon_names})
+        avail = available_horizons(t, self.n_frames, self.horizons)
         mate_id = self._mate_clip_id(rec)
         bg_ok = False
         if mate_id is not None and mate_id in self._heatmaps:
@@ -352,6 +388,10 @@ class TeacherDataset(Dataset):
             "amb_1_5s": np.bool_(self._horizon_masked("1_5s", amb, avail, replaced)),
             "amb_2s": np.bool_(self._horizon_masked("2s", amb, avail, replaced)),
         }
+        if self.use_variance:
+            pack = pair_targets_for_window(self, clip_id, t)
+            sample["v_1s"] = pack["v_true"]
+            sample["v_mask"] = np.bool_(pack["canonical"])
         if self.use_closing:
             zeros = np.zeros((int(self.cfg.get("data.target_grid", 5)),) * 2, dtype=np.float32)
             t1 = int(t) + int(self.horizons[0])
@@ -367,15 +407,69 @@ class TeacherDataset(Dataset):
             sample["tokens"] = tokens
         else:
             sample["frames"] = frames.astype(np.float32, copy=False)
+        if self._bg_reg_train:
+            sample["bg_reg_pair_row"] = np.bool_(i in self._pair_rows)
+            v = self._pair_gt_valid[i] if self._pair_gt_valid is not None else False
+            sample["bg_pair_gt_valid"] = np.bool_(v)
         return sample
+
+    def ensure_pair_batch_metadata(self) -> None:
+        """Precompute pair / unpaired indices for :class:`PairAwareBatchSampler`."""
+        if self._pair_meta_done:
+            return
+        pairs, unpaired, gt_valid = build_pair_batch_indices(self)
+        self._pair_sampler_pairs = pairs
+        self._pair_sampler_unpaired = unpaired
+        self._pair_gt_valid = gt_valid
+        self._pair_rows = set()
+        for a, b in pairs:
+            self._pair_rows.add(a)
+            self._pair_rows.add(b)
+        self._pair_meta_done = True
 
 
 def build_dataloader(dataset: TeacherDataset, cfg, *, shuffle: bool, drop_last: bool = False):
     from torch.utils.data import DataLoader
 
     workers = int(cfg.get("training.num_workers", 0))
+    batch_size = int(cfg.get("training.micro_batch_size", 1))
+    bg = cfg.get("training.bg_reg") or {}
+    pair_train = (
+        dataset.split == "train"
+        and bool(bg.get("enabled"))
+        and (
+            bool(bg.get("pair_consistency"))
+            or bool(bg.get("targeted_dropout"))
+            or bool(bg.get("random_dropout"))
+            or bool(bg.get("clean_anchored_dropout"))
+            or bool(bg.get("pair_counterfactual_shrink"))
+        )
+    )
+    if pair_train:
+        dataset.ensure_pair_batch_metadata()
+        if batch_size % 2 != 0:
+            raise ValueError("training.bg_reg requires even training.micro_batch_size for pair batching")
+        pair_sampler = PairAwareBatchSampler(
+            dataset._pair_sampler_pairs,
+            dataset._pair_sampler_unpaired,
+            batch_size,
+            shuffle=shuffle,
+            seed=int(cfg.get("project.seed", 1337)),
+            drop_last=True,
+        )
+        kwargs = {
+            "batch_sampler": pair_sampler,
+            "num_workers": workers,
+            "pin_memory": bool(cfg.get("training.pin_memory", True)),
+            "collate_fn": collate_teacher_batch,
+        }
+        if workers > 0:
+            kwargs["prefetch_factor"] = int(cfg.get("training.prefetch_factor", 2))
+            kwargs["persistent_workers"] = True
+        return DataLoader(dataset, **kwargs)
+
     kwargs = {
-        "batch_size": int(cfg.get("training.micro_batch_size", 1)),
+        "batch_size": batch_size,
         "num_workers": workers,
         "pin_memory": bool(cfg.get("training.pin_memory", True)),
         "collate_fn": collate_teacher_batch,
@@ -430,4 +524,12 @@ def collate_teacher_batch(samples: list[dict[str, Any]]) -> dict[str, Any]:
     if "h_close" in samples[0]:
         out["h_close"] = stack("h_close")
         out["close_mask"] = stack("close_mask")
+    if "v_1s" in samples[0]:
+        out["v_1s"] = stack("v_1s")
+        out["v_mask"] = stack("v_mask")
+    if "bg_reg_pair_row" in samples[0]:
+        pr = torch.tensor([bool(s["bg_reg_pair_row"]) for s in samples], dtype=torch.bool)
+        out["bg_reg_pair_row"] = pr
+        out["bg_reg_paired"] = bool(pr.all()) and len(samples) % 2 == 0
+        out["bg_pair_gt_valid"] = stack("bg_pair_gt_valid")
     return out

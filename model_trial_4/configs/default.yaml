@@ -101,6 +101,33 @@ loss:
   heatmap: bce
   bce_pos_threshold: 0.1
   bce_pos_weight: 2.0
+  # Trial 3 G cell multipliers on top of pos_weight.
+  bce_appear_now_threshold: 0.1
+  bce_appear_future_threshold: 0.5
+  bce_appear_weight: 8.0
+  bce_disappear_now_threshold: 0.5
+  bce_disappear_future_threshold: 0.1
+  bce_disappear_weight: 1.0
+  close_weight: 1.0
+  blob_bce_weight: 0.35
+  blob_occupied_threshold: 0.5
+  stop_hinge_weight: 1.0
+  stop_hinge_margin: 0.05
+  stop_hinge_threshold: 0.60
+  stop_hinge_target: null
+  safe_hinge_weight: 0.5
+  safe_hinge_margin: 0.0
+  safe_hinge_threshold: 0.25
+  small_blob_weight: 2.0
+  small_blob_max_cells: 4
+  small_blob_occupied_threshold: 0.5
+  false_positive_weight: 0.10
+  false_positive_margin: 0.10
+  direction_weight: 0.05
+  direction_temperature: 0.08
+  direction_threat_threshold: 0.25
+  # Logged as 0 in trial 4: no Z_t for G's background-consistency term.
+  background_consistency_weight: 0.02
   row_weights: [1.0, 1.0, 1.0, 1.0, 1.0]
   safe_cell_threshold: 0.05
   # Used only when loss.heatmap is mse.

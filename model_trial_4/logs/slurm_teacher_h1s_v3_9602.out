@@ -1,0 +1,7 @@
+=== SLURM job 9602 teacher_h1s_v3 on DGX2 ===
+Saturday 31 October 2026 07:44:52 PM IST
+CUDA_VISIBLE_DEVICES=0 SLURM_JOB_GPUS=3
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-4ba4736d-11ca-e800-1d07-3eb61df18dff)
+index, memory.used [MiB], utilization.gpu [%]
+0, 33857 MiB, 100 %
+refusing occupied GPU mem=33857MiB util=100

@@ -19,6 +19,7 @@ from collision_jepa4.data.manifest import load_manifest  # noqa: E402
 from collision_jepa4.data.preprocessing import signature_from_cfg  # noqa: E402
 from collision_jepa4.data.splits import load_splits  # noqa: E402
 from collision_jepa4.models.teacher import CollisionTeacher4  # noqa: E402
+from collision_jepa4.models.vjepa_backbone import CachedTokenBackbone  # noqa: E402
 from collision_jepa4.reproducibility import configure_runtime, set_seed  # noqa: E402
 from collision_jepa4.training.checkpoint import load_checkpoint, load_teacher_state  # noqa: E402
 from collision_jepa4.training.trainer import TeacherTrainer  # noqa: E402
@@ -32,15 +33,22 @@ def main() -> None:
     parser.add_argument("--resume-from", default=None)
     parser.add_argument("--init-from", default=None, help="Load trunk weights only. Fresh optimizer.")
     parser.add_argument("--dummy", action="store_true", help="Train a dummy encoder (debug only)")
+    parser.add_argument(
+        "--skip-backbone",
+        action="store_true",
+        help="Do not load V-JEPA. Reuse the existing token cache only.",
+    )
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--frozen-epochs", type=int, default=None)
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--num-workers", type=int, default=None)
     parser.add_argument("--patience", type=int, default=None)
+    parser.add_argument("--patience-start-epoch", type=int, default=None)
     parser.add_argument("--adapter-lr", type=float, default=None)
     parser.add_argument("--early-stop-metric", choices=["selection", "val_mse"], default=None)
     parser.add_argument("--val-subset-fraction", type=float, default=None)
+    parser.add_argument("--trunk-channels", type=int, default=None)
     parser.add_argument("--checkpoint-root", default=None)
     parser.add_argument("--logs-root", default=None)
     parser.add_argument("--reports-root", default=None)
@@ -54,12 +62,16 @@ def main() -> None:
         cfg.set("training.num_workers", int(args.num_workers))
     if args.patience is not None:
         cfg.set("training.patience", int(args.patience))
+    if args.patience_start_epoch is not None:
+        cfg.set("training.patience_start_epoch", int(args.patience_start_epoch))
     if args.adapter_lr is not None:
         cfg.set("optimizer.adapter_lr", float(args.adapter_lr))
     if args.early_stop_metric is not None:
         cfg.set("training.early_stop_metric", args.early_stop_metric)
     if args.val_subset_fraction is not None:
         cfg.set("evaluation.val_subset_fraction", float(args.val_subset_fraction))
+    if args.trunk_channels is not None:
+        cfg.set("trunk.channels", int(args.trunk_channels))
     if args.checkpoint_root:
         cfg.set("paths.checkpoint_root", args.checkpoint_root)
     if args.logs_root:
@@ -71,6 +83,13 @@ def main() -> None:
     log = setup_logger("train", cfg.path("paths.logs_root"), also=["collision_jepa4"])
     log.info("resolved config: %s", json.dumps(dump_resolved(cfg)["_resolved"], indent=2))
     device = resolve_device(args.device)
+    skip_backbone = bool(args.skip_backbone)
+    dummy = bool(args.dummy)
+    if skip_backbone and dummy:
+        raise SystemExit("use --skip-backbone or --dummy, not both")
+    if device == "cpu":
+        cfg.set("training.pin_memory", False)
+        cfg.set("training.amp", False)
     log.info("hardware %s", describe_hardware(device, cfg.get("backbone.model_id")))
 
     man = cfg.path("paths.manifest")
@@ -79,7 +98,6 @@ def main() -> None:
         raise SystemExit("Run 01_build_manifest.py before training.")
     records = load_manifest(man)
     splits = load_splits(split_file)
-    dummy = bool(args.dummy)
     train_ds = TeacherDataset(cfg, records, "train", splits, dummy_backbone=dummy)
     val_ds = TeacherDataset(cfg, records, "val", splits, dummy_backbone=dummy)
     frac = float(cfg.get("evaluation.val_subset_fraction", 1.0))
@@ -105,7 +123,11 @@ def main() -> None:
         len(val_ds),
         extra_n,
     )
-    model = CollisionTeacher4(cfg, dummy_backbone=dummy)
+    if skip_backbone:
+        model = CollisionTeacher4(cfg, backbone=CachedTokenBackbone(cfg))
+        log.info("skip-backbone: CachedTokenBackbone, real token-cache fingerprint")
+    else:
+        model = CollisionTeacher4(cfg, dummy_backbone=dummy)
     model.to(device)
     if args.init_from:
         init_path = Path(args.init_from)
@@ -120,6 +142,8 @@ def main() -> None:
     if bool(cfg.get("cache.cache_encoder_tokens", False)) and not dummy:
         tok = prepare_token_cache(records, cfg, model, device)
         log.info("token cache %s", tok)
+        if skip_backbone and int(tok.get("written", 0)) > 0:
+            raise SystemExit("skip-backbone refused to encode missing tokens")
     train_loader = build_dataloader(train_ds, cfg, shuffle=True, drop_last=False)
     val_loader = build_dataloader(val_ds, cfg, shuffle=False) if len(val_ds) else None
     resume_path = None

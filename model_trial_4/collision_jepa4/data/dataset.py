@@ -1,7 +1,7 @@
 """Teacher dataset: 16-frame clips ending at t, plus now and future heatmaps.
 
-The trunk is trained on ``h_1s`` (frame t+30). ``h_now`` stays in the batch
-for pairing and diagnostics; the 1s-ahead loss does not read it.
+The trunk is trained on ``h_1s`` (frame t+30). ``h_now`` is also in the batch
+for appear/disappear cell weights. Closing maps load when ``loss.close_weight`` > 0.
 """
 
 from __future__ import annotations

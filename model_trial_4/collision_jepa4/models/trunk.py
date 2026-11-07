@@ -2,7 +2,7 @@
 
 Token layout is [B, T*H*W, C] with T=8, H=W=16, C=1408 for ViT-G.
 Depthwise branches use bias=False. Every other convolution uses bias=True,
-which is what the 383,265 parameter count assumes.
+which is what the 383,169 parameter count assumes.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 # Linear 1408→128 plus two blocks, downsample, fusion, and the 16×16 dilated head.
-TRUNK_PARAMS_1408 = 383_265
+TRUNK_PARAMS_1408 = 383_169
 
 
 def channel_layernorm(norm: nn.LayerNorm, x: torch.Tensor) -> torch.Tensor:
@@ -152,6 +152,7 @@ class CollisionTrunk(nn.Module):
         logits_fine = self.decoder(x)
         logits_coarse = F.adaptive_max_pool2d(logits_fine, (5, 5))
         return {
+            "fused": x,
             "logits_fine": logits_fine,
             "Hhat_1s_logits": logits_coarse.squeeze(1),
             "Hhat_1s": torch.sigmoid(logits_coarse).squeeze(1),

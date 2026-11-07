@@ -42,6 +42,19 @@ date
 echo "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-} SLURM_JOB_GPUS=${SLURM_JOB_GPUS:-}"
 nvidia-smi -L
 nvidia-smi --query-gpu=index,memory.used,utilization.gpu --format=csv
+# Do not train on a GPU that is already full, or on DGX2 GPU 0's ghost 100% util.
+mem_util=$(nvidia-smi --query-gpu=memory.used,utilization.gpu --format=csv,noheader,nounits)
+mem=${mem_util%%,*}; util=${mem_util##*,}
+mem=${mem// /}; util=${util// /}; mem=${mem%.*}; util=${util%.*}
+if [ "${mem:-0}" -ge 1000 ]; then
+  echo "refusing occupied GPU mem=${mem}MiB util=${util}" >&2
+  exit 2
+fi
+if [ "${util:-0}" -ge 50 ] && [ "${mem:-0}" -lt 400 ]; then
+  echo "refusing ghost-busy GPU mem=${mem}MiB util=${util}" >&2
+  exit 3
+fi
+echo "GPU looks idle; starting train"
 
 if [[ -e "checkpoints/${TAG}/teacher_phase_a_best.pt" || -e "checkpoints/${TAG}/teacher_phase_a_last.pt" ]]; then
   echo "refusing to overwrite checkpoints/${TAG}" >&2

@@ -21,11 +21,16 @@ def load_checkpoint(path: str | Path, map_location: str = "cpu") -> dict[str, An
 
 
 def extract_teacher_state(model) -> dict[str, Any]:
-    return {
+    blob = {
         "trunk": model.trunk.state_dict(),
         "lora_enabled": False,
     }
+    if hasattr(model, "close_head"):
+        blob["close_head"] = model.close_head.state_dict()
+    return blob
 
 
 def load_teacher_state(model, blob: dict[str, Any], *, strict: bool = True) -> None:
     model.trunk.load_state_dict(blob["trunk"], strict=strict)
+    if hasattr(model, "close_head") and "close_head" in blob:
+        model.close_head.load_state_dict(blob["close_head"], strict=strict)

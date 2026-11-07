@@ -1,0 +1,7 @@
+JOB=9592 CVD=0 GPUS=0
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-84084747-8ddf-30a2-3fd6-b9c93922d7ac)
+---
+index, uuid, memory.used [MiB], memory.total [MiB], utilization.gpu [%]
+0, GPU-84084747-8ddf-30a2-3fd6-b9c93922d7ac, 7 MiB, 40960 MiB, 100 %
+---visible---
+CUDA_VISIBLE_DEVICES=0

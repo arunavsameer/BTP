@@ -13,6 +13,8 @@ from .heatmap_decoder import HeatmapDecoder, HeatmapDelta, copy_residual_future
 from .lora import lora_parameters
 from .residual_predictor import ResidualPredictor
 from .spatial_adapter import SpatialTemporalAdapter
+from .task_whiten import TaskWhitenDrop
+from .variance_head import VarianceHead
 from .vjepa_backbone import DummyVJEPA2Backbone, VJEPA2Backbone, build_backbone
 
 
@@ -72,10 +74,19 @@ class CollisionTeacher3(nn.Module):
             out_grid=self.feature_grid,
             pool=heatmap_pool,
         )
+        self.task_whiten = TaskWhitenDrop(
+            channels=dec_ch,
+            drop_k=int(cfg.get("adapter.task_whiten_drop_k", 16)),
+        )
         self.close_head = nn.Conv2d(self.z_channels, 1, kernel_size=1)
         # Mean-precision Beta: φ = 1 + softplus(raw). On Z_t so uncertainty
         # is a motion property of the latent, not a copy of the heatmap.
         self.evidence_head = nn.Conv2d(self.z_channels, 1, kernel_size=1)
+        self.variance_head = (
+            VarianceHead(in_channels=dec_ch, out_grid=self.feature_grid)
+            if bool(cfg.get("adapter.variance_head", False))
+            else None
+        )
         self.direct_h1s = heads_mode(cfg) == "direct_h1s"
         if self.direct_h1s:
             self.predictors = nn.ModuleDict()
@@ -122,6 +133,7 @@ class CollisionTeacher3(nn.Module):
         g = self.heatmap_grid
         if g > 0 and (feat.shape[-2] != g or feat.shape[-1] != g):
             feat = F.interpolate(feat, size=(g, g), mode="bilinear", align_corners=False)
+        feat = self.task_whiten(feat)
         return feat
 
     def _heads(self, z_t: torch.Tensor, fine: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
@@ -130,8 +142,9 @@ class CollisionTeacher3(nn.Module):
         close_logits = self.close_head(z_t).squeeze(1)
         close = torch.sigmoid(close_logits)
         precision_logits = self.evidence_head(z_t).squeeze(1)
+        var_map = self.variance_head(feat) if self.variance_head is not None else None
         if self.direct_h1s:
-            return {
+            out_d = {
                 "Z_t": z_t,
                 "Hhat_1s": h_now,
                 "Hhat_1s_logits": logits_now,
@@ -139,6 +152,9 @@ class CollisionTeacher3(nn.Module):
                 "Hhat_close_logits": close_logits,
                 "Hhat_precision_logits": precision_logits,
             }
+            if var_map is not None:
+                out_d["Hhat_var"] = var_map
+            return out_d
         out: dict[str, torch.Tensor] = {
             "Z_t": z_t,
             "Hhat_now": h_now,
@@ -154,6 +170,8 @@ class CollisionTeacher3(nn.Module):
             out[f"Zhat_{name}"] = z_hat
             out[f"Delta_{name}"] = delta
             out[f"Hhat_{name}"] = h_hat
+        if var_map is not None:
+            out["Hhat_var"] = var_map
         return out
 
     def forward(self, clip: torch.Tensor | None = None, tokens: torch.Tensor | None = None) -> dict[str, torch.Tensor]:
@@ -167,7 +185,23 @@ class CollisionTeacher3(nn.Module):
         params += list(self.delta_heads.parameters())
         params += list(self.close_head.parameters())
         params += list(self.evidence_head.parameters())
+        if self.variance_head is not None:
+            params += list(self.variance_head.parameters())
         return params
+
+    def freeze_except_variance(self) -> int:
+        """U1: freeze G, train only the 16×16 variance head. Adapter stays in eval."""
+        for p in self.parameters():
+            p.requires_grad = False
+        if self.variance_head is None:
+            return 0
+        n = 0
+        for p in self.variance_head.parameters():
+            p.requires_grad = True
+            n += int(p.numel())
+        self.eval()
+        self.variance_head.train()
+        return n
 
     def lora_parameters(self) -> list[nn.Parameter]:
         if hasattr(self.backbone, "lora_parameters"):

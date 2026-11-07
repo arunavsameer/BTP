@@ -1,0 +1,7 @@
+=== SLURM job 9669 teacher_h1s_g_loss_144 144-ch trunk + trial3 G loss FULL val on DGX2 ===
+Tuesday 03 November 2026 02:42:11 AM IST
+CUDA_VISIBLE_DEVICES=0 SLURM_JOB_GPUS=0
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-84084747-8ddf-30a2-3fd6-b9c93922d7ac)
+index, memory.used [MiB], utilization.gpu [%]
+0, 7 MiB, 100 %
+refusing ghost-busy GPU mem=7MiB util=100

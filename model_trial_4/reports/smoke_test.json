@@ -1,0 +1,31 @@
+{
+  "device": "cpu",
+  "shapes": {
+    "Hhat_now": [
+      2,
+      5,
+      5
+    ],
+    "Hhat_now_logits": [
+      2,
+      5,
+      5
+    ]
+  },
+  "audit": {
+    "total": 6479585,
+    "trainable": 347745,
+    "frozen": 6131840,
+    "trunk": 347745,
+    "backbone_id": "dummy",
+    "hidden_size": 1408,
+    "temporal_groups": 8,
+    "spatial": 16,
+    "heads_mode": "now",
+    "trunk_matches_spec": true
+  },
+  "loss": {
+    "L_total": 0.688765287399292,
+    "L_now": 0.688765287399292
+  }
+}

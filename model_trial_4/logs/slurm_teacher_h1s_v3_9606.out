@@ -1,0 +1,13 @@
+=== SLURM job 9606 teacher_h1s_v3 2-GPU picker on DGX2 ===
+Sunday 01 November 2026 01:16:36 AM IST
+CUDA_VISIBLE_DEVICES=0,1 SLURM_JOB_GPUS=3,4
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-4ba4736d-11ca-e800-1d07-3eb61df18dff)
+GPU 1: NVIDIA A100-SXM4-40GB (UUID: GPU-b78ec6a9-374b-3220-b0c0-50432315e4a0)
+index, uuid, memory.used [MiB], utilization.gpu [%]
+0, GPU-4ba4736d-11ca-e800-1d07-3eb61df18dff, 28499 MiB, 65 %
+1, GPU-b78ec6a9-374b-3220-b0c0-50432315e4a0, 28617 MiB, 47 %
+probe idx=0 mem=28499MiB util=56 uuid=GPU-4ba4736d-11ca-e800-1d07-3eb61df18dff
+skip occupied 0
+probe idx=1 mem=28617MiB util=43 uuid=GPU-b78ec6a9-374b-3220-b0c0-50432315e4a0
+skip occupied 1
+no idle GPU in this 2-GPU allocation

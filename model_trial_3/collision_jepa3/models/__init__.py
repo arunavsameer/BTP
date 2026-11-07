@@ -3,6 +3,7 @@ from .lora import LoRALinear, apply_lora_to_last_blocks, lora_parameters
 from .residual_predictor import ResidualPredictor
 from .spatial_adapter import SpatialTemporalAdapter
 from .teacher import CollisionTeacher3
+from .variance_head import VarianceHead
 from .vjepa_backbone import DummyVJEPA2Backbone, VJEPA2Backbone
 
 __all__ = [
@@ -14,6 +15,7 @@ __all__ = [
     "ResidualPredictor",
     "SpatialTemporalAdapter",
     "CollisionTeacher3",
+    "VarianceHead",
     "DummyVJEPA2Backbone",
     "VJEPA2Backbone",
 ]

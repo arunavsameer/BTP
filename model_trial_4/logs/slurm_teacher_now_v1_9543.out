@@ -1,0 +1,17 @@
+=== SLURM job 9543 teacher_now_v1 on DGX2 ===
+Saturday 31 October 2026 01:56:32 AM IST
+CUDA_VISIBLE_DEVICES=0 SLURM_JOB_GPUS=0
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-84084747-8ddf-30a2-3fd6-b9c93922d7ac)
+index, memory.used [MiB], utilization.gpu [%]
+0, 7 MiB, 100 %
+token_cache_id f0878f26dd0029c5_gr16333c81
+token cache reuse check: {'fingerprint': 'f0878f26dd0029c5_gr16333c81', 'root': '/raid/asrivastava/VJEPA2_BTP/model_trial_3/cache/tokens/f0878f26dd0029c5_gr16333c81', 'valid': 830, 'missing': 0, 'missing_ids': []}
+token cache complete; trainer will not write tokens and will not load Giant
+Traceback (most recent call last):
+  File "<stdin>", line 4, in <module>
+torch.AcceleratorError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
+Search for `cudaErrorDevicesUnavailable' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+

@@ -28,6 +28,16 @@ def extract_teacher_state(model) -> dict[str, Any]:
         "delta_heads": model.delta_heads.state_dict(),
         "close_head": model.close_head.state_dict() if hasattr(model, "close_head") else {},
         "evidence_head": model.evidence_head.state_dict() if hasattr(model, "evidence_head") else {},
+        "variance_head": (
+            model.variance_head.state_dict()
+            if getattr(model, "variance_head", None) is not None
+            else {}
+        ),
+        "task_whiten": (
+            model.task_whiten.state_dict()
+            if getattr(model, "task_whiten", None) is not None
+            else {}
+        ),
         "lora": {k: v.detach().cpu() for k, v in _lora_state(model).items()},
         "lora_enabled": bool(getattr(model.backbone, "lora_enabled", False)),
     }
@@ -52,6 +62,10 @@ def load_teacher_state(model, blob: dict[str, Any], *, strict: bool = True) -> N
         model.close_head.load_state_dict(blob["close_head"], strict=strict)
     if hasattr(model, "evidence_head") and blob.get("evidence_head"):
         model.evidence_head.load_state_dict(blob["evidence_head"], strict=strict)
+    if getattr(model, "variance_head", None) is not None and blob.get("variance_head"):
+        model.variance_head.load_state_dict(blob["variance_head"], strict=strict)
+    if getattr(model, "task_whiten", None) is not None and blob.get("task_whiten"):
+        model.task_whiten.load_state_dict(blob["task_whiten"], strict=strict)
     lora_blob = blob.get("lora") or {}
     if lora_blob:
         if not getattr(model.backbone, "lora_enabled", False):

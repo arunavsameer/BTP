@@ -17,19 +17,23 @@ from .beta_evidence import (
 from .direction import direction_alignment_loss
 from .heatmap import (
     appear_cell_weight,
+    balanced_bce_logits,
     blob_bce,
     blob_bce_logits,
     disappear_cell_weight,
     false_positive_penalty,
     row_priority_weights,
+    safe_logit_hinge,
     safe_peak_hinge,
     small_blob_cell_weight,
     soft_bce,
     soft_bce_logits,
+    stop_logit_hinge,
     stop_peak_hinge,
     target_weighted_mse,
 )
 from .residual import delta_loss
+from .variance import weighted_var_loss
 
 
 @dataclass
@@ -38,9 +42,12 @@ class TeacherLossOutput:
     terms: dict[str, torch.Tensor] = field(default_factory=dict)
 
     def as_floats(self) -> dict[str, float]:
-        out = {"L_total": float(self.total.detach())}
+        out = {}
         for k, v in self.terms.items():
+            if k == "L_total":
+                continue
             out[k] = float(v.detach()) if torch.is_tensor(v) else float(v)
+        out["L_total"] = float(self.total.detach())
         return out
 
 
@@ -101,11 +108,17 @@ class TeacherLoss:
         self.prob_safe_w = float(cfg.get("loss.prob_safe_weight", 0.0))
         self.prob_stop_target = float(cfg.get("loss.prob_stop_target", 0.75))
         self.prob_safe_cap = float(cfg.get("loss.prob_safe_cap", 0.15))
+        self.var_w = float(cfg.get("loss.var_weight", 0.0))
+        self.var_pos_weight = float(cfg.get("loss.var_pos_weight", 9.0))
         self.row_list = list(cfg.get("adapter.row_weights", [1.0, 1.0, 1.0, 1.0, 1.0]))
         self.left = list(cfg.get("evaluation.left_cols", [0, 1]))
         self.center = list(cfg.get("evaluation.center_cols", [2]))
         self.right = list(cfg.get("evaluation.right_cols", [3, 4]))
         self.device = device
+        self.heatmap_balanced = bool(cfg.get("loss.heatmap_balanced", False))
+        self.logit_hinges = bool(cfg.get("loss.logit_hinges", False))
+        self.logit_hinge_margin = float(cfg.get("loss.logit_hinge_margin", 0.1))
+        self.diag: dict[str, float] = {}
 
     def _row_w(self, ref: torch.Tensor) -> torch.Tensor:
         return row_priority_weights(self.row_list, ref.device, torch.float32)
@@ -168,9 +181,22 @@ class TeacherLoss:
             cell_weight=occ,
         )
 
-    def _stop_hinge(self, pred, target, mask):
+    def _stop_hinge(self, pred, target, mask, logits=None):
         if float(self.stop_hinge_w) == 0.0:
+            self.diag["stop_hinge_active"] = 0.0
+            self.diag["stop_hinge_n"] = 0.0
             return pred.new_zeros(())
+        if self.logit_hinges and logits is not None:
+            loss, active, n = stop_logit_hinge(
+                logits,
+                target,
+                sample_mask=mask,
+                stop_threshold=self.stop_hinge_threshold,
+                margin=self.logit_hinge_margin,
+            )
+            self.diag["stop_hinge_active"] = float(active)
+            self.diag["stop_hinge_n"] = float(n)
+            return loss
         return stop_peak_hinge(
             pred,
             target,
@@ -180,9 +206,22 @@ class TeacherLoss:
             pred_target=self.stop_hinge_target,
         )
 
-    def _safe_hinge(self, pred, target, mask):
+    def _safe_hinge(self, pred, target, mask, logits=None):
         if float(self.safe_hinge_w) == 0.0:
+            self.diag["safe_hinge_active"] = 0.0
+            self.diag["safe_hinge_n"] = 0.0
             return pred.new_zeros(())
+        if self.logit_hinges and logits is not None:
+            loss, active, n = safe_logit_hinge(
+                logits,
+                target,
+                sample_mask=mask,
+                caution_threshold=self.safe_hinge_threshold,
+                margin=self.logit_hinge_margin,
+            )
+            self.diag["safe_hinge_active"] = float(active)
+            self.diag["safe_hinge_n"] = float(n)
+            return loss
         return safe_peak_hinge(
             pred,
             target,
@@ -251,6 +290,13 @@ class TeacherLoss:
         logits=None,
     ):
         if self.heatmap != "mse":
+            if logits is not None and self.heatmap_balanced:
+                return balanced_bce_logits(
+                    logits,
+                    target,
+                    sample_mask=mask,
+                    cell_weight=cell_weight,
+                )
             if logits is not None:
                 return soft_bce_logits(
                     logits,
@@ -305,6 +351,12 @@ class TeacherLoss:
         z_bg_pair: torch.Tensor | None = None,
     ) -> TeacherLossOutput:
         terms: dict[str, torch.Tensor] = {}
+        self.diag = {
+            "stop_hinge_active": 0.0,
+            "stop_hinge_n": 0.0,
+            "safe_hinge_active": 0.0,
+            "safe_hinge_n": 0.0,
+        }
         if self.direct_h1s:
             h_hat = out["Hhat_1s"]
             row_w = self._row_w(h_hat)
@@ -322,8 +374,8 @@ class TeacherLoss:
                 logits=logits,
             )
             l_blob = self._blob(h_hat, h_tgt, valid, logits=logits)
-            l_stop = self._stop_hinge(h_hat, h_tgt, valid)
-            l_safe = self._safe_hinge(h_hat, h_tgt, valid)
+            l_stop = self._stop_hinge(h_hat, h_tgt, valid, logits=logits)
+            l_safe = self._safe_hinge(h_hat, h_tgt, valid, logits=logits)
             l_fp = false_positive_penalty(
                 h_hat, h_tgt, sample_mask=valid, safe_threshold=self.safe_thr, margin=self.fp_margin
             )
@@ -355,6 +407,15 @@ class TeacherLoss:
                 valid,
                 cell_weight=self._cell_w(batch.get("h_now"), h_tgt),
             )
+            if float(self.var_w) > 0.0 and "Hhat_var" in out and "v_1s" in batch:
+                l_var = weighted_var_loss(
+                    out["Hhat_var"],
+                    batch["v_1s"],
+                    batch["v_mask"],
+                    pos_weight=self.var_pos_weight,
+                )
+            else:
+                l_var = h_hat.new_zeros(())
             terms["L_1s"] = l_h
             terms["L_future"] = l_h
             terms["L_blob"] = l_blob
@@ -371,6 +432,7 @@ class TeacherLoss:
             terms["L_dir"] = l_dir
             terms["L_dir_1s"] = l_dir
             terms["L_bg"] = l_bg
+            terms["L_var"] = l_var
             total = (
                 l_h
                 + self.blob_w * l_blob
@@ -384,6 +446,7 @@ class TeacherLoss:
                 + self.fp_w * l_fp
                 + self.dir_w * l_dir
                 + self.bg_w * l_bg
+                + self.var_w * l_var
             )
             terms["L_total"] = total
             return TeacherLossOutput(total=total, terms=terms)

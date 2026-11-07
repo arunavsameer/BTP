@@ -1,0 +1,5 @@
+HOLD job=9677 CUDA_VISIBLE_DEVICES=0 SLURM_JOB_GPUS=3 HOST=DGX2
+Tuesday 03 November 2026 03:19:10 AM IST
+index, uuid, memory.used [MiB], utilization.gpu [%]
+0, GPU-4ba4736d-11ca-e800-1d07-3eb61df18dff, 19983 MiB, 0 %
+slurmstepd: error: *** JOB 9677 ON DGX2 CANCELLED AT 2026-11-03T03:19:58 ***

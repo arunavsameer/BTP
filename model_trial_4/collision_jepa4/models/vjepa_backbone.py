@@ -46,6 +46,39 @@ def _dtype_from_name(name: str) -> torch.dtype:
     }[str(name)]
 
 
+class CachedTokenBackbone(nn.Module):
+    """ViT-G token layout only. Does not load V-JEPA. Training must use the token cache."""
+
+    def __init__(self, cfg):
+        super().__init__()
+        self.hidden_size = 1408
+        self.crop_size = int(cfg.get("preprocessing.input_size", 256))
+        self.patch_size = 16
+        self.tubelet_size = 2
+        self.num_frames = int(cfg.get("sampling.input_frames", 16))
+        self.model_id = str(cfg.get("backbone.model_id"))
+        self.revision = "cached-tokens"
+        self.spatial = max(1, self.crop_size // self.patch_size)
+        self.temporal_groups = max(1, self.num_frames // self.tubelet_size)
+        self.lora_enabled = False
+        self._grad_enabled = False
+
+    def expected_tokens(self, num_frames: int) -> tuple[int, int, int]:
+        if num_frames % self.tubelet_size != 0:
+            raise RuntimeError(
+                f"num_frames={num_frames} is not divisible by tubelet_size={self.tubelet_size}"
+            )
+        t_prime = num_frames // self.tubelet_size
+        s = self.spatial
+        return t_prime, s, t_prime * s * s
+
+    def set_backbone_grad(self, enabled: bool) -> None:
+        self._grad_enabled = bool(enabled)
+
+    def forward(self, clip: torch.Tensor) -> torch.Tensor:
+        raise RuntimeError("skip-backbone is on; expected cached tokens, not a frame encode")
+
+
 class DummyVJEPA2Backbone(nn.Module):
     """Deterministic stand-in for tests. Matches the dense token layout of V-JEPA 2."""
 

@@ -104,17 +104,24 @@ class TrunkTests(unittest.TestCase):
         clip = torch.rand(1, 16, 3, 256, 256)
         clip_out = model(clip=clip)
         self.assertEqual(tuple(clip_out["Hhat_1s"].shape), (1, 5, 5))
+        self.assertEqual(tuple(clip_out["Hhat_close"].shape), (1, 5, 5))
 
-    def test_loss_reads_h1s_not_h_now(self) -> None:
+    def test_g_loss_uses_h_now_for_appear_weight(self) -> None:
         model = _teacher()
         tokens = torch.randn(1, 2048, 1408)
         out = model(tokens=tokens)
         loss_fn = TeacherLoss(Config.load())
-        h1s = torch.ones(1, 5, 5)
+        h1s = torch.zeros(1, 5, 5)
+        h1s[0, 4, 2] = 1.0
         a = loss_fn(out, {"h_1s": h1s, "h_now": torch.zeros(1, 5, 5)})
         b = loss_fn(out, {"h_1s": h1s, "h_now": torch.ones(1, 5, 5)})
-        self.assertAlmostEqual(float(a.total), float(b.total), places=5)
-        self.assertIn("L_1s", a.as_floats())
+        floats = a.as_floats()
+        self.assertIn("L_1s", floats)
+        self.assertIn("L_blob", floats)
+        self.assertIn("L_stop_hinge", floats)
+        self.assertIn("L_safe_hinge", floats)
+        self.assertIn("L_close", floats)
+        self.assertGreater(abs(float(a.as_floats()["L_1s"]) - float(b.as_floats()["L_1s"])), 1e-5)
 
 
 if __name__ == "__main__":

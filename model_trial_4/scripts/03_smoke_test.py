@@ -46,6 +46,7 @@ def main() -> None:
     out = model(clip)
     assert out["Hhat_1s"].shape == (2, 5, 5)
     assert out["Hhat_1s_logits"].shape == (2, 5, 5)
+    assert out["Hhat_close"].shape == (2, 5, 5)
     probs = out["Hhat_1s"].detach()
     assert torch.isfinite(probs).all()
     assert float(probs.min()) > 0.0

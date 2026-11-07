@@ -1,0 +1,112 @@
+{
+  "horizons": {
+    "now": {
+      "n": 5120.0,
+      "masked": 0.0,
+      "masked_frac": 0.0,
+      "mse": 0.00998820584315423,
+      "weighted_mse": 0.019649654473276747,
+      "accuracy": 0.9796796875,
+      "high_threat_accuracy": 0.9796796875,
+      "high_threat_precision": 0.6981255093724531,
+      "high_threat_recall": 0.8511526232114467,
+      "high_threat_f1": 0.7670815796543387,
+      "severity_accuracy": 0.808984375,
+      "false_positive_rate_safe_cells": 0.009215637656004628,
+      "direction_accuracy": 0.8356242840778924,
+      "stop_precision": 0.7866071428571428,
+      "stop_recall": 0.785204991087344,
+      "stop_f1": 0.7859054415700267,
+      "nuisance": 0.13930053349140487,
+      "miss": 0.0481283422459893,
+      "safe_recall": 0.8606994665085952,
+      "safe_stop_rate": 0.023117960877296978,
+      "pre_fork_mse": 0.00689657640176433,
+      "post_fork_mse": 0.01572980334987414,
+      "pre_fork_n": 3328.0,
+      "post_fork_n": 1792.0,
+      "pre_fork_stop_recall": 0.615,
+      "post_fork_stop_recall": 0.8795013850415513,
+      "pre_fork_stop_n": 400.0,
+      "post_fork_stop_n": 722.0,
+      "post_fork_safe_stop_rate": 0.011695906432748537
+    }
+  },
+  "now": {
+    "n": 5120.0,
+    "masked": 0.0,
+    "masked_frac": 0.0,
+    "mse": 0.00998820584315423,
+    "weighted_mse": 0.019649654473276747,
+    "accuracy": 0.9796796875,
+    "high_threat_accuracy": 0.9796796875,
+    "high_threat_precision": 0.6981255093724531,
+    "high_threat_recall": 0.8511526232114467,
+    "high_threat_f1": 0.7670815796543387,
+    "severity_accuracy": 0.808984375,
+    "false_positive_rate_safe_cells": 0.009215637656004628,
+    "direction_accuracy": 0.8356242840778924,
+    "stop_precision": 0.7866071428571428,
+    "stop_recall": 0.785204991087344,
+    "stop_f1": 0.7859054415700267,
+    "nuisance": 0.13930053349140487,
+    "miss": 0.0481283422459893,
+    "safe_recall": 0.8606994665085952,
+    "safe_stop_rate": 0.023117960877296978,
+    "pre_fork_mse": 0.00689657640176433,
+    "post_fork_mse": 0.01572980334987414,
+    "pre_fork_n": 3328.0,
+    "post_fork_n": 1792.0,
+    "pre_fork_stop_recall": 0.615,
+    "post_fork_stop_recall": 0.8795013850415513,
+    "pre_fork_stop_n": 400.0,
+    "post_fork_stop_n": 722.0,
+    "post_fork_safe_stop_rate": 0.011695906432748537
+  },
+  "selection": {
+    "score": 0.7313393126861817,
+    "eligible": true,
+    "recall": 0.8511526232114467,
+    "stop_f1": 0.7859054415700267,
+    "nuisance": 0.13930053349140487,
+    "miss": 0.0481283422459893
+  },
+  "subgroups": {
+    "outcome": {
+      "collision": 0.012722474149560408,
+      "miss_right": 0.005059524964605008,
+      "miss_left": 0.009740938411090578
+    },
+    "background": {
+      "bg_00": 0.010349907186008664,
+      "bg_01": 0.009626504481196863
+    },
+    "scenario": {
+      "car_cut_in": 0.009546659918324573,
+      "periph_ped_cut": 0.024238301890106406,
+      "jaywalker": 0.012766192675880462,
+      "jaywalker_turn_toward": 0.00981837461924755,
+      "cube_from_left": 0.001524437198289652,
+      "crossing_car_side": 7.144045204432459e-05,
+      "cube_from_right": 0.0025834879680701308,
+      "shape_head_on": 0.0053840054662856575,
+      "shape_from_left": 0.003971682348301364,
+      "car_cross_critical": 0.06585410857089471,
+      "cube_head_on": 0.0024748371859918184,
+      "shape_from_right": 0.03344347876222855,
+      "cyclist_head_on": 0.0052158249639076,
+      "jaywalker_from_right": 0.013838244472147654,
+      "swerve_vehicle": 0.00882454970637534,
+      "child_darting": 0.006773995778748087,
+      "car_runs_off_road": 2.0624891812559555e-05,
+      "periph_child_cut": 0.008446496393801971,
+      "jaywalker_from_left": 0.014224267497845045,
+      "cube_on_path": 0.001998128967350077,
+      "periph_car_turn": 0.011195238841850141
+    }
+  },
+  "loss": {
+    "L_total": 0.07518886557204496,
+    "L_now": 0.07518886557204496
+  }
+}

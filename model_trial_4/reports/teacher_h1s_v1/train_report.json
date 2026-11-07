@@ -1,0 +1,505 @@
+{
+  "frozen": {
+    "phase": "frozen",
+    "history": [
+      {
+        "phase": "frozen",
+        "epoch": 0,
+        "seconds": 155.65669533843175,
+        "lrs": [
+          0.000108
+        ],
+        "train": {
+          "L_total": 0.15075191570460472,
+          "L_1s": 0.15075191570460472
+        },
+        "val_selection": {
+          "score": 0.4531758999136033,
+          "eligible": true,
+          "recall": 0.5682878081279147,
+          "stop_f1": 0.6563876651982379,
+          "nuisance": 0.14011976047904193,
+          "miss": 0.16058394160583941
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.020212624229877407,
+          "weighted_mse": 0.04834916928629871,
+          "high_threat_precision": 0.6597061098221191,
+          "high_threat_recall": 0.5682878081279147,
+          "high_threat_f1": 0.6105941302791695,
+          "false_positive_rate_safe_cells": 0.013215712383488681,
+          "direction_accuracy": 0.7707865168539326,
+          "stop_precision": 0.8277777777777777,
+          "stop_recall": 0.5437956204379562,
+          "stop_f1": 0.6563876651982379,
+          "nuisance": 0.14011976047904193,
+          "miss": 0.16058394160583941,
+          "safe_recall": 0.859880239520958,
+          "safe_stop_rate": 0.023952095808383235,
+          "pre_fork_mse": 0.00907247288342461,
+          "post_fork_mse": 0.04090147684044838,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.26973684210526316,
+          "post_fork_stop_recall": 0.8852459016393442,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.06134969325153374
+        },
+        "val_mse": 0.020212624229877407,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 1,
+        "seconds": 142.77437405195087,
+        "lrs": [
+          0.000156
+        ],
+        "train": {
+          "L_total": 0.11257506705102922,
+          "L_1s": 0.11257506705102922
+        },
+        "val_selection": {
+          "score": 0.5728556086489389,
+          "eligible": false,
+          "recall": 0.7588274483677548,
+          "stop_f1": 0.6888888888888889,
+          "nuisance": 0.2502994011976048,
+          "miss": 0.06569343065693431
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.02000491806524036,
+          "weighted_mse": 0.033342872951169236,
+          "high_threat_precision": 0.5886304909560723,
+          "high_threat_recall": 0.7588274483677548,
+          "high_threat_f1": 0.6629802095459837,
+          "false_positive_rate_safe_cells": 0.021904127829560586,
+          "direction_accuracy": 0.8089887640449438,
+          "stop_precision": 0.6992481203007519,
+          "stop_recall": 0.6788321167883211,
+          "stop_f1": 0.6888888888888889,
+          "nuisance": 0.2502994011976048,
+          "miss": 0.06569343065693431,
+          "safe_recall": 0.7497005988023953,
+          "safe_stop_rate": 0.0562874251497006,
+          "pre_fork_mse": 0.011702572256538155,
+          "post_fork_mse": 0.035423560095130355,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.48026315789473684,
+          "post_fork_stop_recall": 0.9262295081967213,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.0950920245398773
+        },
+        "val_mse": 0.02000491806524036,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 2,
+        "seconds": 143.5517022688873,
+        "lrs": [
+          0.000204
+        ],
+        "train": {
+          "L_total": 0.10262453520654082,
+          "L_1s": 0.10262453520654082
+        },
+        "val_selection": {
+          "score": 0.46814331101394574,
+          "eligible": true,
+          "recall": 0.6102598267821452,
+          "stop_f1": 0.6297117516629712,
+          "nuisance": 0.19760479041916168,
+          "miss": 0.10218978102189781
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.017628636643925374,
+          "weighted_mse": 0.04841231041606948,
+          "high_threat_precision": 0.7024539877300614,
+          "high_threat_recall": 0.6102598267821452,
+          "high_threat_f1": 0.6531194295900179,
+          "false_positive_rate_safe_cells": 0.010785619174434088,
+          "direction_accuracy": 0.8067415730337079,
+          "stop_precision": 0.8022598870056498,
+          "stop_recall": 0.5182481751824818,
+          "stop_f1": 0.6297117516629712,
+          "nuisance": 0.19760479041916168,
+          "miss": 0.10218978102189781,
+          "safe_recall": 0.8023952095808383,
+          "safe_stop_rate": 0.02155688622754491,
+          "pre_fork_mse": 0.008013574685387463,
+          "post_fork_mse": 0.03548518040612631,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.28289473684210525,
+          "post_fork_stop_recall": 0.8114754098360656,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.05521472392638037
+        },
+        "val_mse": 0.017628636643925374,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 3,
+        "seconds": 143.5600400310941,
+        "lrs": [
+          0.000252
+        ],
+        "train": {
+          "L_total": 0.09561565682036544,
+          "L_1s": 0.09561565682036544
+        },
+        "val_selection": {
+          "score": 0.40726399457209356,
+          "eligible": false,
+          "recall": 0.5289806795469687,
+          "stop_f1": 0.649532710280374,
+          "nuisance": 0.04790419161676647,
+          "miss": 0.291970802919708
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.017109219026587512,
+          "weighted_mse": 0.0655855189173467,
+          "high_threat_precision": 0.8210961737331954,
+          "high_threat_recall": 0.5289806795469687,
+          "high_threat_f1": 0.6434359805510536,
+          "false_positive_rate_safe_cells": 0.003428761651131824,
+          "direction_accuracy": 0.8044943820224719,
+          "stop_precision": 0.9025974025974026,
+          "stop_recall": 0.5072992700729927,
+          "stop_f1": 0.649532710280374,
+          "nuisance": 0.04790419161676647,
+          "miss": 0.291970802919708,
+          "safe_recall": 0.9520958083832335,
+          "safe_stop_rate": 0.0023952095808383233,
+          "pre_fork_mse": 0.007889994691211087,
+          "post_fork_mse": 0.03423063558963248,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.27631578947368424,
+          "post_fork_stop_recall": 0.7950819672131147,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.006134969325153374
+        },
+        "val_mse": 0.017109219026587512,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 4,
+        "seconds": 142.56297014513984,
+        "lrs": [
+          0.0003
+        ],
+        "train": {
+          "L_total": 0.08663918687483059,
+          "L_1s": 0.08663918687483059
+        },
+        "val_selection": {
+          "score": 0.3895737399326394,
+          "eligible": true,
+          "recall": 0.49633577614923385,
+          "stop_f1": 0.574938574938575,
+          "nuisance": 0.06107784431137724,
+          "miss": 0.21532846715328466
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.015676601118965044,
+          "weighted_mse": 0.06398433036999755,
+          "high_threat_precision": 0.8806146572104019,
+          "high_threat_recall": 0.49633577614923385,
+          "high_threat_f1": 0.6348530038346827,
+          "false_positive_rate_safe_cells": 0.0021637816245006656,
+          "direction_accuracy": 0.7910112359550562,
+          "stop_precision": 0.8796992481203008,
+          "stop_recall": 0.42700729927007297,
+          "stop_f1": 0.574938574938575,
+          "nuisance": 0.06107784431137724,
+          "miss": 0.21532846715328466,
+          "safe_recall": 0.9389221556886228,
+          "safe_stop_rate": 0.004790419161676647,
+          "pre_fork_mse": 0.007759737475098049,
+          "post_fork_mse": 0.030379347738363007,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.17105263157894737,
+          "post_fork_stop_recall": 0.7459016393442623,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.009202453987730062
+        },
+        "val_mse": 0.015676601118965044,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 5,
+        "seconds": 142.91946300398558,
+        "lrs": [
+          0.00022524999999999995
+        ],
+        "train": {
+          "L_total": 0.0832029360064025,
+          "L_1s": 0.0832029360064025
+        },
+        "val_selection": {
+          "score": 0.4684718532866619,
+          "eligible": true,
+          "recall": 0.6169220519653564,
+          "stop_f1": 0.6327944572748267,
+          "nuisance": 0.11616766467065869,
+          "miss": 0.19343065693430658
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.015447287053324463,
+          "weighted_mse": 0.053861302063456726,
+          "high_threat_precision": 0.7723102585487907,
+          "high_threat_recall": 0.6169220519653564,
+          "high_threat_f1": 0.6859259259259259,
+          "false_positive_rate_safe_cells": 0.007989347536617843,
+          "direction_accuracy": 0.8044943820224719,
+          "stop_precision": 0.8616352201257862,
+          "stop_recall": 0.5,
+          "stop_f1": 0.6327944572748267,
+          "nuisance": 0.11616766467065869,
+          "miss": 0.19343065693430658,
+          "safe_recall": 0.8838323353293414,
+          "safe_stop_rate": 0.015568862275449102,
+          "pre_fork_mse": 0.008106939758914699,
+          "post_fork_mse": 0.02907936054833295,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.26973684210526316,
+          "post_fork_stop_recall": 0.7868852459016393,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.03987730061349693
+        },
+        "val_mse": 0.015447287053324463,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 6,
+        "seconds": 143.60862313210964,
+        "lrs": [
+          7.575000000000001e-05
+        ],
+        "train": {
+          "L_total": 0.0697100383041816,
+          "L_1s": 0.0697100383041816
+        },
+        "val_selection": {
+          "score": 0.37055445079162896,
+          "eligible": false,
+          "recall": 0.4756828780812791,
+          "stop_f1": 0.6282973621103117,
+          "nuisance": 0.06227544910179641,
+          "miss": 0.27007299270072993
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.017139538809586904,
+          "weighted_mse": 0.07037902641894984,
+          "high_threat_precision": 0.8803945745992602,
+          "high_threat_recall": 0.4756828780812791,
+          "high_threat_f1": 0.6176470588235294,
+          "false_positive_rate_safe_cells": 0.0019640479360852198,
+          "direction_accuracy": 0.7707865168539326,
+          "stop_precision": 0.916083916083916,
+          "stop_recall": 0.4781021897810219,
+          "stop_f1": 0.6282973621103117,
+          "nuisance": 0.06227544910179641,
+          "miss": 0.27007299270072993,
+          "safe_recall": 0.9377245508982036,
+          "safe_stop_rate": 0.003592814371257485,
+          "pre_fork_mse": 0.008193075997807138,
+          "post_fork_mse": 0.033754398219088426,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.25,
+          "post_fork_stop_recall": 0.7622950819672131,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.009202453987730062
+        },
+        "val_mse": 0.017139538809586904,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      },
+      {
+        "phase": "frozen",
+        "epoch": 7,
+        "seconds": 143.92345338128507,
+        "lrs": [
+          1e-06
+        ],
+        "train": {
+          "L_total": 0.05650583998031085,
+          "L_1s": 0.05650583998031085
+        },
+        "val_selection": {
+          "score": 0.5251670648383278,
+          "eligible": true,
+          "recall": 0.6528980679546968,
+          "stop_f1": 0.6724511930585684,
+          "nuisance": 0.08862275449101796,
+          "miss": 0.18248175182481752
+        },
+        "val_1s": {
+          "n": 1280.0,
+          "masked": 0.0,
+          "masked_frac": 0.0,
+          "mse": 0.014128973866602447,
+          "weighted_mse": 0.05206766044024324,
+          "high_threat_precision": 0.789049919484702,
+          "high_threat_recall": 0.6528980679546968,
+          "high_threat_f1": 0.7145461173897192,
+          "false_positive_rate_safe_cells": 0.0068908122503328895,
+          "direction_accuracy": 0.8089887640449438,
+          "stop_precision": 0.8288770053475936,
+          "stop_recall": 0.5656934306569343,
+          "stop_f1": 0.6724511930585684,
+          "nuisance": 0.08862275449101796,
+          "miss": 0.18248175182481752,
+          "safe_recall": 0.911377245508982,
+          "safe_stop_rate": 0.02035928143712575,
+          "pre_fork_mse": 0.007475189250796716,
+          "post_fork_mse": 0.02648600254159068,
+          "pre_fork_n": 832.0,
+          "post_fork_n": 448.0,
+          "pre_fork_stop_recall": 0.34210526315789475,
+          "post_fork_stop_recall": 0.8442622950819673,
+          "pre_fork_stop_n": 152.0,
+          "post_fork_stop_n": 122.0,
+          "post_fork_safe_stop_rate": 0.04294478527607362
+        },
+        "val_mse": 0.014128973866602447,
+        "gpu": {
+          "device": "cuda",
+          "model_id": null,
+          "torch": "2.10.0+cu128",
+          "cuda_available": true,
+          "torch_cuda": "12.8",
+          "gpu_name": "NVIDIA A100-SXM4-40GB",
+          "gpu_vram_bytes": 42298834944,
+          "gpu_vram_gb": 39.39,
+          "bf16_supported": true,
+          "peak_allocated_gb": 2.24
+        }
+      }
+    ],
+    "best": {
+      "score": 0.5251670648383278,
+      "eligible": true,
+      "recall": 0.6528980679546968,
+      "stop_f1": 0.6724511930585684,
+      "nuisance": 0.08862275449101796,
+      "miss": 0.18248175182481752,
+      "val_mse": 0.014128973866602447,
+      "best_epoch": 7
+    }
+  }
+}

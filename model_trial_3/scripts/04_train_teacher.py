@@ -8,6 +8,8 @@ import json
 import sys
 from pathlib import Path
 
+import torch
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from scripts._common import add_config_args, load_cfg  # noqa: E402
 
@@ -56,6 +58,9 @@ def main() -> None:
     parser.add_argument("--small-blob-weight", type=float, default=None)
     parser.add_argument("--disappear-weight", type=float, default=None)
     parser.add_argument("--close-weight", type=float, default=None)
+    parser.add_argument("--variance-head", action="store_true", help="Add 16×16 counterfactual variance head")
+    parser.add_argument("--var-weight", type=float, default=None)
+    parser.add_argument("--var-pos-weight", type=float, default=None)
     parser.add_argument("--beta-nll-weight", type=float, default=None)
     parser.add_argument("--evidential-weight", type=float, default=None)
     parser.add_argument("--prob-stop-weight", type=float, default=None)
@@ -83,7 +88,121 @@ def main() -> None:
     )
     parser.add_argument("--extra-same-dir-min", type=int, default=None)
     parser.add_argument("--extra-same-dir-max", type=int, default=None)
+    parser.add_argument(
+        "--task-whiten",
+        action="store_true",
+        help="Fit task-whitened pair-covariance drop on train F, then train G through T(F).",
+    )
+    parser.add_argument("--task-whiten-drop-k", type=int, default=16)
+    parser.add_argument(
+        "--pair-dir-adv",
+        action="store_true",
+        help="Train on the hardest interpolant along matched-background ΔF.",
+    )
+    parser.add_argument("--pair-dir-adv-weight", type=float, default=0.25)
+    parser.add_argument(
+        "--pair-pcgrad",
+        action="store_true",
+        help="PCGrad on matched-background adapter/decoder gradients.",
+    )
+    parser.add_argument(
+        "--padr",
+        action="store_true",
+        help="Pair-anchored directional robustness: actual-pair Huber + local tangent.",
+    )
+    parser.add_argument("--padr-warmup-epochs", type=int, default=18)
+    parser.add_argument("--padr-ramp-epochs", type=int, default=12)
+    parser.add_argument("--padr-rho-lo", type=float, default=0.05)
+    parser.add_argument("--padr-rho-hi", type=float, default=0.10)
+    parser.add_argument("--padr-rms-frac", type=float, default=0.05)
+    parser.add_argument("--padr-grad-frac", type=float, default=0.08)
+    parser.add_argument(
+        "--no-padr-gt-filter",
+        action="store_true",
+        help="Do not drop PADR pairs whose mate h_1s differs from anchor (default: filter on).",
+    )
+    parser.add_argument(
+        "--padr-gt-tol",
+        type=float,
+        default=None,
+        help="Max cell |Δ| for mate h_1s agreement (default: training.padr_gt_tol).",
+    )
+    parser.add_argument(
+        "--logit-hinges",
+        action="store_true",
+        help="STOP/SAFE hinges on max heatmap logits vs logit(0.60)/logit(0.25).",
+    )
+    parser.add_argument("--logit-hinge-margin", type=float, default=0.1)
+    parser.add_argument(
+        "--heatmap-balanced",
+        action="store_true",
+        help="L_1s = ½(occupied BCE + empty BCE). Empty maps use the empty term only.",
+    )
+    parser.add_argument(
+        "--bg-reg",
+        action="store_true",
+        help="Enable matched-background pair batching + optional consistency/dropout (training.bg_reg).",
+    )
+    parser.add_argument(
+        "--bg-reg-pair-consistency",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Output pair consistency loss L_bg_pair (default: false).",
+    )
+    parser.add_argument(
+        "--bg-reg-targeted-dropout",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Channel dropout on P4 low-ICC set (default: false).",
+    )
+    parser.add_argument(
+        "--bg-reg-random-dropout",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Random dropout on same count/eligible pool as targeted (R3).",
+    )
+    parser.add_argument(
+        "--bg-reg-no-early-stop",
+        action="store_true",
+        help="Disable early stopping for fixed budget (training.bg_reg.disable_early_stopping).",
+    )
+    parser.add_argument("--bg-reg-p4", default=None, help="Path to p4_report.json")
+    parser.add_argument(
+        "--bg-reg-clean-anchor",
+        action="store_true",
+        help="Clean-anchored ICC channel dropout auxiliary loss (training.bg_reg.clean_anchored_dropout).",
+    )
+    parser.add_argument(
+        "--bg-reg-dropout-prob",
+        type=float,
+        default=None,
+        help="Override training.bg_reg.dropout_prob (e.g. 0.25 for clean-anchor).",
+    )
+    parser.add_argument(
+        "--bg-reg-clean-anchor-pair-frac",
+        type=float,
+        default=None,
+        help="Fraction of pair batches that run the auxiliary dropout path (default 0.5).",
+    )
+    parser.add_argument(
+        "--bg-reg-clean-anchor-grad-scale",
+        type=float,
+        default=None,
+        help="β = scale * median(||g_clean||/||g_drop||) scale factor (default 0.10).",
+    )
+    parser.add_argument(
+        "--bg-reg-pair-cf",
+        action="store_true",
+        help="Pair-conditioned pooled PCA counterfactual auxiliary (training.bg_reg.pair_counterfactual_shrink).",
+    )
+    parser.add_argument("--bg-reg-pair-cf-subspace", default=None, help="Path to learned_k*.npz with U [k,C].")
+    parser.add_argument("--bg-reg-pair-cf-frac", type=float, default=None, help="Pair-batch aux probability (default 0.5).")
+    parser.add_argument("--bg-reg-pair-cf-grad-scale", type=float, default=None, help="Target cf/clean grad ratio scale (default 0.10).")
     args = parser.parse_args()
+    if args.pair_dir_adv and args.pair_pcgrad:
+        raise SystemExit("run --pair-dir-adv and --pair-pcgrad separately")
+    if args.padr and (args.pair_dir_adv or args.pair_pcgrad):
+        raise SystemExit("run --padr separately from --pair-dir-adv / --pair-pcgrad")
     cfg = load_cfg(args)
     if args.frozen_epochs is not None:
         cfg.set("training.frozen_epochs", int(args.frozen_epochs))
@@ -119,6 +238,16 @@ def main() -> None:
         cfg.set("loss.bce_disappear_weight", float(args.disappear_weight))
     if args.close_weight is not None:
         cfg.set("loss.close_weight", float(args.close_weight))
+    if args.variance_head:
+        cfg.set("adapter.variance_head", True)
+        if args.var_weight is None and cfg.get("loss.var_weight", 0.0) in {0, 0.0, None}:
+            cfg.set("loss.var_weight", 1.0)
+    if args.var_weight is not None:
+        cfg.set("loss.var_weight", float(args.var_weight))
+        if float(args.var_weight) > 0:
+            cfg.set("adapter.variance_head", True)
+    if args.var_pos_weight is not None:
+        cfg.set("loss.var_pos_weight", float(args.var_pos_weight))
     if args.beta_nll_weight is not None:
         cfg.set("loss.beta_nll_weight", float(args.beta_nll_weight))
     if args.evidential_weight is not None:
@@ -155,6 +284,66 @@ def main() -> None:
         cfg.set("data.extra_same_dir.sample_min", int(args.extra_same_dir_min))
     if args.extra_same_dir_max is not None:
         cfg.set("data.extra_same_dir.sample_max", int(args.extra_same_dir_max))
+    if args.task_whiten:
+        cfg.set("adapter.task_whiten", True)
+        cfg.set("adapter.task_whiten_drop_k", int(args.task_whiten_drop_k))
+    if args.pair_dir_adv:
+        cfg.set("loss.pair_dir_adv_weight", float(args.pair_dir_adv_weight))
+    if args.pair_pcgrad:
+        cfg.set("training.pair_pcgrad", True)
+    if args.padr:
+        cfg.set("training.padr", True)
+        cfg.set("training.padr_warmup_epochs", int(args.padr_warmup_epochs))
+        cfg.set("training.padr_ramp_epochs", int(args.padr_ramp_epochs))
+        cfg.set("training.padr_rho_lo", float(args.padr_rho_lo))
+        cfg.set("training.padr_rho_hi", float(args.padr_rho_hi))
+        cfg.set("training.padr_rms_frac", float(args.padr_rms_frac))
+        cfg.set("training.padr_grad_frac", float(args.padr_grad_frac))
+        cfg.set("training.padr_gt_filter", not bool(args.no_padr_gt_filter))
+        if args.padr_gt_tol is not None:
+            cfg.set("training.padr_gt_tol", float(args.padr_gt_tol))
+    if args.logit_hinges:
+        cfg.set("loss.logit_hinges", True)
+        cfg.set("loss.logit_hinge_margin", float(args.logit_hinge_margin))
+    if args.heatmap_balanced:
+        cfg.set("loss.heatmap_balanced", True)
+    if args.bg_reg:
+        cfg.set("training.bg_reg.enabled", True)
+    if args.bg_reg_pair_consistency is not None:
+        cfg.set("training.bg_reg.pair_consistency", bool(args.bg_reg_pair_consistency))
+    if args.bg_reg_targeted_dropout is not None:
+        cfg.set("training.bg_reg.targeted_dropout", bool(args.bg_reg_targeted_dropout))
+    if args.bg_reg_random_dropout is not None:
+        cfg.set("training.bg_reg.random_dropout", bool(args.bg_reg_random_dropout))
+    if args.bg_reg_no_early_stop:
+        cfg.set("training.bg_reg.disable_early_stopping", True)
+    if args.bg_reg_p4:
+        cfg.set("training.bg_reg.p4_report", args.bg_reg_p4)
+    if args.bg_reg_dropout_prob is not None:
+        cfg.set("training.bg_reg.dropout_prob", float(args.bg_reg_dropout_prob))
+    if args.bg_reg_clean_anchor:
+        cfg.set("training.bg_reg.enabled", True)
+        cfg.set("training.bg_reg.clean_anchored_dropout", True)
+        cfg.set("training.bg_reg.pair_consistency", False)
+        cfg.set("training.bg_reg.targeted_dropout", False)
+        cfg.set("training.bg_reg.random_dropout", False)
+    if args.bg_reg_clean_anchor_pair_frac is not None:
+        cfg.set("training.bg_reg.clean_anchor_pair_frac", float(args.bg_reg_clean_anchor_pair_frac))
+    if args.bg_reg_clean_anchor_grad_scale is not None:
+        cfg.set("training.bg_reg.clean_anchor_grad_scale", float(args.bg_reg_clean_anchor_grad_scale))
+    if getattr(args, "bg_reg_pair_cf", False):
+        cfg.set("training.bg_reg.enabled", True)
+        cfg.set("training.bg_reg.pair_counterfactual_shrink", True)
+        cfg.set("training.bg_reg.pair_consistency", False)
+        cfg.set("training.bg_reg.targeted_dropout", False)
+        cfg.set("training.bg_reg.random_dropout", False)
+        cfg.set("training.bg_reg.clean_anchored_dropout", False)
+    if getattr(args, "bg_reg_pair_cf_subspace", None):
+        cfg.set("training.bg_reg.pair_cf_subspace_npz", str(args.bg_reg_pair_cf_subspace))
+    if getattr(args, "bg_reg_pair_cf_frac", None) is not None:
+        cfg.set("training.bg_reg.pair_cf_pair_frac", float(args.bg_reg_pair_cf_frac))
+    if getattr(args, "bg_reg_pair_cf_grad_scale", None) is not None:
+        cfg.set("training.bg_reg.pair_cf_grad_scale", float(args.bg_reg_pair_cf_grad_scale))
     set_seed(int(cfg.get("project.seed", 1337)))
     configure_runtime(int(cfg.get("training.num_workers", 2)))
     log = setup_logger("train", cfg.path("paths.logs_root"))
@@ -205,6 +394,17 @@ def main() -> None:
             raise SystemExit(f"--init-from missing: {init_path}")
         load_teacher_state(model, load_checkpoint(init_path, map_location=device))
         log.info("initialized adapter/decoder from %s (fresh optimizer)", init_path)
+    if bool(cfg.get("adapter.task_whiten", False)) and (args.resume_from is None and not args.resume):
+        from collision_jepa3.models.task_whiten import fit_and_install  # noqa: PLC0415
+
+        drop_k = int(cfg.get("adapter.task_whiten_drop_k", 16))
+        log.info("fitting task-whitened drop-%d on TRAIN features (T disabled)", drop_k)
+        tw_stats = fit_and_install(model, train_ds, cfg, device, drop_k=drop_k)
+        log.info("task-whiten %s", tw_stats)
+        tw_path = cfg.path("paths.checkpoint_root") / "task_whiten_fit.json"
+        tw_path.parent.mkdir(parents=True, exist_ok=True)
+        tw_path.write_text(json.dumps(tw_stats, indent=2), encoding="utf-8")
+        torch.save({"W": model.task_whiten.W.detach().cpu(), **tw_stats}, cfg.path("paths.checkpoint_root") / "task_whiten_W.pt")
     log.info("audit %s", model.parameter_audit())
     if args.dry_run:
         print("dry-run OK", model.parameter_audit())
@@ -234,6 +434,7 @@ def main() -> None:
     )
     result = trainer.run(phase=args.phase, resume_path=resume_path)
     out = cfg.path("paths.reports_root") / "train_report.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(result, indent=2, default=str), encoding="utf-8")
     print(f"wrote {out}")
 

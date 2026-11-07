@@ -248,6 +248,35 @@ training:
   # Clip-contiguous sampling needs a larger mate buffer than shuffled anchors.
   max_pair_buffer: 8192
   clip_contiguous_sampling: true
+  # PADR / pair-consistency: skip pairs whose mate ``h_1s`` differs (max cell |Δ| >= tol).
+  padr_gt_filter: true
+  padr_gt_tol: 1.0e-3
+  # Background-pair regularization (R0–R4): matched batches + optional dropout + consistency.
+  bg_reg:
+    enabled: false
+    pair_consistency: false
+    targeted_dropout: false
+    random_dropout: false
+    # Clean primary path on full tokens + auxiliary L_G on channel-dropped tokens (see trainer).
+    clean_anchored_dropout: false
+    clean_anchor_pair_frac: 0.5
+    clean_anchor_grad_scale: 0.10
+    clean_anchor_calibrate_epoch: 1
+    clean_anchor_calibrate_batches: 50
+    # Pooled pair-difference PCA counterfactual auxiliary (k=16, λ=1.0 defaults).
+    pair_counterfactual_shrink: false
+    pair_cf_subspace_npz: "reports/pair_background_counterfactual/subspace/learned_k16.npz"
+    pair_cf_lambda: 1.0
+    pair_cf_pair_frac: 0.5
+    pair_cf_grad_scale: 0.10
+    pair_cf_calibrate_epoch: 1
+    pair_cf_calibrate_batches: 100
+    disable_early_stopping: false
+    dropout_prob: 0.5
+    calibrate_epoch: 3
+    calibrate_batches: 50
+    lambda_pair_default: 0.05
+    p4_report: "reports/p4_channel_icc/p4_report.json"
   log_every_steps: 10
   save_every_epoch: true
   max_steps: 0  # 0 = one full epoch; >0 stops training after this many optimizer steps

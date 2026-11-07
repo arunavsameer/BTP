@@ -177,12 +177,17 @@ class TeacherTrainer:
                 n_steps += 1
                 if log_every > 0 and n_steps % log_every == 0:
                     logger.info(
-                        "epoch=%d step=%d/%s L_total=%.4f L_1s=%.4f",
+                        "epoch=%d step=%d/%s L_total=%.4f L_1s=%.4f L_blob=%.4f L_stop=%.4f "
+                        "L_safe=%.4f L_close=%.4f",
                         epoch,
                         n_steps,
                         len(self.train_loader),
                         terms.get("L_total", float("nan")),
                         terms.get("L_1s", float("nan")),
+                        terms.get("L_blob", float("nan")),
+                        terms.get("L_stop_hinge", float("nan")),
+                        terms.get("L_safe_hinge", float("nan")),
+                        terms.get("L_close", float("nan")),
                     )
                 if max_steps > 0 and n_steps >= max_steps:
                     logger.info("stopping epoch early after max_steps=%d", max_steps)
@@ -232,10 +237,15 @@ class TeacherTrainer:
             self.log.write(rec)
             history.append(rec)
             logger.info(
-                "epoch=%d L_total=%.4f L_1s=%.4f val_mse=%.5f score=%s eligible=%s time=%.1fs",
+                "epoch=%d L_total=%.4f L_1s=%.4f L_blob=%.4f L_stop=%.4f L_safe=%.4f L_close=%.4f "
+                "val_mse=%.5f score=%s eligible=%s time=%.1fs",
                 epoch,
                 train_means.get("L_total", float("nan")),
                 train_means.get("L_1s", float("nan")),
+                train_means.get("L_blob", float("nan")),
+                train_means.get("L_stop_hinge", float("nan")),
+                train_means.get("L_safe_hinge", float("nan")),
+                train_means.get("L_close", float("nan")),
                 mse,
                 sel.get("score"),
                 sel.get("eligible"),

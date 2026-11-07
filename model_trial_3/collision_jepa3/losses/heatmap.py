@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import math
+
 import torch
 import torch.nn.functional as F
+
+
+def _logit(p: float) -> float:
+    p = min(max(float(p), 1e-6), 1.0 - 1e-6)
+    return math.log(p / (1.0 - p))
 
 
 def row_priority_weights(row_weights: list[float], device, dtype) -> torch.Tensor:
@@ -147,6 +154,85 @@ def safe_peak_hinge(
     cap = float(caution_threshold) - float(margin)
     gap = (pred_peak - cap).clamp(min=0.0)
     return gap[need].mean()
+
+
+def stop_logit_hinge(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    stop_threshold: float = 0.60,
+    margin: float = 0.1,
+) -> tuple[torch.Tensor, float, int]:
+    """Class-averaged hinge on max 5×5 logits vs logit(STOP). Returns loss, active frac, n."""
+    peak = logits.float().flatten(1).max(dim=1).values
+    gt_peak = target.float().flatten(1).max(dim=1).values
+    need = gt_peak >= float(stop_threshold)
+    if sample_mask is not None:
+        need = need & sample_mask.to(dtype=torch.bool, device=logits.device).view(-1)
+    n = int(need.sum())
+    if n == 0:
+        return logits.new_zeros(()), 0.0, 0
+    tau = _logit(stop_threshold)
+    gap = (tau + float(margin) - peak).clamp(min=0.0)
+    active = float((gap[need] > 0).float().mean())
+    return gap[need].mean(), active, n
+
+
+def safe_logit_hinge(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    caution_threshold: float = 0.25,
+    margin: float = 0.1,
+) -> tuple[torch.Tensor, float, int]:
+    """Class-averaged hinge on max 5×5 logits vs logit(SAFE). Returns loss, active frac, n."""
+    peak = logits.float().flatten(1).max(dim=1).values
+    gt_peak = target.float().flatten(1).max(dim=1).values
+    need = gt_peak < float(caution_threshold)
+    if sample_mask is not None:
+        need = need & sample_mask.to(dtype=torch.bool, device=logits.device).view(-1)
+    n = int(need.sum())
+    if n == 0:
+        return logits.new_zeros(()), 0.0, 0
+    tau = _logit(caution_threshold)
+    gap = (peak - tau + float(margin)).clamp(min=0.0)
+    active = float((gap[need] > 0).float().mean())
+    return gap[need].mean(), active, n
+
+
+def balanced_bce_logits(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    *,
+    sample_mask: torch.Tensor | None = None,
+    cell_weight: torch.Tensor | None = None,
+    eps: float = 1e-6,
+) -> torch.Tensor:
+    """Half occupied-weighted BCE, half empty-weighted BCE. Empty maps use the empty term only."""
+    logits = logits.float()
+    target = target.float().clamp(0.0, 1.0)
+    bce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
+    pos = target
+    neg = 1.0 - target
+    if cell_weight is not None:
+        cw = cell_weight.to(dtype=bce.dtype, device=bce.device)
+        pos = pos * cw
+        neg = neg * cw
+    if sample_mask is not None:
+        sm = sample_mask.to(dtype=bce.dtype, device=bce.device).view(-1, 1, 1)
+        pos = pos * sm
+        neg = neg * sm
+        if float(sample_mask.sum()) <= 0:
+            return logits.new_zeros(())
+    pos_den = pos.sum().clamp(min=eps)
+    neg_den = neg.sum().clamp(min=eps)
+    l_neg = (bce * neg).sum() / neg_den
+    if float(pos.sum()) <= eps:
+        return l_neg
+    l_pos = (bce * pos).sum() / pos_den
+    return 0.5 * (l_pos + l_neg)
 
 
 def soft_bce(

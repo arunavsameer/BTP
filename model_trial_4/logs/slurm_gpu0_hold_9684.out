@@ -1,0 +1,4 @@
+HOLD job=9684 CUDA_VISIBLE_DEVICES=0 SLURM_JOB_GPUS=0 HOST=DGX2
+Tuesday 03 November 2026 06:19:24 AM IST
+index, uuid, memory.used [MiB], utilization.gpu [%]
+0, GPU-84084747-8ddf-30a2-3fd6-b9c93922d7ac, 7 MiB, 100 %
