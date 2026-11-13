@@ -38,6 +38,22 @@ venv/
 # Large local model weights
 mobileclip2_b.ts
 
+# Local groups15 video dataset
+groups15-n400/
+
+# Local app tree (SDK, builds, and bundled video)
+app files/
+
+# FOMO training cache and downloaded weights
+# (output/ and mobileclip2_b.ts are already covered above)
+impl3_FOMO/cache/
+
+# Zipped weight archives
+*.pt.zip
+
+# Rendered videos. Output directories are already ignored above.
+*.mp4
+
 # Editor / OS
 .DS_Store
 *.swp
