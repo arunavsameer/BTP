@@ -1,12 +1,12 @@
 #!/bin/bash
-# Trial-4 student distilled from Trial-3 Pair-CF parent F_dec.
+# Trial-4 student: L_feat + Trial-3 G heatmap, constant weights.
 # Reads Trial-3 caches/checkpoint. Writes only model_trial_4/student_runs/.
 #
 #   cd /home/asrivastava/VJEPA2_BTP/BTP/model_trial_4
 #   sbatch submit_student_lat_paircf.sh
 #
-#SBATCH --job-name=cjepa4_student
-#SBATCH --output=logs/slurm_student_lat_paircf_%j.out
+#SBATCH --job-name=cjepa4_stu_ghm
+#SBATCH --output=logs/slurm_student_feat_gheatmap_%j.out
 #SBATCH --partition=gpu
 #SBATCH --qos=iitdgx
 #SBATCH --gres=gpu:1
@@ -22,7 +22,7 @@ fi
 
 ROOT=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4
 PY=/raid/money/miniconda3/bin/python
-TAG=lat_paircf_v1
+TAG=feat_gheatmap_v2
 
 cd "$ROOT"
 mkdir -p "logs/${TAG}" "student_runs/${TAG}" logs

@@ -1,0 +1,82 @@
+{
+  "n_train_samples": 800,
+  "class_counts": {
+    "SAFE": 572,
+    "THREAT": 117,
+    "STOP": 111
+  },
+  "independent_scenario_groups_by_class": {
+    "SAFE": 99,
+    "THREAT": 42,
+    "STOP": 38
+  },
+  "total_independent_scenario_groups": 100,
+  "pre_post_fork_counts_by_class": {
+    "SAFE": {
+      "pre_fork": 475,
+      "post_fork": 97
+    },
+    "THREAT": {
+      "pre_fork": 114,
+      "post_fork": 3
+    },
+    "STOP": {
+      "pre_fork": 87,
+      "post_fork": 24
+    }
+  },
+  "gt_peak_distributions_by_class": {
+    "SAFE": {
+      "count": 572,
+      "min": 0.0,
+      "p10": 0.0,
+      "p25": 0.0,
+      "p50": 0.0,
+      "p75": 0.0,
+      "p90": 0.07053222656249991,
+      "p95": 0.135498046875,
+      "p99": 0.23439453124999998,
+      "max": 0.249755859375,
+      "mean": 0.01751708984375,
+      "std": 0.0487060546875
+    },
+    "THREAT": {
+      "count": 117,
+      "min": 0.251708984375,
+      "p10": 0.29638671875,
+      "p25": 0.356201171875,
+      "p50": 0.409912109375,
+      "p75": 0.51416015625,
+      "p90": 0.571875,
+      "p95": 0.5792968749999999,
+      "p99": 0.59748046875,
+      "max": 0.59912109375,
+      "mean": 0.42724609375,
+      "std": 0.10113525390625
+    },
+    "STOP": {
+      "count": 111,
+      "min": 0.60107421875,
+      "p10": 0.6318359375,
+      "p25": 0.710693359375,
+      "p50": 0.85107421875,
+      "p75": 0.962890625,
+      "p90": 1.0,
+      "p95": 1.0,
+      "p99": 1.0,
+      "max": 1.0,
+      "mean": 0.8359375,
+      "std": 0.1351318359375
+    }
+  },
+  "boundary_samples": {
+    "near_0_25_range_0_20_to_0_30": 27,
+    "near_0_60_range_0_55_to_0_65": 33
+  },
+  "verified_background_pairs_train": 379,
+  "notes": [
+    "GT classes assigned strictly by classify_heatmap thresholds (caution=0.25, stop=0.60)",
+    "STOP class appears in 38 of 100 train scenario groups",
+    "Scenario group balancing applied in ordinal loss to normalize group mass"
+  ]
+}

@@ -1,0 +1,33 @@
+{
+  "epoch": 6,
+  "variant": "S2",
+  "val": {
+    "stop_recall": 0.0,
+    "safe_recall": 1.0,
+    "threat_recall": 0.0,
+    "mse_gt": 0.020736114973684452,
+    "recall_at_5fa": 0.21272727272727274,
+    "ap_high": 0.07410595617707724,
+    "pre_fork_stop_recall": 0.0,
+    "post_fork_stop_recall": 0.0,
+    "teacher_hm_mae_mean": 0.05280546870726896,
+    "teacher_hm_mse_mean": 0.03297150969186846,
+    "teacher_tier_agreement": 0.5845588235294118,
+    "teacher_stop_agreement": 0.7328431372549019,
+    "teacher_safe_agreement": 0.5845588235294118,
+    "n": 816,
+    "pair_gap_mean": 0.0017359060002490878,
+    "pair_gap_median": 0.0013514049351215363,
+    "pair_gap_p90": 0.0036742105148732662,
+    "pair_warning_flip_rate": 0.0,
+    "n_pairs_verified_evaluated": 398,
+    "n_rows_with_background_pair_id": 816,
+    "n_pair_anchor_keys_in_split": 408,
+    "n_pair_anchor_keys_complete": 408,
+    "n_verified_keys_supplied": 398,
+    "pair_metrics_unavailable_reason": null,
+    "latent_mse_mean": 2.4734535369218564,
+    "latent_cosine_mean": 0.7669147551059723
+  },
+  "dev_eval_sec": 1.0322276931256056
+}

@@ -1,0 +1,50 @@
+{
+  "timestamp": "2026-11-12T21:33:17.703046+00:00",
+  "split": "selection",
+  "n": 5120,
+  "n_train_not_used": 22680,
+  "no_test": true,
+  "safe_thr": 0.25,
+  "official_stop_thr": 0.6,
+  "decoder_init_hash": "77f78c8714667617",
+  "checkpoints": {
+    "M1": {
+      "path": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/overnight6/m1_stop_floor/checkpoint_epoch_10.pt",
+      "ckpt_epoch": 10,
+      "requested_epoch": 10,
+      "init_decoder_hash": "77f78c8714667617",
+      "variant": "m1_stop_floor"
+    },
+    "M2": {
+      "path": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/overnight6/m2_ordinal/checkpoint_epoch_19.pt",
+      "ckpt_epoch": 19,
+      "requested_epoch": 19,
+      "init_decoder_hash": "77f78c8714667617",
+      "variant": "m2_ordinal"
+    },
+    "M3": {
+      "path": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/overnight6/m3_asymmetric/checkpoint_epoch_21.pt",
+      "ckpt_epoch": 21,
+      "requested_epoch": 21,
+      "init_decoder_hash": "77f78c8714667617",
+      "variant": "m3_asymmetric"
+    },
+    "M4": {
+      "path": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/overnight6/m4_parent_recovery/checkpoint_epoch_17.pt",
+      "ckpt_epoch": 17,
+      "requested_epoch": 17,
+      "init_decoder_hash": "77f78c8714667617",
+      "variant": "m4_parent_recovery"
+    },
+    "M5": {
+      "path": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/overnight6/m5_multiscale/checkpoint_epoch_17.pt",
+      "ckpt_epoch": 17,
+      "requested_epoch": 17,
+      "init_decoder_hash": "77f78c8714667617",
+      "variant": "m5_multiscale"
+    }
+  },
+  "device": "cuda:0",
+  "preprocessing": "uint8 RGB 256 cache -> [0,1] float32 -> ImageNet in model; GT=group-mean gt_1s",
+  "missing": []
+}

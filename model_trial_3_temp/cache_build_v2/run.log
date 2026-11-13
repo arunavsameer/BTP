@@ -1,0 +1,110 @@
+contract {'path': '/raid/asrivastava/VJEPA2_BTP/model_trial_3/sampling_contract.json', 'counts': {'train': {'windows': 22680, 'clips': 567, 'sample_ids': 159, 'pre_fork_windows': 14742, 'post_fork_windows': 7938}, 'selection': {'windows': 5120, 'clips': 128, 'sample_ids': 32, 'pre_fork_windows': 3328, 'post_fork_windows': 1792}, 'test': {'windows': 5120, 'clips': 128, 'sample_ids': 32, 'pre_fork_windows': 3328, 'post_fork_windows': 1792}}, 'n_rows': 32920}
+contract {'path': '/raid/asrivastava/VJEPA2_BTP/model_trial_3/sampling_contract.json', 'counts': {'train': {'windows': 22680, 'clips': 567, 'sample_ids': 159, 'pre_fork_windows': 14742, 'post_fork_windows': 7938}, 'selection': {'windows': 5120, 'clips': 128, 'sample_ids': 32, 'pre_fork_windows': 3328, 'post_fork_windows': 1792}, 'test': {'windows': 5120, 'clips': 128, 'sample_ids': 32, 'pre_fork_windows': 3328, 'post_fork_windows': 1792}}, 'n_rows': 32920}
+rgb skip_complete=17 todo=806 workers=8
+contract {'path': '/raid/asrivastava/VJEPA2_BTP/model_trial_3/sampling_contract.json', 'counts': {'train': {'windows': 22680, 'clips': 567, 'sample_ids': 159, 'pre_fork_windows': 14742, 'post_fork_windows': 7938}, 'selection': {'windows': 5120, 'clips': 128, 'sample_ids': 32, 'pre_fork_windows': 3328, 'post_fork_windows': 1792}, 'test': {'windows': 5120, 'clips': 128, 'sample_ids': 32, 'pre_fork_windows': 3328, 'post_fork_windows': 1792}}, 'n_rows': 32920}
+rgb skip_complete=17 todo=806 workers=4
+rgb 20/806 new frames_total=11820 sec=13.4
+rgb 40/806 new frames_total=17954 sec=26.8
+rgb 60/806 new frames_total=24194 sec=39.2
+rgb 80/806 new frames_total=30190 sec=51.9
+rgb 100/806 new frames_total=36393 sec=63.8
+rgb 120/806 new frames_total=42902 sec=75.9
+rgb 140/806 new frames_total=49377 sec=89.1
+rgb 160/806 new frames_total=55962 sec=101.0
+rgb 180/806 new frames_total=62471 sec=113.2
+rgb 200/806 new frames_total=68951 sec=125.4
+rgb 220/806 new frames_total=75259 sec=137.4
+rgb 240/806 new frames_total=81430 sec=149.6
+rgb 260/806 new frames_total=87570 sec=161.6
+rgb 280/806 new frames_total=94015 sec=174.3
+rgb 300/806 new frames_total=100467 sec=185.8
+rgb 320/806 new frames_total=107168 sec=198.8
+rgb 340/806 new frames_total=113735 sec=211.4
+rgb 360/806 new frames_total=120013 sec=223.7
+rgb 380/806 new frames_total=126625 sec=235.6
+rgb 400/806 new frames_total=132951 sec=247.4
+rgb 420/806 new frames_total=139464 sec=259.5
+rgb 440/806 new frames_total=145784 sec=272.0
+rgb 460/806 new frames_total=152184 sec=285.4
+rgb 480/806 new frames_total=158538 sec=296.5
+rgb 500/806 new frames_total=165017 sec=307.5
+rgb 520/806 new frames_total=171376 sec=317.5
+rgb 540/806 new frames_total=177361 sec=326.9
+rgb 560/806 new frames_total=183761 sec=336.4
+rgb 580/806 new frames_total=189907 sec=346.0
+rgb 600/806 new frames_total=196411 sec=355.6
+rgb 620/806 new frames_total=202659 sec=364.8
+rgb 640/806 new frames_total=209005 sec=374.1
+rgb 660/806 new frames_total=215565 sec=383.8
+rgb 680/806 new frames_total=221632 sec=393.0
+rgb 700/806 new frames_total=228077 sec=402.3
+rgb 720/806 new frames_total=234306 sec=411.7
+rgb 740/806 new frames_total=240782 sec=421.5
+rgb 760/806 new frames_total=247149 sec=431.3
+rgb 780/806 new frames_total=253374 sec=440.9
+rgb 800/806 new frames_total=259744 sec=450.4
+rgb 806/806 new frames_total=261677 sec=453.6
+rgb {'clips': 823, 'unique_frames': 261677, 'bytes': 20096793600, 'root': '/raid/asrivastava/VJEPA2_BTP/model_trial_3/shared_rgb_cache_v2', 'offsets': [-90, -84, -78, -72, -66, -60, -54, -48, -42, -36, -30, -24, -18, -12, -6, 0]}
+gt_meta {'n_rows': 32920, 'missing_or_fallback': 0, 'amb_windows_retained': 224, 'group_mean_rewrites': 224, 'peak_max': 1.0, 'peak_mean': 0.038185346871614456}
+parent clips 16/823 cache=640 enc=0
+parent clips 32/823 cache=1280 enc=0
+parent clips 48/823 cache=1920 enc=0
+parent clips 64/823 cache=2560 enc=0
+parent clips 80/823 cache=3200 enc=0
+parent clips 96/823 cache=3840 enc=0
+parent clips 112/823 cache=4480 enc=0
+parent clips 128/823 cache=5120 enc=0
+parent clips 144/823 cache=5760 enc=0
+parent clips 160/823 cache=6400 enc=0
+parent clips 176/823 cache=7040 enc=0
+parent clips 192/823 cache=7680 enc=0
+parent clips 208/823 cache=8320 enc=0
+parent clips 224/823 cache=8960 enc=0
+parent clips 240/823 cache=9600 enc=0
+parent clips 256/823 cache=10240 enc=0
+parent clips 272/823 cache=10880 enc=0
+parent clips 288/823 cache=11520 enc=0
+parent clips 304/823 cache=12160 enc=0
+parent clips 320/823 cache=12800 enc=0
+parent clips 336/823 cache=13440 enc=0
+parent clips 352/823 cache=14080 enc=0
+parent clips 368/823 cache=14720 enc=0
+parent clips 384/823 cache=15360 enc=0
+parent clips 400/823 cache=16000 enc=0
+parent clips 416/823 cache=16640 enc=0
+parent clips 432/823 cache=17280 enc=0
+parent clips 448/823 cache=17920 enc=0
+parent clips 464/823 cache=18560 enc=0
+parent clips 480/823 cache=19200 enc=0
+parent clips 496/823 cache=19840 enc=0
+parent clips 512/823 cache=20480 enc=0
+parent clips 528/823 cache=21120 enc=0
+parent clips 544/823 cache=21760 enc=0
+parent clips 560/823 cache=22400 enc=0
+parent clips 576/823 cache=23040 enc=0
+parent clips 592/823 cache=23680 enc=0
+parent clips 608/823 cache=24320 enc=0
+parent clips 624/823 cache=24960 enc=0
+parent clips 640/823 cache=25600 enc=0
+parent clips 656/823 cache=26240 enc=0
+parent clips 672/823 cache=26880 enc=0
+parent clips 688/823 cache=27520 enc=0
+parent clips 704/823 cache=28160 enc=0
+parent clips 720/823 cache=28800 enc=0
+parent clips 736/823 cache=29440 enc=0
+parent clips 752/823 cache=30080 enc=0
+parent clips 768/823 cache=30720 enc=0
+parent clips 784/823 cache=31360 enc=0
+parent clips 800/823 cache=32000 enc=0
+parent clips 816/823 cache=32640 enc=0
+parent clips 823/823 cache=32920 enc=0
+parent {'checkpoint': '/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt', 'checkpoint_sha256': 'f8f9dacda7c18fe629be9b08b2a26666bfc963a088515f6921279af17e69987c', 'n_rows': 32920, 'num_training_anchors': 32920, 'n_train': 22680, 'filled_token_cache': 32920, 'filled_encode': 0, 'missing': 0, 'tensor_shapes': {'H': [5, 5], 'F_dec': [128, 16, 16]}, 'ckpt_epoch': 8}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/73_build_parent_matched_caches.py", line 401, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/73_build_parent_matched_caches.py", line 395, in main
+    replay = replay_decoder(cfg, rows, device)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/73_build_parent_matched_caches.py", line 365, in replay_decoder
+    raise RuntimeError(f"decoder replay failed {rep}")
+RuntimeError: decoder replay failed {'checked': 100, 'max_abs': 0.017650604248046875, 'ok': False}

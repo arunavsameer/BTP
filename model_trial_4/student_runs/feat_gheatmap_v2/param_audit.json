@@ -1,0 +1,8 @@
+{
+  "total": 963659,
+  "trainable": 915850,
+  "frozen": 47809,
+  "encoder": 881290,
+  "predictor": 34560,
+  "decoder": 47809
+}

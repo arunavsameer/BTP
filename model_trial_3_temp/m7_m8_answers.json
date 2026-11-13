@@ -1,0 +1,35 @@
+{
+  "1_parent_task_improved_STOP": false,
+  "STOP_M1": 0.6111111111111112,
+  "STOP_M7": 0.3420479302832244,
+  "STOP_M8": 0.32570806100217864,
+  "2_hinge_reduced_low_peak_GT_STOP": false,
+  "collapse_M1": 0.33769063180827885,
+  "collapse_M7": 0.5130718954248366,
+  "collapse_M8": 0.5163398692810458,
+  "3_SAFE_acceptable": {
+    "M7_ge_082": true,
+    "M8_ge_082": true,
+    "M7": 0.8631051752921536,
+    "M8": 0.8503060656649972
+  },
+  "4_prefork_improved": false,
+  "pre_M1": 0.5454545454545454,
+  "pre_M7": 0.24125874125874125,
+  "pre_M8": 0.23251748251748253,
+  "5_latent_helped_M7_vs_M8": {
+    "M7_STOP": 0.3420479302832244,
+    "M8_STOP": 0.32570806100217864,
+    "M7_SAFE": 0.8631051752921536,
+    "M8_SAFE": 0.8503060656649972,
+    "helped_STOP": true
+  },
+  "gates": {
+    "any_SAFE082_STOP070": false,
+    "any_SAFE085_STOP060": false
+  },
+  "official_epochs": {
+    "M7": 23,
+    "M8": 20
+  }
+}

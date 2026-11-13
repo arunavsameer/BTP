@@ -1,0 +1,45 @@
+{
+  "epoch": 16,
+  "train": {
+    "L_feat": 0.41072451077020566,
+    "L_cos": 0.1339700632520033,
+    "L_mgd": 0.410129422779857,
+    "L_rel": 0.03694188741267358,
+    "L_total": 0.6499716125678343,
+    "sec": 189.46834313496947
+  },
+  "selection": {
+    "confusion_matrix": [
+      [
+        3180,
+        206,
+        208
+      ],
+      [
+        392,
+        97,
+        119
+      ],
+      [
+        297,
+        98,
+        523
+      ]
+    ],
+    "stop_recall": 0.5697167755991286,
+    "safe_recall": 0.8848080133555927,
+    "threat_recall": 0.15953947368421054,
+    "stop_precision": 0.6152941176470588,
+    "safe_false_alarm_rate": 0.11519198664440733,
+    "balanced_stop_safe_recall": 0.7272623944773606,
+    "pre_fork_stop_recall": 0.48951048951048953,
+    "post_fork_stop_recall": 0.7023121387283237,
+    "n_prefork_stop": 572,
+    "n_postfork_stop": 346,
+    "gt_heatmap_mse": 0.025629806964535994,
+    "parent_heatmap_mae": 0.04202583747724233,
+    "n": 5120,
+    "fdec_cosine": 0.8256242871284485,
+    "fdec_l1": 0.695634663105011
+  }
+}

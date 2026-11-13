@@ -1,0 +1,10 @@
+{
+  "encoder": 23712,
+  "temporal_fusion": 16528,
+  "parent_decoder_frozen": 47809,
+  "severity_head": 18115,
+  "total_including_frozen": 106164,
+  "trainable": 58355,
+  "under_750k": true,
+  "decoder_hash": "77f78c8714667617"
+}

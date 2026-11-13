@@ -1,0 +1,28 @@
+start Thursday 12 November 2026 05:29:24 PM IST gpu0 pid-soon
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cpu params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 224, in main
+    torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_dtype is not None and use_cuda else torch.nullcontext()
+                                                                                                   ^^^^^^^^^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/__init__.py", line 2867, in __getattr__
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+AttributeError: module 'torch' has no attribute 'nullcontext'
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 329, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 224, in main
+    torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_dtype is not None and use_cuda else torch.nullcontext()
+                                                                                                   ^^^^^^^^^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/__init__.py", line 2867, in __getattr__
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
+AttributeError: module 'torch' has no attribute 'nullcontext'
+exit 0 at Thursday 12 November 2026 05:29:43 PM IST
+restart Thursday 12 November 2026 05:30:50 PM IST physical_gpu7 as cuda:0
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cuda:0 params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}

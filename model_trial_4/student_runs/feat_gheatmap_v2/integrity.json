@@ -1,0 +1,49 @@
+{
+  "rgb_complete": true,
+  "parent_complete": true,
+  "rgb_root": "/raid/asrivastava/VJEPA2_BTP/model_trial_3_temp/shared_rgb_cache_256_v1",
+  "parent_root": "/raid/asrivastava/VJEPA2_BTP/model_trial_3/parent_target_cache_v2",
+  "parent_ckpt": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt",
+  "windows": {
+    "train": 22680,
+    "selection": 5120,
+    "test": 5120
+  },
+  "offsets": [
+    -90,
+    -84,
+    -78,
+    -72,
+    -66,
+    -60,
+    -54,
+    -48,
+    -42,
+    -36,
+    -30,
+    -24,
+    -18,
+    -12,
+    -6,
+    0
+  ],
+  "rgb_size": 256,
+  "decoder_hash": "77f78c8714667617",
+  "expected_hash": "77f78c8714667617",
+  "replay": {
+    "n": 128,
+    "max_abs": 0.00036835670471191406,
+    "mean_abs": 5.716937226907248e-05,
+    "ok": true
+  },
+  "param_audit": {
+    "total": 963659,
+    "trainable": 915850,
+    "frozen": 47809,
+    "encoder": 881290,
+    "predictor": 34560,
+    "decoder": 47809
+  },
+  "writes_under": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/student_runs/feat_gheatmap_v2",
+  "trial3_read_only": true
+}

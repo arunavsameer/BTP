@@ -1,0 +1,529 @@
+HOW DATA IS PREPROCESSED — EXACT PIPELINE
+=========================================
+
+This file is about what happens to pixels and labels BEFORE they enter
+CollisionTeacher3.forward, plus the one normalize step that lives inside
+the backbone (because that is still "preparing the image").
+
+Two RGB stages:
+
+  STAGE 1  geometry   letterbox 1920x1080 -> 256x256 uint8
+                      lives in collision_jepa3/data/preprocessing.py
+                      also run offline by scripts/02_prepare_cache.py
+
+  STAGE 2  numbers    uint8 -> float 0..1 in NCHW
+                      then ImageNet mean/std inside the backbone
+                      dataset does NOT subtract mean
+
+Heatmaps are not resized. They are already 5x5. They are only loaded,
+checked, sliced at times t / t+30 / t+45 / t+60, and maybe rewritten
+by the mean_target policy.
+
+Nothing below uses spatial_overlay.mp4.
+
+
+================================================================
+0. WHAT IS NEVER DONE
+================================================================
+
+From configs/default.yaml, enforced by Config.validate():
+
+  random_horizontal_flip         false
+  random_geometric_augmentation  false
+  photometric_augmentation       false
+
+So: no flip, no rotation, no scale jitter, no color jitter, no blur.
+Left stays left. A miss_left heatmap would be wrong if you flipped RGB.
+
+Also never:
+  using spatial_overlay.mp4 as RGB input
+  filling missing heatmap IDs with zeros
+  silently repeating the last video frame if a requested index is missing
+  ImageNet-normalizing in the dataset (normalize_in_backbone: true)
+
+
+================================================================
+1. SOURCE ON DISK
+================================================================
+
+One clip folder (example):
+
+  sample_0000_jaywalker/collision/bg_00/
+    preview.mp4
+      1920 x 1080, 30 fps, 450 frames, BGR from OpenCV then converted
+    spatial_annotations/spatial_annotations.json
+      450 maps, each 5x5, values 0..1, frame_id "000000".."000449"
+    episode.json
+      metadata only (fork, lighting). Not an image.
+
+Config expectations (data.*):
+
+  fps_expected 30
+  expected_frames 450
+  source_width 1920
+  source_height 1080
+  target_grid 5
+  min_decoded_frames 450
+  heatmap_value_min 0.0
+  heatmap_value_max 1.0
+  never_use_overlay_as_input true
+
+
+================================================================
+2. PIPELINE MAP (FUNCTIONS IN ORDER)
+================================================================
+
+Offline, once (script 02):
+
+  load_manifest
+    -> prepare_frame_cache
+         decode_all_rgb(preview.mp4)
+         preprocess_clip  -> letterbox every frame
+         np.save frames_uint8.npy
+
+Online, every training item (TeacherDataset.__getitem__):
+
+  input_indices(t)                         which 16 frame numbers
+  _load_input_clip
+      try cache:
+        load_cached_frames                 [450,256,256,3] mmap
+        take those 16 indices
+        if H != 256: preprocess_clip again
+      except FileNotFoundError:
+        decode_indices_rgb(preview.mp4, idx)
+        preprocess_clip
+      uint8_to_nchw01                      [16,3,256,256] float 0..1
+  load_heatmaps (already in RAM from __init__)
+  targets_for_anchor
+  maybe apply_mean_future_targets
+  collate_teacher_batch
+  move_batch to GPU
+  backbone.normalize                       ImageNet  (inside the model)
+
+The rest of this file expands each function.
+
+
+================================================================
+3. WHICH FRAMES ARE ASKED FOR
+================================================================
+
+File: collision_jepa3/data/sampling.py
+Function: input_indices(anchor, offsets)
+
+Config:
+  sampling.frame_offsets =
+    [-90,-84,-78,-72,-66,-60,-54,-48,-42,-36,-30,-24,-18,-12,-6,0]
+  16 frames, 6 apart, last must be 0.
+
+At t = 330:
+
+  [240, 246, 252, 258, 264, 270, 276, 282,
+   288, 294, 300, 306, 312, 318, 324, 330]
+
+That is 3.0 seconds at 30 fps, ending at t.
+No frame after t is requested. If any index > t: ValueError
+("future leakage"). If last != t: ValueError.
+
+Legal t values (iter_anchors, 450 frames, stride 15,
+allow_partial_horizons true):
+
+  t_min = 90     (need t-90 >= 0)
+  t_max = 419    (need t+30 <= 449 for the 1s heatmap)
+  t = 90, 105, 120, ..., 405   (stride 15; 420 is not legal)
+
+Heatmap times for the same t (target_indices):
+
+  now  = t
+  1s   = t + 30
+  1.5s = t + 45
+  2s   = t + 60
+
+Those times pick LABEL maps, not extra RGB.
+
+
+================================================================
+4. READING VIDEO PIXELS
+================================================================
+
+File: collision_jepa3/data/video_reader.py
+
+OpenCV VideoCapture. Every decoded frame is converted BGR -> RGB
+with cv2.cvtColor(..., COLOR_BGR2RGB). If you skip that, red/blue
+swap and ImageNet stats are wrong.
+
+4.1 probe_video(path)   — used only by the manifest, not training
+
+  Opens the file, reads CAP_PROP width/height/fps/frame_count, closes.
+  Does not decode pixels.
+  inspect_clip_dir uses this to reject unreadable or too-short videos.
+
+4.2 decode_all_rgb(path)   — used by the cache builder
+
+  Sequential cap.read() until failure.
+  Stack to [T, H, W, 3] uint8 RGB.
+  If 0 frames: VideoReadError.
+  decoded_frames is set on VideoInfo.
+  For a healthy clip T should be 450, H=1080, W=1920.
+
+4.3 decode_indices_rgb(path, indices)   — training fallback if no cache
+
+  Example indices = input_indices(330) as above.
+  Decodes sequentially until max(indices), then gathers in the
+  REQUESTED order (not sorted).
+  If any requested index is missing or negative: VideoReadError.
+  It does NOT pad with the last frame.
+
+  Returns [16, 1080, 1920, 3] uint8 RGB for a 16-index request.
+
+There is no resize in this file. Raw resolution only.
+
+
+================================================================
+5. LETTERBOX (THE GEOMETRIC PREPROCESS)
+================================================================
+
+File: collision_jepa3/data/preprocessing.py
+
+Settings used (signature_from_cfg):
+
+  resize_mode  "letterbox"     default, keep FOV
+  input_size   256
+  pad_value    0               black
+  preserve_fov true
+  mean/std stored on the signature but NOT applied here
+
+5.1 preprocess_clip(frames, sig)
+
+  frames [T, H, W, 3] uint8 RGB
+  for i in 0..T-1:
+    preprocess_frame(frames[i], sig)
+  stack -> [T, 256, 256, 3] uint8
+
+5.2 preprocess_frame(frame, sig)
+
+  Requires HxWx3. Then:
+    letterbox              if resize_mode == "letterbox"
+    checkpoint_center_crop if resize_mode == "checkpoint_center_crop"
+    else ValueError
+
+5.3 letterbox_rgb(frame, size=256, pad_value=0)   DEFAULT
+
+  h, w = 1080, 1920
+
+  scale = min(256/1920, 256/1080)
+        = min(0.133333..., 0.237037...)
+        = 256/1920
+        = 0.133333...
+
+  new_w = round(1920 * scale) = 256
+  new_h = round(1080 * scale) = 144
+
+  Because we are shrinking: cv2.INTER_AREA
+  resized = 144 x 256 x 3
+
+  canvas = 256 x 256 x 3 filled with 0 (black)
+
+  y0 = (256 - 144) // 2 = 56
+  x0 = (256 - 256) // 2 = 0
+
+  paste resized at [56 : 200, 0 : 256]
+
+  Result layout of one frame:
+
+    rows 0..55      black pad
+    rows 56..199    the full 16:9 picture, width fully used
+    rows 200..255   black pad
+
+  LEFT edge of the street is at x=0 of the 256 canvas.
+  RIGHT edge is at x=255.
+  That is why letterbox is the default: a center crop would cut
+  left/right, and collision-from-left vs miss would lose FOV.
+
+  If someone passed a tall image, pad would be on the sides instead
+  (scale limited by height). Our data is always 16:9 landscape.
+
+5.4 checkpoint_center_crop_rgb   OPTIONAL, not default
+
+  Official V-JEPA recipe:
+    shortest edge -> 256 * 256/224 = 293 (approx)
+    then center crop 256x256
+
+  On 1920x1080, shortest is 1080, so the image is scaled up in height
+  to ~293, width ~521, then 256x256 is cut from the center.
+  LEFT and RIGHT of the original FOV are discarded.
+
+  Config.validate() allows this mode but training.yaml does not use it.
+
+5.5 What letterbox does NOT do
+
+  No mean subtract
+  No /255
+  No RGB<->BGR (already RGB from video_reader)
+  No histogram equalization
+  dtype stays uint8 0..255
+
+
+================================================================
+6. OFFLINE CACHE  (script 02)
+================================================================
+
+File: scripts/02_prepare_cache.py
+      collision_jepa3/data/cache.py
+
+Run after 01_build_manifest.py. Resumable.
+
+prepare_frame_cache(records, cfg, max_gb=None):
+
+  1. signature_from_cfg(cfg)
+  2. valid clips only
+  3. estimate GB = n_clips * 450 * 256 * 256 * 3 / 1024^3
+     Budget default cache.frame_cache_max_gb = 80
+     If estimate > budget: raise, write nothing
+  4. For each valid clip:
+       dir = cache/frames/<clip_id with / replaced by __>/
+       files: frames_uint8.npy , meta.json
+       If both exist AND cache_signature_ok:
+         skip (reused)
+       cache_signature_ok requires same
+         resize_mode, input_size, video_path
+       If stale: log "invalidating" and rebuild
+       decode_all_rgb(rec.video_path)
+       preprocess_clip(...)          letterbox all ~450 frames
+       np.save uint8 array
+       write meta: signature, clip_id, video_path, n_frames, shape,
+                   reported_frames, decoded_frames, fps, source WxH
+
+Cached tensor:
+
+  [450, 256, 256, 3] uint8 RGB letterboxed
+
+Load later:
+
+  load_cached_frames(..., mmap=True)
+  np.load mmap_mode="r"
+  Training can index 16 frames without copying the whole 450 into RAM.
+
+TeacherDataset also keeps an LRU of 2 whole clips in RAM
+(cache.lru_clips_in_ram).
+
+
+================================================================
+7. ONLINE PATH INSIDE TeacherDataset._load_input_clip
+================================================================
+
+File: collision_jepa3/data/dataset.py
+
+Every __getitem__ calls this with (rec, t).
+
+  idx = input_indices(t)     16 ints, last is t
+
+  TRY cache:
+    _frames_for_clip(rec)
+      LRU hit -> that array
+      else load_cached_frames mmap
+      else raise FileNotFoundError  (triggers fallback)
+    clip = stack frames[i] for i in idx
+      shape [16, 256, 256, 3] if cache is letterboxed
+    if dtype != uint8: astype uint8
+    if clip.shape[1] != 256:
+      preprocess_clip again
+      (safety if someone cached a different size)
+
+  EXCEPT FileNotFoundError (no cache):
+    raw, _ = decode_indices_rgb(rec.video_path, idx)
+      [16, 1080, 1920, 3]
+    clip = preprocess_clip(raw, sig)
+      [16, 256, 256, 3] uint8 letterboxed
+
+  return uint8_to_nchw01(clip)
+
+7.1 uint8_to_nchw01
+
+  Input  [T, H, W, 3] uint8
+  astype float32
+  transpose (0, 3, 1, 2)  -> [T, 3, H, W]
+  multiply 1/255
+  Output [16, 3, 256, 256] float32 in [0, 1]
+
+  STILL not ImageNet-normalized.
+  Black pad is 0.0 in this tensor.
+
+This array becomes sample["frames"].
+
+
+================================================================
+8. BATCHING
+================================================================
+
+File: dataset.py  collate_teacher_batch
+
+  np.stack then torch.from_numpy on frames
+  Default micro_batch_size = 1
+  so frames in the batch is [1, 16, 3, 256, 256] float32 0..1
+
+trainer move_batch sends it to GPU (non_blocking).
+
+No extra resize, no RandomResizedCrop, no Normalize in the DataLoader.
+
+
+================================================================
+9. STAGE 2: IMAGENET NORMALIZE (INSIDE THE BACKBONE)
+================================================================
+
+File: collision_jepa3/models/vjepa_backbone.py
+Function: VJEPA2Backbone.normalize  then used at the start of forward
+
+This is the last pixel transform.
+
+  mean (0.485, 0.456, 0.406)
+  std  (0.229, 0.224, 0.225)
+
+  Prefer values from transformers VJEPA2VideoProcessor at load time.
+  YAML mean/std are the same ImageNet numbers as fallback.
+
+  buffers shaped [1, 1, 3, 1, 1] broadcast over B, T, H, W
+
+  x = (clip - mean) / std
+
+  A fully black pad pixel 0 becomes:
+    R: (0 - 0.485) / 0.229 ≈ -2.12
+    G: (0 - 0.456) / 0.224 ≈ -2.04
+    B: (0 - 0.406) / 0.225 ≈ -1.80
+
+  A mid grey 0.5 becomes near 0 on each channel.
+
+After this, V-JEPA tubelet-embeds the 16 frames. That is the model,
+not preprocessing. See MODEL_DATAFLOW.txt.
+
+
+================================================================
+10. HEATMAP LABELS (NOT RGB, STILL DATA HANDLING)
+================================================================
+
+Heatmaps are never letterboxed. They are already on the 5x5 grid that
+Z_t and Hhat live on.
+
+10.1 load_heatmaps  (dataset __init__, once per clip)
+
+  File: heatmap_annotations.py
+
+  Read spatial_annotations.json
+  Each item: frame_id + matrix 5x5
+  frame_id "000330" or 330 or "frame_330" -> 330
+  Checks:
+    k == 5 if present
+    shape (5,5)
+    finite
+    values in [0, 1]
+    no duplicate IDs
+    IDs cover 0..449 exactly
+  Missing IDs are NOT filled with zeros: HeatmapError instead
+  Return float32 [450, 5, 5]
+
+  Grid meaning (not changed by letterbox):
+    row 0 far/top, row 4 near/feet
+    col 0 left, col 4 right
+
+  Letterbox pads top/bottom of RGB, which matches "far/near" staying
+  on the vertical axis of the 5x5. We do not warp the heatmap to 256.
+
+10.2 targets_for_anchor(heatmaps, t, [30,45,60])
+
+  h_now  = heatmaps[t]
+  h_1s   = heatmaps[t+30]
+  h_1_5s = heatmaps[t+45]
+  h_2s   = heatmaps[t+60]
+  each [5, 5] float32
+
+  If allow_partial_horizons and an index is past 449: that map is zeros
+  and dataset sets amb_*=True so the loss skips it.
+
+10.3 apply_mean_future_targets  (label rewrite, not pixel rewrite)
+
+  If history is pre-fork and a future map disagrees with the miss
+  mate, replace h_1s/h_1_5s/h_2s with the cell-wise AVERAGE of the
+  collision and miss heatmaps. RGB frames are unchanged.
+
+  Details: VARIANT_WORKFLOW.txt
+
+
+================================================================
+11. MANIFEST CHECKS THAT PROTECT PREPROCESS
+================================================================
+
+inspect_clip_dir (manifest.py) runs before cache/train:
+
+  require preview.mp4, episode.json, spatial_annotations.json
+  reject if episode.json video field is "spatial_overlay.mp4"
+  probe_video for size/fps/frame count
+  load_heatmaps to prove labels exist
+  reject if reported_frames < 450
+
+So preprocessing is never asked to run on overlay video or a 12-frame
+file, unless someone bypasses the manifest.
+
+
+================================================================
+12. WORKED EXAMPLE  t = 330, one clip
+================================================================
+
+Disk:
+  preview.mp4  450 x 1080 x 1920 x 3  (BGR on disk, RGB after OpenCV)
+
+Cache (if 02 was run):
+  frames_uint8.npy  450 x 256 x 256 x 3  uint8 letterboxed
+
+__getitem__:
+  idx = [240,246,...,330]
+  take 16 rows from the cache
+    [16, 256, 256, 3] uint8
+    each frame: 56 black, 144 content, 56 black
+  uint8_to_nchw01
+    [16, 3, 256, 256] float32
+    pad pixels = 0.0
+    content pixels = original/255
+  heatmaps at 330, 360, 375, 390  each 5x5
+  maybe rewrite 375/390 from collision clip
+  batch frames [1, 16, 3, 256, 256]
+  GPU
+  backbone: (x - mean) / std
+  then Giant tokens
+
+No other pixel ops in between.
+
+
+================================================================
+13. FUNCTION CHEAT SHEET
+================================================================
+
+  sampling.input_indices              16 frame ids ending at t
+  sampling.target_indices             label frame ids
+  sampling.iter_anchors               legal t list
+  video_reader.probe_video            size/fps/count, no pixels
+  video_reader.decode_all_rgb         all frames RGB uint8
+  video_reader.decode_indices_rgb     selected frames RGB uint8
+  preprocessing.signature_from_cfg    pack YAML into a frozen dataclass
+  preprocessing.letterbox_rgb         1920x1080 -> 256x256 with 56+56 pad
+  preprocessing.checkpoint_center_crop_rgb   opt-in crop (not default)
+  preprocessing.preprocess_frame      dispatch resize_mode
+  preprocessing.preprocess_clip       letterbox a whole [T,H,W,3]
+  preprocessing.uint8_to_nchw01       THWC uint8 -> TCHW float 0..1
+  cache.prepare_frame_cache           offline letterbox all clips
+  cache.load_cached_frames            mmap the npy
+  dataset._load_input_clip            cache or decode + letterbox + 0..1
+  dataset.collate_teacher_batch       stack to torch
+  heatmap_annotations.load_heatmaps   [450,5,5]
+  heatmap_annotations.targets_for_anchor  four 5x5 slices
+  vjepa_backbone.normalize            ImageNet, last pixel step
+
+Config keys that change this path:
+
+  preprocessing.resize_mode           letterbox | checkpoint_center_crop
+  preprocessing.input_size            256
+  preprocessing.pad_value             0
+  preprocessing.mean / std            applied only in backbone
+  preprocessing.normalize_in_backbone true
+  cache.cache_frames                  true
+  cache.frame_cache_max_gb            80
+  sampling.frame_offsets              the 16 history taps
+)

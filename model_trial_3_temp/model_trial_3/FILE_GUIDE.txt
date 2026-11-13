@@ -1,0 +1,1366 @@
+MODEL TRIAL 3 — DETAILED FILE GUIDE
+===================================
+
+This folder trains a "teacher" model for wearable collision anticipation.
+The teacher watches 3 seconds of RGB video and predicts a 5x5 danger map
+at four times: NOW, 1 second later, 1.5 seconds later, and 2 seconds later.
+
+It does NOT train a small student / TinyCNN. That is out of scope.
+
+How to use this document:
+  1. Read PART 1 (the story of one sample) if you are new.
+  2. Read PART 2 (run order) before you launch scripts.
+  3. Use PART 3 onward as a dictionary: open a file, find its section.
+
+
+================================================================
+PART 1. THE STORY OF ONE SAMPLE (simple)
+================================================================
+
+Dataset clip example:
+
+  blender_sim/datasets/groups15_n400_s67_n400/
+    sample_0000_jaywalker / collision / bg_00 /
+      preview.mp4
+      episode.json
+      spatial_annotations/spatial_annotations.json
+      spatial_overlay.mp4          <-- NEVER used as model input
+      annotations/annotations.json <-- extra labels, not required
+
+Video facts (from config + episode.json):
+  1920 x 1080 RGB, 30 frames per second, 450 frames (15 seconds).
+  Heatmap grid: 5 rows x 5 columns.
+    row 0 = far / top of the image
+    row 4 = near / feet
+    col 0 = left
+    col 4 = right
+  Cell values are 0.0 (safe) to 1.0 (maximum threat).
+
+Same sample also has:
+  collision / bg_01     same hit, different street look
+  miss_left / bg_00     same street, pedestrian misses instead of hitting
+  miss_left / bg_01
+
+Until frame 365 (the FORK, 12.15 seconds), collision and miss videos
+look the same. After 365 they split.
+
+What the model is asked, for a chosen time t (example t = 330):
+
+  INPUT  = 16 RGB frames ending at t, 200 ms apart:
+           frames 240, 246, 252, ... 324, 330
+           That is 3 seconds of history. Nothing after t is shown.
+
+  OUTPUT = four 5x5 maps:
+           now  = heatmap at frame 330
+           1s   = heatmap at frame 360
+           1.5s = heatmap at frame 375
+           2s   = heatmap at frame 390
+
+Special rule (ambiguous_policy = mean_target, current default):
+  If t is still BEFORE the fork, the past looks the same for collision
+  and miss. If a FUTURE heatmap has already split (example: 2s = frame
+  390 is after 365), we do NOT skip that loss. We put the cell-wise
+  AVERAGE of collision and miss into that future target for both clips,
+  then train on it.
+
+  After the fork (t >= 365), each clip keeps its own future heatmap.
+
+
+================================================================
+PART 2. HOW YOU RUN THE PROJECT
+================================================================
+
+Typical order:
+
+  python scripts/00_inspect_dataset.py
+  python scripts/01_build_manifest.py
+  python scripts/02_prepare_cache.py
+  python scripts/03_smoke_test.py
+  python scripts/04_train_teacher.py --phase frozen
+  python scripts/04_train_teacher.py --phase lora
+      (or --phase both)
+  python scripts/05_evaluate_teacher.py --split val
+  python scripts/05_evaluate_teacher.py --split test
+  python scripts/06_render_heatmap_overlays.py
+  python scripts/07_profile_pipeline.py     (optional timing)
+
+  python tests/run_tests.py                 (unit tests)
+
+Python package root:  collision_jepa3/
+Settings file:        configs/default.yaml
+Workspace parent:     /home/.../BTP  (dataset lives under blender_sim/)
+
+
+WHO CALLS WHOM (high level)
+
+  scripts/04_train_teacher.py
+      Config.load
+      load_manifest + load_splits
+      TeacherDataset  (data/dataset.py)
+          sampling, pairing, heatmaps, cache, preprocessing, video_reader
+      CollisionTeacher3  (models/teacher.py)
+          vjepa_backbone -> spatial_adapter -> residual_predictor
+          -> heatmap_decoder
+      TeacherTrainer  (training/trainer.py)
+          TeacherLoss (losses/composite.py)
+          PairBuffer + background_consistency
+          optimizer, checkpoint, early_stopping, evaluator
+
+
+SHAPES YOU WILL SEE EVERYWHERE
+
+  raw video frame          [1080, 1920, 3] uint8 RGB
+  letterboxed frame        [256, 256, 3] uint8
+                           content is 256 x 144 with 56 px black pad
+                           on top and bottom
+  dataset clip             [16, 3, 256, 256] float32 in 0..1
+  V-JEPA tokens            [B, 2048, 1408] for Giant
+                           2048 = 8 time groups * 16 * 16 spatial
+  Z_t                      [B, 32, 5, 5]
+  Hhat_now / 1s / 1.5s / 2s  [B, 5, 5]  values 0..1
+  heatmap GT               [450, 5, 5] per clip, then 5x5 slices
+
+
+================================================================
+PART 3. TOP-LEVEL FILES
+================================================================
+
+README.md
+  Project overview for humans: what Trial 3 predicts, how it differs
+  from Trial 2, dataset layout, pairing, architecture diagram, script
+  commands. Python never imports this file.
+  NOTE: the live default is mean_target (average collision and miss
+  when the future has split but history has not). Trust this FILE_GUIDE
+  and the code if they disagree.
+
+FILE_GUIDE.txt
+  This document.
+
+requirements.txt
+  Minimum Python packages:
+    numpy, pyyaml, tqdm, opencv-python, pillow, torch>=2.5,
+    transformers>=4.52, safetensors, huggingface_hub
+  Install these before running training.
+
+.gitignore
+  Ignores: virtualenv, pycache, cache/, checkpoints/, logs/, reports/,
+  visualizations/, hf_cache/, *.pt, *.npy, *.mp4
+  So generated artifacts are not committed.
+
+
+================================================================
+PART 4. CONFIG
+================================================================
+
+--------------------------------
+configs/default.yaml
+--------------------------------
+The single settings file. Almost every number in the project is here.
+
+Sections and what they control:
+
+  project
+    name, seed=1337
+
+  paths
+    dataset_root   relative to the BTP workspace (parent of model_trial_3)
+    manifest, split_file, cache_root, checkpoint_root, logs_root,
+    reports_root, visualizations_root
+                   relative to model_trial_3/
+    hf_cache_dir   where V-JEPA weights already live (Trial 2 cache)
+    hf_cache_fallback  local hf_cache/ if the raid path is missing
+
+  data
+    30 fps, 450 frames, 1920x1080, 5x5 grid
+    never_use_overlay_as_input must stay true
+    min_decoded_frames=450  (shorter videos are invalid)
+
+  preprocessing
+    letterbox to 256, pad_value 0, ImageNet mean/std
+    random flips/geometry OFF (collision left/right must stay left/right)
+    normalize_in_backbone true  (dataset does NOT subtract mean)
+
+  sampling
+    16 frames, offsets -90..0 step 6
+    horizons 30, 45, 60 frames
+    stride 15
+    fork_frame 365
+    allow_partial_horizons true
+      t_max=419 (needs 1s = t+30 <= 449); stride 15 last t is 405
+      1.5s/2s past the end are masked
+    ambiguous_policy mean_target
+    heatmap_disagree_tol 0.02
+    background_target_tolerance 0.001
+
+  splits
+    0.70 / 0.15 / 0.15 by scenario_type, at SAMPLE group level
+
+  backbone
+    facebook/vjepa2-vitg-fpc64-256
+    fallback vitl
+    tuning_mode frozen | lora_last6
+    skip_predictor true, use_get_vision_features true
+
+  adapter
+    128 projection channels, Z 32x5x5, 2 temporal blocks
+    row_weights [0.8, 0.9, 1.0, 1.1, 1.2]  (near rows matter more)
+
+  lora
+    rank 16, alpha 16, last 6 blocks
+
+  loss
+    future weights 1s=0.50, 1.5s=0.30, 2s=0.20
+    now_weight 0.25, delta 0.20, FP 0.10, direction 0.05, bg 0.02
+
+  optimizer
+    AdamW, adapter_lr 0.001, lora_lr 1e-4, lora_adapter_lr 2e-4
+
+  training
+    frozen_epochs 8, lora_epochs 10, patience 4
+    micro_batch_size 1, amp bfloat16, max_pair_buffer 64
+    max_steps 0 means a full epoch
+
+  cache
+    cache_frames true, budget 80 GB, 2 clips in RAM LRU
+
+  evaluation / warning / selection
+    SAFE / CAUTION / STOP thresholds
+    left cols 0-1, center 2, right 3-4
+    checkpoint picking: recall + STOP F1, with nuisance/miss gates
+
+--------------------------------
+collision_jepa3/config.py
+--------------------------------
+Turns YAML into an object other files can query.
+
+Important pieces:
+
+  PACKAGE_ROOT     = model_trial_3/
+  WORKSPACE_ROOT   = parent of that (BTP/)
+  DEFAULT_CONFIG_PATH = configs/default.yaml
+
+  Config.load(path=None, overrides=None)
+    1. yaml.safe_load
+    2. apply overrides like {"paths.dataset_root": "..."}
+    3. validate()
+    4. return Config
+
+  Config.get("sampling.fork_frame", 365)
+    Walks nested dicts. Missing key -> default.
+
+  Config.set("training.frozen_epochs", 2)
+    Scripts use this for CLI flags.
+
+  Config.path("paths.cache_root")
+    Relative cache/checkpoint/log paths resolve inside model_trial_3.
+    dataset_root resolves against WORKSPACE_ROOT.
+
+  Config.validate()
+    Fails the run if:
+      offsets length != 16, last offset != 0, any offset > 0
+      offsets are not uniform 6-frame spacing
+      not exactly 3 horizons / 3 names
+      never_use_overlay_as_input is not true
+      z_channels != 32 or grids != 5
+      missing loss.horizon_weights
+      resize_mode not letterbox or checkpoint_center_crop
+      random geometric/horizontal flip is on
+      ambiguous_policy not in {mean_target, collision_target, mask_ambiguous_pairs, none}
+
+  dump_resolved(cfg)
+    Adds the real absolute folders + config fingerprint to a dict
+    so train logs show exactly what was used.
+
+--------------------------------
+collision_jepa3/__init__.py
+--------------------------------
+Package marker. Exports Config and __version__ = "0.1.0".
+
+--------------------------------
+collision_jepa3/reproducibility.py
+--------------------------------
+  set_seed(seed)
+    random, numpy, torch, cuda; cudnn deterministic=True, benchmark=False
+
+  configure_runtime(num_threads)
+    OMP/MKL thread env vars, cv2.setNumThreads(1), torch.set_num_threads
+    Clamps 0 to 1 so OpenMP never sees OMP_NUM_THREADS=0
+
+  software_versions()
+    torch/numpy/cv2/yaml/transformers/PIL versions, CUDA, GPU name, VRAM,
+    bf16 support. Stored inside checkpoints.
+
+
+================================================================
+PART 5. SCRIPTS
+================================================================
+
+--------------------------------
+scripts/_common.py
+--------------------------------
+Shared CLI glue.
+
+  add_config_args(parser)
+    --config, --dataset-root, --seed
+
+  load_cfg(args)
+    Config.load with those overrides
+
+  resolve_checkpoint(cfg, name)
+    "best"   -> checkpoints/teacher_phase_a_best.pt
+                (falls back to phase_b_best if A is missing)
+    "best_a" / "best_b" / "last"
+    anything else is treated as a real path
+
+--------------------------------
+scripts/00_inspect_dataset.py
+--------------------------------
+Read-only dataset census. Safe to run anytime.
+
+  1. load_cfg
+  2. build_manifest(cfg, dataset_root)  -> list of ClipRecord
+  3. manifest_stats  counts valid/invalid, outcomes, backgrounds,
+     scenarios, biomes, lighting
+  4. iter_anchors to count how many (clip, t) training items you would get
+  5. write reports/dataset_inspect.json
+  6. print every INVALID clip_id and reason
+
+Does NOT write the official manifest.jsonl. That is script 01.
+
+--------------------------------
+scripts/01_build_manifest.py
+--------------------------------
+Creates the two files training cannot run without.
+
+  1. set_seed
+  2. build_manifest  (walk disk, inspect every clip)
+  3. save_manifest -> cache/manifest.jsonl
+     one JSON object per line, SHA256 fingerprint printed
+  4. If cache/splits.json exists and you did not pass --reset-split,
+     keep it (so val/test do not shuffle between runs).
+  5. Else split_groups(...) by scenario_type, 70/15/15, group-level.
+  6. save_splits with extra metadata: seed, manifest fingerprint, policy
+  7. Print how many sample groups landed in train/val/test
+  8. Print anchors_per_clip
+
+--------------------------------
+scripts/02_prepare_cache.py
+--------------------------------
+One-time (resumable) video decode + letterbox.
+
+  1. Refuse to run if manifest.jsonl is missing
+  2. load_manifest
+  3. prepare_frame_cache(records, cfg, max_gb=...)
+  4. write reports/cache_report.json  {written, reused, estimate_gb}
+
+After this, TeacherDataset reads numpy instead of mp4 when possible.
+
+--------------------------------
+scripts/03_smoke_test.py
+--------------------------------
+Tiny sanity check before a long train.
+
+  Flags:
+    --num-clips 2
+    --dummy (default) uses DummyVJEPA, no Giant download
+    --real  loads the real HuggingFace checkpoint
+    --device auto
+
+  1. Load a few valid clips (from manifest if present)
+  2. Build a temporary split that puts them in "train"
+  3. TeacherDataset + dataloader
+  4. CollisionTeacher3
+  5. One forward, TeacherLoss, backward
+  6. Save and reload checkpoint (extract/load_teacher_state)
+  7. Print parameter_audit and "OK"
+
+--------------------------------
+scripts/04_train_teacher.py
+--------------------------------
+Real training.
+
+  Flags:
+    --phase frozen | lora | both
+    --resume / --resume-from PATH
+    --dummy
+    --dry-run   only print audit, no loop
+    --frozen-epochs / --lora-epochs / --max-steps / --num-workers
+
+  1. load config, apply CLI overrides into cfg
+  2. set_seed + configure_runtime
+  3. resolve_device, log dump_resolved + hardware
+  4. Require manifest.jsonl AND splits.json
+  5. TeacherDataset train + val
+  6. CollisionTeacher3
+  7. TeacherTrainer(...).run(phase, resume_path)
+  8. Checkpoints land in checkpoints/
+
+--------------------------------
+scripts/05_evaluate_teacher.py
+--------------------------------
+  --checkpoint best|best_a|best_b|last|path
+  --split train|val|test
+
+  1. Dataset for that split
+  2. Build model; if checkpoint has lora_enabled, call enable_lora()
+     BEFORE load_teacher_state
+  3. evaluate_loader with TeacherLoss
+  4. reports/eval_<split>.json and a CSV of per-horizon metrics
+
+--------------------------------
+scripts/06_render_heatmap_overlays.py
+--------------------------------
+Pictures for humans. Not training data.
+
+  --limit 12
+  Tries to mix collision / miss / pre-fork / post-fork examples.
+  For each: last RGB frame + GT heatmap + predicted heatmap
+  Saved under visualizations/
+
+--------------------------------
+scripts/07_profile_pipeline.py
+--------------------------------
+Times stages with StageTimer.
+
+  Dummy default: random 64x64 clips, DummyVJEPA, N steps of
+  forward+loss+backward. No dataset needed.
+  --real: load real clips and time decode vs backbone vs adapter.
+
+
+================================================================
+PART 6. DATA PIPELINE  (collision_jepa3/data/)
+================================================================
+
+These files convert folders into batches. Instantiation order inside
+TeacherDataset.__init__ / __getitem__:
+
+  splits  (which sample groups belong to train)
+  manifest ClipRecords
+  heatmap_annotations.load_heatmaps  for every clip
+  pairing.compute_ambiguity_table
+  pairing.collision_clip_by_outcome_group
+  then per index:
+    sampling.input_indices
+    cache or video_reader
+    preprocessing
+    heatmap targets_for_anchor
+    pairing.apply_mean_future_targets  (if policy says so)
+
+--------------------------------
+collision_jepa3/data/__init__.py
+--------------------------------
+Convenience re-exports so other modules can write:
+
+  from collision_jepa3.data import TeacherDataset, load_manifest, split_groups
+
+--------------------------------
+collision_jepa3/data/manifest.py
+--------------------------------
+Discovers clips. Broken folders become valid=False instead of crashing.
+
+CONSTANTS
+  OUTCOME_NAMES = collision, miss_left, miss_right
+  REQUIRED_FILES = preview.mp4, episode.json,
+                   spatial_annotations/spatial_annotations.json
+
+ClipRecord fields (the report card):
+  clip_id                 e.g. sample_0000_jaywalker/collision/bg_00
+  sample_id               sample_0000_jaywalker
+  scenario_group_id       same as sample folder (split unit)
+  scenario_type           jaywalker  (from _scenario_type)
+  outcome_type            collision | miss_left | miss_right
+  background_id           bg_00 | bg_01
+  video_path, episode_json_path, heatmap_json_path
+  frame_count, fps, width, height
+  valid, invalid_reason
+  overlay_path, annotations_path  (optional)
+  lighting, biome, bg_style
+  diverge_frame, hit_s, fork_frame
+  outcome_group_id        sample|background   (collision vs miss mates)
+  background_pair_id      sample|outcome      (bg_00 vs bg_01 mates)
+  extra                   scenario, ego_mode, label_histogram, heatmap_shape
+
+_scenario_type(sample_dir)
+  sample_0006_cube_from_left -> split("_", 2) -> cube_from_left
+  If the name is not sample_<id>_<rest>, return the whole name.
+
+_read_episode(path)
+  json.load of episode.json. No extra logic.
+
+inspect_clip_dir(clip_dir, dataset_root, cfg)  — THE MAIN FUNCTION
+  1. Relative path -> sample, outcome, background.
+  2. Build expected file paths.
+  3. If any REQUIRED_FILES missing:
+       return ClipRecord(valid=False, invalid_reason="incomplete: ...")
+  4. Read episode.json
+       lighting = bg_lighting or environment.lighting
+       biome, bg_style, diverge_frame, hit_s
+       extra.scenario, ego.mode, label_histogram
+       If video field is exactly "spatial_overlay.mp4": reject (label leak)
+  5. probe_video(preview.mp4) -> width, height, fps, reported_frames
+  6. load_heatmaps(...) expected 450 x 5 x 5
+  7. If reported_frames < min_decoded_frames (450): invalid
+  8. Else valid=True ClipRecord with resolved absolute paths
+
+_invalid(...)
+  Same record shape, valid=False, logs a warning.
+
+iter_clip_dirs(dataset_root)
+  For each sample_* folder:
+    for each outcome folder in {collision, miss_left, miss_right}:
+      for each bg_* folder:
+        yield that path
+  Ignores other folder names.
+
+build_manifest(cfg, dataset_root=None)
+  [inspect_clip_dir(d) for d in iter_clip_dirs]
+  Logs how many valid vs invalid.
+
+save_manifest(records, path)
+  One JSON line per record. Returns 16-char sha256 fingerprint.
+
+load_manifest(path)
+  Rebuilds ClipRecord(**dict) per line.
+
+manifest_stats(records)
+  Counters of outcomes, backgrounds, scenarios, biomes, lighting,
+  invalid reasons, number of groups.
+
+valid_clips(records)
+  Filter valid=True.
+
+--------------------------------
+collision_jepa3/data/video_reader.py
+--------------------------------
+OpenCV only. Always converts BGR -> RGB. Never substitutes a missing
+frame with the previous one.
+
+  VideoInfo  path, width, height, fps, reported_frames, decoded_frames
+  VideoReadError
+
+  probe_video(path)
+    Open, read CAP_PROP_*, close. Used by inspect_clip_dir.
+    Does not decode pixels.
+
+  decode_all_rgb(path)
+    Read every frame, stack [T,H,W,3] uint8 RGB.
+    Error if 0 frames.
+
+  decode_indices_rgb(path, indices)
+    Decode sequentially until max(indices), then pick those indices.
+    Error if any requested index is missing or negative.
+    Used by TeacherDataset when the frame cache is absent.
+
+--------------------------------
+collision_jepa3/data/heatmap_annotations.py
+--------------------------------
+  HeatmapError  corrupt / incomplete JSON
+
+  _as_frame_id
+    int, or "000330", or "frame_330" -> 330
+
+  load_heatmaps(path, expected_frames=450, grid=5, value_min=0, value_max=1)
+    1. JSON dict with "frames" list, or a raw list
+    2. Optional k must equal grid
+    3. Each item: matrix 5x5, finite, in [0,1]
+    4. No duplicate IDs
+    5. Must cover 0..449 exactly (missing IDs are NOT filled with zeros)
+    6. Return float32 [450, 5, 5]
+
+  targets_for_anchor(heatmaps, t, horizons, allow_missing=False)
+    Returns dict:
+      h_now, h_1s, h_1_5s, h_2s   each [5,5]
+    If allow_missing and an index is off the clip, that map is zeros
+    (dataset will still set amb_*=True for that horizon).
+
+--------------------------------
+collision_jepa3/data/preprocessing.py
+--------------------------------
+RGB resize/pad. Does NOT subtract ImageNet mean (backbone does that).
+
+  PreprocessSignature  frozen dataclass of resize_mode, size, pad, mean, std
+  signature_from_cfg(cfg)
+
+  letterbox_rgb(frame, size=256, pad_value=0)
+    scale = min(256/w, 256/h)
+    For 1920x1080: scale = 256/1920, new size 256 x 144
+    paste at y0=56, x0=0 on a 256x256 black canvas
+    LEFT and RIGHT of the street stay in the image
+    INTER_AREA when shrinking
+
+  checkpoint_center_crop_rgb
+    Official V-JEPA: shortest edge -> size*256/224, then center crop 256
+    This CUTS left/right. Opt-in only.
+
+  preprocess_frame / preprocess_clip
+    Dispatch by resize_mode. Clip: [T,H,W,3] -> [T,256,256,3] uint8
+
+  uint8_to_nchw01
+    [T,H,W,3] uint8 -> [T,3,H,W] float32 / 255
+    Still un-normalized.
+
+--------------------------------
+collision_jepa3/data/sampling.py
+--------------------------------
+Locked 16-frame / 3-second contract. Do not change offsets casually;
+config.validate() will refuse non-uniform spacing.
+
+  FRAME_OFFSETS = -90,-84,...,-6,0     (16 numbers, 6 apart)
+  HORIZONS_FRAMES = 30, 45, 60         (1s, 1.5s, 2s at 30 fps)
+
+  input_indices(t)
+    [t-90, t-84, ..., t]
+    ERROR if any index > t (future leak)
+    ERROR if last != t
+
+  target_indices(t)
+    {now: t, 1s: t+30, 1_5s: t+45, 2s: t+60}
+
+  available_horizons(t, n_frames=450)
+    True/False per name including "now"
+
+  valid_anchor_range(n_frames=450)
+    t_min = 90  (need 3s of history)
+    t_max = 419 if allow_partial_horizons (need 1s = t+30 <= 449)
+    t_max = 389 if all three futures required (t+60 <= 449)
+
+  iter_anchors(n_frames, stride=15)
+    [90, 105, 120, ..., 405]  with default partial=True
+    About 22 anchors per clip
+
+Example at t=330:
+  inputs  240,246,...,330
+  now 330, 1s 360, 1.5s 375, 2s 390
+  fork 365  => 1s still pre-fork, 1.5s and 2s post-fork
+
+--------------------------------
+collision_jepa3/data/splits.py
+--------------------------------
+Splits SAMPLE GROUPS, never individual clips.
+
+  _hash_order(names, seed)
+    Stable shuffle using sha256(seed:name). Same seed => same split.
+
+  _quota(n, 0.7, 0.15, 0.15)
+    How many groups go to train/val/test.
+    Tiny n: 1 group -> all train; 2 groups -> 1 train 1 val.
+
+  split_groups(records, seed, fractions, stratify_by="scenario_type")
+    1. Keep valid clips only.
+    2. One group id per sample folder.
+    3. Bucket groups by scenario_type (jaywalker, cube_from_left, ...).
+    4. For each type with >= 3 groups, cut 70/15/15.
+    5. Types with 1-2 groups go to a leftover pool, then split that pool
+       so rare types can still appear in val/test.
+    6. If val is still empty, steal one group from train. Same for test.
+    7. ERROR if any group is in two splits (leakage) or left unassigned.
+    Return {"train": [sample_...], "val": [...], "test": [...]}
+
+  save_splits / load_splits
+    JSON with {"splits": {...}, extra metadata}
+
+  clip_split_map
+    clip_id -> "train"|"val"|"test"
+
+WHY GROUPS: if collision of sample_0000 is train and miss of sample_0000
+is val, the model would see the same 3-second prefix in both splits.
+
+--------------------------------
+collision_jepa3/data/pairing.py
+--------------------------------
+Two pairing axes + the collision-target rewrite.
+
+  heatmaps_disagree(a, b, tol=0.02)
+    True if max |a-b| > tol  (any cell)
+
+  outcome_mates(records)
+    dict[outcome_group_id] -> [ClipRecords]
+    outcome_group_id = "sample_0000_jaywalker|bg_00"
+    So collision/bg_00 and miss_left/bg_00 are mates.
+
+  background_mates(records)
+    dict[background_pair_id] -> [ClipRecords]
+    background_pair_id = "sample_0000_jaywalker|collision"
+    So collision/bg_00 and collision/bg_01 are mates.
+
+  compute_ambiguity_table(...)
+    Returns {(clip_id, t): {"1s": bool, "1_5s": bool, "2s": bool}}
+
+    Steps:
+      1. All valid (clip, t) start as False.
+      2. If mask_ambiguous is False, return that (all False).
+      3. For each outcome group with a collision AND at least one miss:
+           for each t:
+             if t >= fork: skip (history already shows the branch)
+             for each horizon:
+               if collision heatmap at t+h disagrees with miss heatmap:
+                 mark BOTH clips True on that horizon
+
+    Example t=330, fork=365:
+      1s=360 still same -> False
+      2s=390 already split -> True
+
+  collision_clip_by_outcome_group
+    "sample|bg_00" -> that group's collision clip_id
+
+  apply_mean_future_targets(targets, rec, t, amb, heatmaps, ...)
+    For each horizon with amb[name]=True and the frame still exists:
+      replace h_1s / h_1_5s / h_2s with the cell-wise AVERAGE of
+      collision and miss heatmaps at that frame
+    Returns (new_targets, set_of_replaced_names)
+
+    Miss clip at t=330, 2s:
+      original miss heatmap at 390 may be all zeros, collision ~0.96
+      after rewrite: (0.96 + 0.0) / 2 = 0.48 in that cell
+
+    Collision clip: also gets that same average, not its raw map.
+    t=375 (after fork): amb all False, nothing replaced.
+
+  background_pair_valid(rec_a, rec_b, hm_a, hm_b, t, horizons, tol)
+    True only if:
+      same background_pair_id
+      different clip_id
+      same outcome_type
+      same scenario_group_id
+      heatmaps at now and available futures agree within tol
+    Used to decide whether Z_t of bg_00 and bg_01 should match.
+
+--------------------------------
+collision_jepa3/data/paired_sampler.py
+--------------------------------
+ID lookups, never "index i+1 is the pair".
+
+  index_by_clip_id
+  background_partner_id(rec, records)  the other bg of this outcome
+  outcome_partner_ids(rec, records)    miss(es) sharing this background
+  group_indices_by_clip                clip_id -> list of t's
+
+--------------------------------
+collision_jepa3/data/cache.py
+--------------------------------
+  clip_cache_dir(cache_root, clip_id)
+    cache/frames/sample_0000_jaywalker__collision__bg_00/
+    (slashes become __)
+
+  frame_cache_path  .../frames_uint8.npy
+
+  cache_signature_ok
+    reuse only if resize_mode, input_size, and video_path still match.
+    If you switch letterbox -> center crop, cache is rebuilt.
+
+  estimate_frame_cache_gb
+    n_clips * 450 * 256 * 256 * 3 bytes
+
+  prepare_frame_cache(records, cfg, max_gb=None)
+    1. Budget from cache.frame_cache_max_gb (80) or --max-gb
+    2. If estimate > budget: raise (does not start writing)
+    3. For each valid clip:
+         if npy+meta exist and signature ok: skip
+         else decode_all_rgb, preprocess_clip, np.save, write meta.json
+    4. Return {written, reused, estimate_gb, budget_gb}
+
+  load_cached_frames(..., mmap=True)
+    np.load mmap_mode="r" so 450x256x256x3 is not all copied into RAM.
+
+  TokenCache
+    Optional encoder-token cache (cache.cache_encoder_tokens is false
+    by default). Keys by clip_id + anchor. Invalid if backbone/LoRA/
+    preprocess fingerprint changes. Not used in the default train loop.
+
+--------------------------------
+collision_jepa3/data/dataset.py
+--------------------------------
+PyTorch Dataset. One item = one clip at one time t.
+
+TeacherDataset.__init__
+  1. Keep records whose scenario_group_id is in this split.
+  2. Compute anchors with iter_anchors (stride depends on split).
+  3. load_heatmaps for every clip into RAM (450x5x5 is small).
+  4. compute_ambiguity_table (always, if policy is mean_target,
+     collision_target, or mask_ambiguous_pairs).
+  5. outcome_clip_ids_by_group / collision_clip_by_outcome_group
+  6. index = all (clip_id, t) pairs
+  7. LRU of decoded clips (default 2) to avoid re-reading npy
+
+_horizon_masked(name, amb, avail, replaced)
+  True  -> skip this horizon in the loss
+  Rules:
+    future frame missing            -> True (must skip)
+    this horizon was rewritten to
+      the mean heatmap              -> False (TRAIN on it)
+    otherwise                       -> amb table flag
+      (True only under mask_ambiguous_pairs policy)
+
+__getitem__(i)
+  1. clip_id, t = index[i]
+  2. Load 16 frames:
+       try cache LRU / frames_uint8.npy, take input_indices(t)
+       if cache missing: decode_indices_rgb from mp4, then letterbox
+       uint8_to_nchw01 -> [16,3,256,256] float 0..1
+  3. targets_for_anchor on THIS clip's heatmaps
+  4. If ambiguous_policy == "mean_target":
+       apply_mean_future_targets  (may overwrite h_1s/h_1_5s/h_2s
+       with the collision/miss average)
+  5. background_pair_valid vs the other bg clip
+  6. Return a dict (see keys below)
+
+Returned keys (then collate_teacher_batch stacks tensors):
+  frames          [16,3,256,256] float32
+  h_now, h_1s, h_1_5s, h_2s    [5,5]
+  anchor          int t
+  clip_id, sample_id, scenario_group_id, scenario_type
+  outcome_type, background_id
+  outcome_group_id, background_pair_id, mate_clip_id
+  bg_pair_valid, pre_fork, fork_frame
+  amb_1s, amb_1_5s, amb_2s     bool
+
+build_dataloader
+  batch_size = training.micro_batch_size (1)
+  workers, pin_memory, prefetch, collate_teacher_batch
+
+collate_teacher_batch
+  np.stack then torch.from_numpy for tensor fields
+  lists for string IDs
+
+
+================================================================
+PART 7. MODEL  (collision_jepa3/models/)
+================================================================
+
+--------------------------------
+collision_jepa3/models/__init__.py
+--------------------------------
+Exports CollisionTeacher3, adapters, LoRA, Dummy/real backbone.
+
+--------------------------------
+collision_jepa3/models/vjepa_backbone.py
+--------------------------------
+Only place that talks to HuggingFace V-JEPA.
+
+  _resolve_hf_cache
+    Prefer paths.hf_cache_dir if it exists, else hf_cache_fallback.
+
+  DummyVJEPA2Backbone
+    For tests/smoke. Conv3d tubelets then tiny Linear blocks.
+    Same token LAYOUT as real: [B, T'*S*S, C]
+    Dummy default: 64x64 crop, hidden 64, 8 time groups, 4x4 spatial.
+    All weights frozen unless LoRA enabled.
+
+  VJEPA2Backbone
+    Loads AutoModel facebook/vjepa2-vitg-fpc64-256 (or fallback ViT-L).
+    Reads mean/std from VJEPA2VideoProcessor when possible.
+    forward(clip [B,T,3,H,W] in 0..1):
+      1. ImageNet normalize
+      2. get_vision_features / encoder  (predictor skipped)
+      3. tokens float32 [B, 2048, 1408] for Giant @ 256
+    enable_lora wraps last N Linear layers.
+    Frozen by default; forward uses no_grad unless LoRA is on.
+
+  build_backbone(cfg, dummy=False)
+    Factory used by CollisionTeacher3.
+
+Giant layout reminder:
+  16 frames, tubelet 2 -> T' = 8
+  256 / patch 16 -> S = 16
+  N = 8*16*16 = 2048 tokens
+  C = 1408 for ViT-G
+
+--------------------------------
+collision_jepa3/models/lora.py
+--------------------------------
+  LoRALinear
+    Frozen original Linear.
+    lora_A [rank, in], lora_B [out, rank]
+    y = W x + (alpha/rank) * B(A(x))
+    A kaiming init, B zeros (starts as no change).
+
+  apply_lora_to_last_blocks(model, last_n=6, rank=16, alpha=16)
+    Finds encoder.layer / blocks / layers, wraps Linear in the last N.
+    Returns how many Linears were wrapped.
+
+  lora_parameters(model)  all lora_A / lora_B tensors
+
+--------------------------------
+collision_jepa3/models/spatial_adapter.py
+--------------------------------
+Tokens -> Z_t [B, 32, 5, 5]
+
+  TemporalResidualBlock
+    Depthwise conv along TIME only (kernel 3, optional dilation),
+    then 1x1, GroupNorm, GELU, residual add.
+
+  SpatialTemporalAdapter.forward(tokens [B,N,C])
+    1. tokens_to_grid
+         MUST have N == T'*S*S exactly. Refuses to slice/pad.
+         -> [B, T', C, S, S]   Giant: [B,8,1408,16,16]
+    2. spatial_proj per time group: 1x1 then 3x3 -> 128 channels
+    3. temporal residual blocks on [B,128,T',16,16]
+    4. mix mean-over-time with last time group
+    5. adaptive_avg_pool2d to 5x5
+    6. 1x1 bottleneck to 32 channels
+    7. LayerNorm over channels
+    8. Z_t [B,32,5,5]  or RuntimeError if shape is wrong
+
+--------------------------------
+collision_jepa3/models/heatmap_decoder.py
+--------------------------------
+  HeatmapDecoder(Z_t) -> Hhat_now [B,5,5] via 1x1, 3x3, 1x1, sigmoid
+
+  HeatmapDelta(z_residual) -> Delta [B,5,5] via same convs, tanh (-1..1)
+
+  copy_residual_future(h_now, delta)
+    clamp( stop_gradient(h_now) + delta, 0, 1)
+    Future map = current map plus a learned change.
+    stop_gradient so the future head does not fight the now head
+    by pushing Hhat_now around.
+
+--------------------------------
+collision_jepa3/models/residual_predictor.py
+--------------------------------
+  Zhat_h = Z_t + convs(Z_t)
+  One ResidualPredictor per horizon (1s, 1.5s, 2s).
+  Dilated 3x3 helps the 5x5 grid see left vs right.
+
+--------------------------------
+collision_jepa3/models/teacher.py
+--------------------------------
+The full teacher.
+
+  CollisionTeacher3(cfg, dummy_backbone=False)
+    backbone + SpatialTemporalAdapter + HeatmapDecoder
+    + ModuleDict of ResidualPredictor and HeatmapDelta (one each per horizon)
+
+  train(mode=True)
+    Calls super().train but FORCES backbone.eval()
+    so dropout/BN in Giant stay frozen.
+
+  forward(clip=None, tokens=None)
+    encode -> Z_t
+    _heads:
+      Hhat_now = decoder(Z_t)
+      for name in 1s, 1_5s, 2s:
+        Zhat = predictor[name](Z_t)
+        Delta = delta_heads[name](Zhat - Z_t)
+        Hhat  = copy_residual_future(Hhat_now, Delta)
+    Returns dict with Z_t, Hhat_now, Hhat_*, Delta_*, Zhat_*
+
+  adapter_parameters()  adapter+decoder+predictors+delta_heads
+  lora_parameters()
+  enable_lora()         wrap last 6 blocks, maybe gradient checkpointing
+  parameter_audit()     counts total/trainable/frozen/adapter/lora
+
+
+================================================================
+PART 8. LOSSES  (collision_jepa3/losses/)
+================================================================
+
+--------------------------------
+collision_jepa3/losses/__init__.py
+--------------------------------
+Exports TeacherLoss, TeacherLossOutput, target_weighted_mse,
+false_positive_penalty.
+
+--------------------------------
+collision_jepa3/losses/heatmap.py
+--------------------------------
+  row_priority_weights([0.8,0.9,1.0,1.1,1.2])
+    Normalize so mean is 1. Bottom (near) rows > 1, top (far) < 1.
+
+  cell_threat_weights(target)
+    w_ij = 0.05 + 4.0 * H_ij^2     then divide by mean
+    Dangerous cells pull the loss harder. Safe cells still count a little
+    (the floor) so the model cannot ignore them.
+
+  target_weighted_mse(pred, target, sample_mask=...)
+    Weighted MSE. Weights come from TARGET, never from the prediction
+    (so the model cannot hide by predicting zeros).
+    sample_mask False -> that batch item is dropped.
+    If the whole batch is masked, returns 0.
+
+  false_positive_penalty
+    On cells where GT < 0.05 (safe):
+      penalize relu(pred - 0.10)^2
+    Stops the model from painting danger everywhere to get recall.
+
+--------------------------------
+collision_jepa3/losses/residual.py
+--------------------------------
+  residual_target = clamp(H_future - stopgrad(Hhat_now), -1, 1)
+  delta_loss compares Delta_hat to that, with the same weighted MSE,
+  mixed with extra weight on the residual magnitude
+  (delta_residual_mix=0.5).
+
+--------------------------------
+collision_jepa3/losses/direction.py
+--------------------------------
+  Columns 0-1 LEFT, 2 CENTER, 3-4 RIGHT.
+  Score = temperature * logsumexp(row_weighted cells / T)
+  Softmax over the three directions, cross-entropy vs GT direction
+  (only when GT peak is above threat_threshold 0.42).
+
+  Teaches "danger is on the left" even if exact cells are a bit off.
+
+--------------------------------
+collision_jepa3/losses/background_consistency.py
+--------------------------------
+  Z_a, Z_b : [B,32,5,5]
+  Per cell, cosine of the 32-D vector.
+  Loss = mean(1 - cos)
+  "Same collision on two streets should have similar Z_t."
+
+--------------------------------
+collision_jepa3/losses/composite.py
+--------------------------------
+TeacherLoss.__call__(model_out, batch, z_bg_pair=None)
+
+  Always:
+    L_now = weighted MSE(Hhat_now, h_now)     NEVER uses amb mask
+
+  For each of 1s, 1_5s, 2s:
+    valid = NOT amb_*
+    L_h, L_delta, L_FP, L_dir  (all masked by valid)
+    multiply by horizon_weights (0.50 / 0.30 / 0.20)
+
+  L_bg if z_bg_pair provided, else 0
+
+  L_total =
+      L_future
+    + 0.25 * L_now
+    + 0.20 * L_delta
+    + 0.10 * L_FP
+    + 0.05 * L_dir
+    + 0.02 * L_bg
+
+  Returns TeacherLossOutput(total, terms dict) for logging.
+
+Under mean_target, amb_* is False on rewritten futures, so those
+horizons ARE in L_future, with the collision/miss average as h_1s/h_1_5s/h_2s.
+
+
+================================================================
+PART 9. TRAINING  (collision_jepa3/training/)
+================================================================
+
+--------------------------------
+collision_jepa3/training/__init__.py
+--------------------------------
+Only save_checkpoint / load_checkpoint. Intentionally does NOT import
+trainer.py, so evaluation scripts can load checkpoints without pulling
+the whole training loop (avoids circular imports).
+
+--------------------------------
+collision_jepa3/training/engine.py
+--------------------------------
+  move_batch(batch, device)   tensors .to(device, non_blocking)
+  assert_finite(tensor, name) raise if NaN/Inf
+  current_lrs(optimizer)
+
+  composite_score(horizon_metrics, cfg)
+    Weighted high_threat_recall across 1s/1.5s/2s
+    + STOP F1
+    eligible only if nuisance <= 0.20 and miss <= 0.25
+    This is how "best" checkpoints are chosen, not raw loss.
+
+  selection_better(cur, best)
+    Prefer eligible over ineligible, then higher score.
+
+--------------------------------
+collision_jepa3/training/optimizer.py
+--------------------------------
+  AdamW only.
+  Phase A: one group, adapter_lr=1e-3
+  Phase B: adapter at lora_adapter_lr=2e-4, LoRA at lora_lr=1e-4
+  Scheduler: 1-epoch linear warmup then cosine to min_lr=1e-6
+
+--------------------------------
+collision_jepa3/training/checkpoint.py
+--------------------------------
+  save_checkpoint  write .tmp then rename (crash-safe)
+  load_checkpoint  torch.load weights_only=False (needs optimizer blobs)
+
+  extract_teacher_state
+    adapter, decoder, predictors, delta_heads, lora tensors,
+    lora_enabled flag
+    Does NOT dump Giant encoder weights (they are the HF checkpoint).
+
+  load_teacher_state(model, blob, strict=True)
+    load_state_dict on those modules.
+    For Phase A -> Phase B, caller passes lora={} after enable_lora()
+    so missing LoRA keys are OK.
+
+--------------------------------
+collision_jepa3/training/early_stopping.py
+--------------------------------
+  patience=4 evals without a better selection score -> stop this phase.
+
+--------------------------------
+collision_jepa3/training/trainer.py
+--------------------------------
+PairBuffer
+  Key = (background_pair_id, t)
+  Value = (clip_id, Z_t.detach())
+  Max 64 entries, LRU.
+  When collision/bg_00 at t=300 is seen, store Z_t.
+  When later collision/bg_01 at t=300 arrives, pop the mate and
+  compute background_consistency_loss. Only one Giant graph at a time.
+
+_forward_loss
+  1. move_batch to GPU
+  2. autocast (bf16)
+  3. model(frames)
+  4. TeacherLoss
+  5. maybe replace L_bg with PairBuffer cosine
+  6. assert_finite
+
+run_phase("frozen"|"lora", epochs)
+  Each epoch:
+    model.train(); backbone.eval()
+    for batch:
+      loss.backward (with grad accumulation)
+      clip grad 1.0
+      AdamW step
+      max_steps can cut the epoch short (debug)
+    scheduler.step()
+    validate on val_loader
+    save teacher_phase_a_last.pt always
+    save teacher_phase_a_best.pt if selection improved
+    jsonl log line
+    early stop on patience
+
+run(phase="frozen"|"lora"|"both", resume_path)
+  Phase A frozen: adapter/heads only
+  Phase B: enable_lora, load Phase A best adapter/heads, then train
+           adapter (lower lr) + LoRA
+
+Checkpoint extra fields: config dict, preprocess signature, seed,
+manifest/split fingerprints, software versions, parameter_audit, val metrics.
+
+
+================================================================
+PART 10. EVALUATION  (collision_jepa3/evaluation/)
+================================================================
+
+--------------------------------
+collision_jepa3/evaluation/__init__.py
+--------------------------------
+Exports evaluate_loader, HorizonAccumulator, classify_heatmap.
+
+--------------------------------
+collision_jepa3/evaluation/metrics.py
+--------------------------------
+  classify_heatmap(hm, warning_cfg)
+    Weight rows, take max in LEFT / CENTER / RIGHT columns.
+    peak >= 0.70 -> STOP
+    peak >= 0.42 -> CAUTION
+    else SAFE
+    Returns (direction string, severity int, scores)
+
+  HorizonAccumulator.update(pred, true, masked, outcome, background,
+                            scenario, pre_fork)
+    If masked: only count masked, skip metrics.
+    Else accumulate:
+      MSE and weighted MSE
+      high-threat cell precision/recall (threshold 0.5)
+      false positives on safe cells
+      direction accuracy when GT is CAUTION+
+      STOP precision/recall/F1
+      nuisance = predicted CAUTION+ on SAFE frames
+      miss     = predicted SAFE on STOP frames
+      MSE split by outcome / background / scenario
+      MSE split pre-fork vs post-fork
+
+  summary() returns that dict of floats.
+
+--------------------------------
+collision_jepa3/evaluation/evaluator.py
+--------------------------------
+  evaluate_loader(model, loader, cfg, device, loss_fn=None)
+    model.eval(), no grad
+    For each batch: forward, optional TeacherLoss, update accumulators
+    amb_* True samples are masked in metrics (same as loss)
+    Return:
+      horizons: {1s,1_5s,2s: summary}
+      now: summary
+      selection: composite_score
+      subgroups: mean MSE by outcome/background/scenario
+      loss: averaged terms if loss_fn given
+
+--------------------------------
+collision_jepa3/evaluation/reports.py
+--------------------------------
+  write_json(path, dict)
+  write_metrics_csv(path, horizons dict)  one row per horizon
+
+--------------------------------
+collision_jepa3/evaluation/visualizations.py
+--------------------------------
+  heatmap_to_image  5x5 -> colored squares (red = danger)
+  overlay_heatmap   blend on RGB (for display only)
+  render_example    side-by-side RGB | GT | pred, save PNG
+  Used by script 06. spatial_overlay.mp4 is still not an input.
+
+
+================================================================
+PART 11. UTILS  (collision_jepa3/utils/)
+================================================================
+
+collision_jepa3/utils/__init__.py
+  resolve_device, select_amp_dtype, describe_hardware, setup_logger,
+  JsonlLogger
+
+collision_jepa3/utils/device.py
+  resolve_device("auto") -> cuda if torch.cuda.is_available() else cpu
+  select_amp_dtype
+    training.amp false or CPU -> None (full fp32)
+    bf16 requested and GPU supports it -> bfloat16
+    else float16
+  describe_hardware  torch version, GPU name, VRAM, bf16 flag
+
+collision_jepa3/utils/logging.py
+  setup_logger(name, log_dir)
+    console + logs/<name>.log
+  JsonlLogger(path)
+    .write(dict) appends one JSON line with UTC timestamp
+    used for logs/train.jsonl
+
+collision_jepa3/utils/profiling.py
+  StageTimer.track("backbone") context manager
+  summary() -> {name: {total_s, count, mean_s}}
+
+
+================================================================
+PART 12. TESTS  (tests/)
+================================================================
+
+Run all:  python tests/run_tests.py
+One file: python tests/test_inspect_clip_dir.py -v
+
+tests/__init__.py
+  Empty package marker.
+
+tests/run_tests.py
+  unittest discover test_*.py, verbosity 2, exit 1 on failure.
+
+tests/test_manifest.py
+  Empty folder -> incomplete
+  Synthetic 450-frame mp4 + episode + heatmaps -> valid
+  build_manifest on a broken tree returns 1 invalid record
+
+tests/test_inspect_clip_dir.py
+  Real sample_0000_jaywalker/collision/bg_00 accepted with
+    jaywalker, 1920x1080, 450 frames, lighting overcast
+  Missing heatmap only, overlay video leak, corrupt JSON,
+  dummy mp4, grid=3 heatmaps, 12-frame video all rejected
+
+tests/test_preprocessing.py
+  Letterbox 1920x1080 -> 256x256 with 144-tall content, not center-cropped
+
+tests/test_video_sampling.py
+  Offsets, no future leak, horizon arithmetic, partial t_max=419
+
+tests/test_heatmap_alignment.py
+  Frame id i matches heatmap index i
+
+tests/test_no_future_leakage.py
+  input_indices never > t; last index is t
+
+tests/test_pairing.py
+  background_partner_id / outcome_partner_ids
+  split_groups keeps a sample's clips together
+  rare scenario types still get a val group
+
+tests/test_pairing_functions.py
+  heatmaps_disagree tol
+  outcome_mates vs background_mates
+  ambiguity table cases (mask off, pre-fork 2s, post-fork, identical,
+  solo clip, two misses)
+  background_pair_valid accept/reject
+  apply_mean_future_targets on synthetic AND real jaywalker
+    miss 2s at t=330 becomes the average of collision and miss at 390
+
+tests/test_ambiguity_mask.py
+  Only 2s flagged at t=330 when only 2s disagrees
+  Post-fork t=375 not flagged
+  mean_target rewrite puts 0.48 (average) into miss h_2s
+
+tests/test_shapes.py
+  Dummy teacher: Z_t [B,32,5,5], maps [B,5,5]
+
+tests/test_frozen_backbone.py
+  Frozen phase: backbone params require_grad False; backward does
+  not change them
+
+tests/test_lora.py
+  LoRA wraps last blocks; only A/B train; base Linear frozen
+
+tests/test_loss_functions.py
+  Composite loss finite; amb_1_5s True skips that horizon's map loss
+
+tests/test_checkpoint_resume.py
+  extract -> save -> load restores adapter weights
+
+
+================================================================
+PART 13. ONE TRAINING STEP, SLOW MOTION
+================================================================
+
+Index i might be:
+  clip = sample_0000_jaywalker/miss_left/bg_00
+  t    = 330
+
+1. dataset loads frames 240..330 of preview.mp4 (from cache if present),
+   letterboxed to 16 x 3 x 256 x 256, values 0..1.
+
+2. Heatmaps:
+   h_now  = miss map at 330   (same as collision; still pre-fork)
+   h_1s   = miss map at 360   (still same as collision)
+   h_1_5s = miss map at 375   (already split)
+   h_2s   = miss map at 390   (miss is ~zeros, collision has ~0.96)
+
+3. ambiguity table says 1_5s and 2s are True (disagreed, t < 365).
+
+4. policy mean_target:
+   h_1_5s and h_2s are REPLACED with the average of collision and miss
+   maps at 375 and 390.
+   amb_1_5s = amb_2s = False  (we will train)
+   amb_1s stays False anyway
+
+5. Batch hits GPU. CollisionTeacher3:
+   backbone normalizes ImageNet, Giant tokens [1,2048,1408]
+   adapter -> Z_t [1,32,5,5]
+   decoder -> Hhat_now [1,5,5]
+   three residual heads -> Hhat_1s, Hhat_1_5s, Hhat_2s
+
+6. TeacherLoss:
+   L_now vs miss/collision-identical now map
+   L_1s vs map at 360
+   L_1_5s and L_2s vs COLLISION maps (the rewritten targets)
+   plus delta, FP, direction
+   maybe L_bg if miss_left/bg_01 at t=330 was recently in PairBuffer
+   wait: background pair is same OUTCOME different BG, so mate would
+   be miss_left/bg_01, not the collision clip.
+
+7. Backward through adapter/heads (and LoRA in phase B), not Giant
+   in phase A.
+
+8. Optimizer step. Checkpoint if this epoch's val selection is best.
+
+
+================================================================
+PART 14. FILES THIS GUIDE DOES NOT COVER
+================================================================
+
+Generated at runtime (gitignored), not source:
+
+  cache/manifest.jsonl
+  cache/splits.json
+  cache/frames/**/frames_uint8.npy
+  checkpoints/*.pt
+  logs/*.log  logs/train.jsonl
+  reports/*.json  reports/*.csv
+  visualizations/*.png
+  hf_cache/   (downloaded V-JEPA weights)
+
+The Blender dataset itself lives outside model_trial_3, under
+blender_sim/datasets/groups15_n400_s67_n400/.
+)

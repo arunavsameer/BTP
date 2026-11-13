@@ -1,0 +1,25 @@
+{
+  "model": "m5_multiscale",
+  "seed": 1005,
+  "epochs": 30,
+  "batch": 8,
+  "lr_student": 0.0003,
+  "decoder_hash_init": "77f78c8714667617",
+  "from": "random_student",
+  "no_test": true,
+  "params": {
+    "variant": "m5_multiscale",
+    "total": 1101084,
+    "trainable_now": 1053275,
+    "encoder": 881290,
+    "predictor": 34560,
+    "proj_1x1": 16512,
+    "aux_head": 0,
+    "recent": 112656,
+    "gate": 8257,
+    "decoder": 47809
+  },
+  "cpu_latency_ms": 52.794291521422565,
+  "lambda_decoder_reg": 0.01,
+  "grad_clip": 1.0
+}

@@ -16,6 +16,20 @@ def resolve_device(pref: str = "auto") -> str:
         return "cpu"
 
 
+def resolve_device_safe(pref: str = "auto") -> str:
+    """Like resolve_device, but fall back to CPU if CUDA is visible yet unusable (busy/exclusive)."""
+    import torch
+
+    device = resolve_device(pref)
+    if not device.startswith("cuda"):
+        return device
+    try:
+        torch.zeros(1, device=device)
+        return device
+    except Exception:
+        return "cpu"
+
+
 def select_amp_dtype(cfg, device: str):
     import torch
 

@@ -1,0 +1,66 @@
+{
+  "epoch": 15,
+  "variant": "S2",
+  "train": {
+    "L_gt": 0.02557482490869006,
+    "L_kd": 0.0446716538904002,
+    "L_fdec": 0.2795782013237476,
+    "L_total": 1.0870885610580445,
+    "latent_mse": 1.8493826365470887,
+    "latent_cosine": 0.7833456975221634
+  },
+  "n_steps": 100,
+  "timing": {
+    "dataloader_wait_sec": 0.045400967821478844,
+    "h2d_sec": 0.09037274401634932,
+    "forward_sec": 0.5437763314694166,
+    "backward_sec": 0.6533936951309443,
+    "optimizer_sec": 0.14457544218748808,
+    "train_total_sec": 1.5032115578651428
+  },
+  "decoder_trainable": false,
+  "decoder_hash": "77f78c8714667617",
+  "decoder_hash_unchanged": true,
+  "rgb_cache": {
+    "n_clips_decoded": 482,
+    "n_frames_stored": 7100,
+    "rgb_prepare_sec": 624.9065246023238,
+    "letterbox_at_prepare": true,
+    "stored_shape_sample": [
+      160,
+      160,
+      3
+    ],
+    "student_input_size": 160
+  },
+  "val": {
+    "stop_recall": 0.0,
+    "safe_recall": 1.0,
+    "threat_recall": 0.0,
+    "mse_gt": 0.020031171961369065,
+    "recall_at_5fa": 0.23454545454545456,
+    "ap_high": 0.09272622165177181,
+    "pre_fork_stop_recall": 0.0,
+    "post_fork_stop_recall": 0.0,
+    "teacher_hm_mae_mean": 0.05321310138749016,
+    "teacher_hm_mse_mean": 0.031318771445074264,
+    "teacher_tier_agreement": 0.5845588235294118,
+    "teacher_stop_agreement": 0.7328431372549019,
+    "teacher_safe_agreement": 0.5845588235294118,
+    "n": 816,
+    "pair_gap_mean": 0.020014313980937004,
+    "pair_gap_median": 0.015457133762538433,
+    "pair_gap_p90": 0.044419821351766586,
+    "pair_warning_flip_rate": 0.0,
+    "n_pairs_verified_evaluated": 398,
+    "n_rows_with_background_pair_id": 816,
+    "n_pair_anchor_keys_in_split": 408,
+    "n_pair_anchor_keys_complete": 408,
+    "n_verified_keys_supplied": 398,
+    "pair_metrics_unavailable_reason": null,
+    "latent_mse_mean": 2.3921977082888284,
+    "latent_cosine_mean": 0.7777731927002177
+  },
+  "dev_eval_sec": 1.2404277501627803,
+  "seconds": 2.743639308027923
+}

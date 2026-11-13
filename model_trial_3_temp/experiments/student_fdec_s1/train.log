@@ -1,0 +1,31 @@
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+{
+  "ok": true,
+  "summaries": {
+    "S1": {
+      "variant": "S1",
+      "elapsed_sec": 33.31416153907776,
+      "params": {
+        "variant": "S1",
+        "total_params": 475121,
+        "backbone_params": 409520,
+        "projection_params": 17792,
+        "decoder_params": 47809
+      },
+      "last_epoch": 15,
+      "gpu_mem": {
+        "allocated_mb": 3.90869140625,
+        "reserved_mb": 840.0,
+        "max_allocated_mb": 783.06103515625
+      }
+    }
+  }
+}

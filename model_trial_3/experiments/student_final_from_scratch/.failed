@@ -1,0 +1,10 @@
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 108, in main
+    out = run_training(
+      cfg,
+    ...<14 lines>...
+      flip_prob=flip_prob,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/train.py", line 313, in run_training
+    from collision_jepa3.evaluation.metrics import SAFE, STOP, THREAT
+ImportError: cannot import name 'THREAT' from 'collision_jepa3.evaluation.metrics' (/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/evaluation/metrics.py)

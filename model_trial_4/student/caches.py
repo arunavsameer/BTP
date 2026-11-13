@@ -7,6 +7,8 @@ from pathlib import Path
 
 import numpy as np
 
+from collision_jepa4.data.heatmap_annotations import load_heatmaps
+
 from .paths import OFFSETS_16
 
 SIZE = 256
@@ -78,3 +80,27 @@ class ParentTargetCache:
             "F_dec": np.asarray(self.F[i], dtype=np.float32),
             "H_teacher": np.asarray(self.H[i], dtype=np.float32),
         }
+
+
+class SpatialHeatmaps:
+    """Lazy per-clip 5×5 maps so G appear-weights can see h_now."""
+
+    def __init__(self, expected_frames: int = 450, grid: int = 5):
+        self.expected_frames = int(expected_frames)
+        self.grid = int(grid)
+        self._maps: dict[str, np.ndarray] = {}
+
+    def _load(self, clip_id: str, video_path: str) -> np.ndarray:
+        if clip_id in self._maps:
+            return self._maps[clip_id]
+        path = Path(video_path).parent / "spatial_annotations" / "spatial_annotations.json"
+        if not path.is_file():
+            raise FileNotFoundError(f"heatmap missing for {clip_id}: {path}")
+        maps = load_heatmaps(path, expected_frames=self.expected_frames, grid=self.grid)
+        self._maps[clip_id] = maps
+        return maps
+
+    def get_now(self, clip_id: str, video_path: str, frame: int) -> np.ndarray:
+        maps = self._load(clip_id, video_path)
+        t = min(max(int(frame), 0), int(maps.shape[0]) - 1)
+        return np.asarray(maps[t], dtype=np.float32)

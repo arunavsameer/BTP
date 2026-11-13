@@ -1,0 +1,109 @@
+{
+  "epoch": 6,
+  "train": {
+    "L_feat": 0.5090433805918146,
+    "L_cos": 0.21328169058029403,
+    "L_rel": 0.06526370135249285,
+    "L_mgd": 0.49418172088880385,
+    "L_dec_reg": 0.0,
+    "L_h": 0.05973960779224583,
+    "L_floor": 0.0006369870013559017,
+    "L_empty": 0.061088895689321576,
+    "L_total_base": 0.7746232334268156,
+    "L_total": 0.7746232334268156,
+    "cos": 0.6937329039371833,
+    "decoder_lr_mult": 0.0,
+    "decoder_lr": 0.0,
+    "decoder_grad_norm": 0.0,
+    "student_grad_norm": 0.309413925592217,
+    "decoder_drift_rms": 0.0,
+    "sec": 254.11650100164115,
+    "phase": "fixed"
+  },
+  "selection": {
+    "confusion_matrix": [
+      [
+        0,
+        12,
+        3582
+      ],
+      [
+        0,
+        0,
+        608
+      ],
+      [
+        0,
+        0,
+        918
+      ]
+    ],
+    "stop_recall": 1.0,
+    "safe_recall": 0.0,
+    "threat_recall": 0.0,
+    "stop_precision": 0.1797180892717306,
+    "safe_false_alarm_rate": 1.0,
+    "balanced_stop_safe_recall": 0.5,
+    "pre_fork_stop_recall": 1.0,
+    "post_fork_stop_recall": 1.0,
+    "n_prefork_stop": 572,
+    "n_postfork_stop": 346,
+    "gt_heatmap_mse": 0.06360753914077577,
+    "parent_heatmap_mae": 0.10013125453715474,
+    "recall_at_5fa": 0.3632575757575758,
+    "ap_high": 0.3018463598489325,
+    "both_background_correct_stop_rate": NaN,
+    "both_background_correct_safe_rate": NaN,
+    "n_verified_pairs": 0,
+    "n": 5120,
+    "operating": {
+      "recall_at_5fa": 0.3632575757575758,
+      "threshold_5fa": 0.7734375,
+      "fa_achieved_5fa": 0.05324315514993481,
+      "n_pos": 5280.0,
+      "n_neg": 122720.0,
+      "ap_high": 0.3018463598489325,
+      "mean_pred_gt80": 0.577844526953326,
+      "mse": 0.06360753931463232,
+      "recall_at_0.5": 0.5149621212121213,
+      "fa_at_0.5": 0.0773142112125163
+    },
+    "fdec_cosine": 0.681725800037384,
+    "fdec_l1": 0.7767260074615479,
+    "peaks": {
+      "gt_safe": {
+        "n": 3594,
+        "mean": 0.7846475897328882,
+        "p50": 0.78125,
+        "p10": 0.765625,
+        "p90": 0.79296875,
+        "lt_025": 0.0,
+        "lt_060": 0.00333889816360601
+      },
+      "gt_threat": {
+        "n": 608,
+        "mean": 0.7893130653782895,
+        "p50": 0.78125,
+        "p10": 0.7734375,
+        "p90": 0.79296875,
+        "lt_025": 0.0,
+        "lt_060": 0.0
+      },
+      "gt_stop": {
+        "n": 918,
+        "mean": 0.8433712894880174,
+        "p50": 0.7890625,
+        "p10": 0.7734375,
+        "p90": 0.99609375,
+        "lt_025": 0.0,
+        "lt_060": 0.0
+      },
+      "collapsed_stop_frac": 0.0,
+      "parent_correct_stop_recovery": 1.0,
+      "n_parent_correct_stop": 734
+    }
+  },
+  "clip_events": 3822,
+  "steps": 17010,
+  "peak_gpu_mem_gb": 0.921637888
+}

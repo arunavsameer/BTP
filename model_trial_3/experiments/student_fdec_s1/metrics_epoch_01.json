@@ -1,0 +1,64 @@
+{
+  "epoch": 1,
+  "variant": "S1",
+  "train": {
+    "L_gt": 0.03985824345749279,
+    "L_kd": 0.08202568201639224,
+    "L_fdec": 0.4118736883997917,
+    "L_total": 1.6117845702171325,
+    "latent_mse": 3.8522163701057432,
+    "latent_cosine": 0.3840526333451271
+  },
+  "n_steps": 100,
+  "timing": {
+    "dataloader_wait_sec": 0.04924958944320679,
+    "h2d_sec": 0.08664925489574671,
+    "forward_sec": 0.7133227530866861,
+    "backward_sec": 0.7912691948004067,
+    "optimizer_sec": 0.18152704881504178,
+    "train_total_sec": 1.8420867160893977
+  },
+  "decoder_trainable": false,
+  "rgb_cache": {
+    "n_clips_decoded": 482,
+    "n_frames_stored": 7100,
+    "rgb_prepare_sec": 774.3847670010291,
+    "letterbox_at_prepare": true,
+    "stored_shape_sample": [
+      160,
+      160,
+      3
+    ],
+    "student_input_size": 160
+  },
+  "val": {
+    "stop_recall": 0.0,
+    "safe_recall": 1.0,
+    "threat_recall": 0.0,
+    "mse_gt": 0.02066332255887306,
+    "recall_at_5fa": 0.06727272727272728,
+    "ap_high": 0.03466445217578476,
+    "pre_fork_stop_recall": 0.0,
+    "post_fork_stop_recall": 0.0,
+    "teacher_hm_mae_mean": 0.05573538224459352,
+    "teacher_hm_mse_mean": 0.03286379038474131,
+    "teacher_tier_agreement": 0.5845588235294118,
+    "teacher_stop_agreement": 0.7328431372549019,
+    "teacher_safe_agreement": 0.5845588235294118,
+    "n": 816,
+    "pair_gap_mean": 0.0009707646095193923,
+    "pair_gap_median": 0.0008206423372030258,
+    "pair_gap_p90": 0.001923976233229041,
+    "pair_warning_flip_rate": 0.0,
+    "n_pairs_verified_evaluated": 398,
+    "n_rows_with_background_pair_id": 816,
+    "n_pair_anchor_keys_in_split": 408,
+    "n_pair_anchor_keys_complete": 408,
+    "n_verified_keys_supplied": 398,
+    "pair_metrics_unavailable_reason": null,
+    "latent_mse_mean": 3.26135419513665,
+    "latent_cosine_mean": 0.6584640460855821
+  },
+  "dev_eval_sec": 2.424020850099623,
+  "seconds": 4.266107566189021
+}

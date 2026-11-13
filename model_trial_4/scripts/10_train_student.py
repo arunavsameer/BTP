@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """Train a Trial-4 student against the Trial-3 Pair-CF parent F_dec cache.
 
+Loss is two components with **fixed** weights:
+  1) L_feat: channel-normalized L1 vs cached parent F_dec
+  2) Trial-3 G heatmap recipe (appear / small-blob / STOP+SAFE hinge / blob / FP / dir)
+
+Component weights are constants (default feat_weight=1, heatmap_weight=1).
+
 Reads (never writes):
   - 256 RGB cache (shared_rgb_cache_256_v1)
   - parent_target_cache_v2 (F_dec / H_teacher / gt_1s)
   - Pair-CF checkpoint teacher_phase_a_best.pt (frozen decoder only)
+  - spatial_annotations.json for h_now (G appear weights)
 
 Writes only under model_trial_4/student_runs/<name>/.
 Does not import Trial-3 student code or touch Trial-3 checkpoints/logs.
@@ -35,9 +42,10 @@ sys.path.insert(0, str(ROOT))
 from collision_jepa4.training.optimizer import build_scheduler  # noqa: E402
 from collision_jepa4.utils.device import resolve_device, select_amp_dtype  # noqa: E402
 from collision_jepa4.config import Config  # noqa: E402
-from student.caches import ParentTargetCache, RGBCache256  # noqa: E402
+from collision_jepa4.losses import TeacherLoss  # noqa: E402
+from student.caches import ParentTargetCache, RGBCache256, SpatialHeatmaps  # noqa: E402
 from student.dataset import WinDS, collate  # noqa: E402
-from student.losses import latent_loss  # noqa: E402
+from student.losses import student_loss  # noqa: E402
 from student.metrics import collect, rank_checkpoint  # noqa: E402
 from student.model import StudentLatPairCF  # noqa: E402
 from student.parent import decoder_state_hash, load_parent_decoder  # noqa: E402
@@ -71,7 +79,9 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--integrity-only", action="store_true")
     parser.add_argument("--max-batches", type=int, default=0, help="If >0, cap train batches per epoch (local test).")
-    parser.add_argument("--run-name", default="lat_paircf_v1")
+    parser.add_argument("--run-name", default="feat_gheatmap_v2")
+    parser.add_argument("--feat-weight", type=float, default=1.0)
+    parser.add_argument("--heatmap-weight", type=float, default=1.0)
     parser.add_argument("--rgb-cache", default=None)
     parser.add_argument("--parent-cache", default=None)
     parser.add_argument("--parent-ckpt", default=None)
@@ -169,11 +179,12 @@ def main() -> None:
             return
 
         rgb = RGBCache256(rgb_root)
+        heatmaps = SpatialHeatmaps()
         mu = torch.tensor(ch_mu, dtype=torch.float32, device=device)
         sigma = torch.tensor(ch_sigma, dtype=torch.float32, device=device)
-        train_ds = WinDS(rows, train_ids, gt, rgb, parent)
-        sel_ds = WinDS(rows, sel_ids, gt, rgb, parent)
-        test_ds = WinDS(rows, test_ids, gt, rgb, parent)
+        train_ds = WinDS(rows, train_ids, gt, rgb, parent, heatmaps)
+        sel_ds = WinDS(rows, sel_ids, gt, rgb, parent, heatmaps)
+        test_ds = WinDS(rows, test_ids, gt, rgb, parent, heatmaps)
         train_loader = DataLoader(
             train_ds,
             batch_size=args.batch,
@@ -186,15 +197,16 @@ def main() -> None:
         test_loader = DataLoader(test_ds, batch_size=args.batch, shuffle=False, num_workers=min(2, args.num_workers), collate_fn=collate)
 
         enc_p = [p for p in model.encoder.parameters() if p.requires_grad]
-        pred_p = [p for p in model.predictor.parameters() if p.requires_grad]
-        opt = torch.optim.AdamW(
-            [
-                {"params": enc_p, "lr": 0.0003, "weight_decay": 1e-4},
-                {"params": pred_p, "lr": 0.0003, "weight_decay": 1e-4},
-            ]
-        )
+        opt = torch.optim.AdamW([{"params": enc_p, "lr": 0.0003, "weight_decay": 1e-4}])
         sch = build_scheduler(opt, args.epochs, 1e-6, warmup_epochs=5)
-        feat_w, cos_w, mgd_w, rel_w = 1.0, 0.2, 0.5, 0.2
+        heatmap_loss = TeacherLoss(cfg, device=device)
+        feat_w, heatmap_w = float(args.feat_weight), float(args.heatmap_weight)
+        log(f"fixed_weights feat_w={feat_w} heatmap_w={heatmap_w}")
+        use_cuda = str(device).startswith("cuda")
+        scaler = torch.amp.GradScaler("cuda", enabled=amp_dtype is torch.float16 and use_cuda)
+        autocast = (
+            torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_dtype is not None and use_cuda else nullcontext()
+        )
         (exp / "config.json").write_text(
             json.dumps(
                 {
@@ -202,10 +214,22 @@ def main() -> None:
                     "batch": args.batch,
                     "device": device,
                     "seed": args.seed,
+                    "latent": "L_feat_only",
+                    "heatmap": "trial3_G",
+                    "weights_mode": "constant",
                     "feat_weight": feat_w,
-                    "cos_weight": cos_w,
-                    "mgd_weight": mgd_w,
-                    "rel_weight": rel_w,
+                    "heatmap_weight": heatmap_w,
+                    "g_terms": {
+                        "appear_weight": cfg.get("loss.bce_appear_weight"),
+                        "small_blob_weight": cfg.get("loss.small_blob_weight"),
+                        "stop_hinge_weight": cfg.get("loss.stop_hinge_weight"),
+                        "safe_hinge_weight": cfg.get("loss.safe_hinge_weight"),
+                        "blob_bce_weight": cfg.get("loss.blob_bce_weight"),
+                        "close_weight": cfg.get("loss.close_weight"),
+                        "close_active": False,
+                        "false_positive_weight": cfg.get("loss.false_positive_weight"),
+                        "direction_weight": cfg.get("loss.direction_weight"),
+                    },
                     "decoder_hash": dec_h,
                     "rgb": str(rgb_root),
                     "parent": str(par_root),
@@ -220,12 +244,7 @@ def main() -> None:
         history = []
         best_rank = None
         best_ep = None
-        use_cuda = str(device).startswith("cuda")
-        scaler = torch.amp.GradScaler("cuda", enabled=amp_dtype is torch.float16 and use_cuda)
-        autocast = (
-            torch.autocast(device_type="cuda", dtype=amp_dtype) if amp_dtype is not None and use_cuda else nullcontext()
-        )
-        params = enc_p + pred_p
+        params = enc_p
         for ep in range(1, args.epochs + 1):
             model.train()
             t0 = time.perf_counter()
@@ -236,16 +255,14 @@ def main() -> None:
                 b = {k: v.to(device, non_blocking=True) if torch.is_tensor(v) else v for k, v in batch.items()}
                 with autocast:
                     out = model(b["clip"])
-                    loss, terms = latent_loss(
+                    loss, terms = student_loss(
                         out,
                         b,
-                        feat_w=feat_w,
-                        cos_w=cos_w,
-                        mgd_w=mgd_w,
-                        rel_w=rel_w,
                         mu=mu,
                         sigma=sigma,
-                        predictor=model.predictor,
+                        heatmap_loss=heatmap_loss,
+                        feat_weight=feat_w,
+                        heatmap_weight=heatmap_w,
                     )
                 scaler.scale(loss).backward()
                 scaler.unscale_(opt)
@@ -293,6 +310,12 @@ def main() -> None:
                 {
                     "epoch": ep,
                     "L_total": train_m["L_total"],
+                    "L_feat": train_m["L_feat"],
+                    "L_heatmap": train_m["L_heatmap"],
+                    "feat_weight": feat_w,
+                    "heatmap_weight": heatmap_w,
+                    "share_feat": train_m["share_feat"],
+                    "share_heatmap": train_m["share_heatmap"],
                     "sel_stop": sel_m["stop_recall"],
                     "sel_safe": sel_m["safe_recall"],
                     "sel_post_stop": sel_m["post_fork_stop_recall"],
@@ -301,6 +324,8 @@ def main() -> None:
             )
             log(
                 f"epoch {ep} L={train_m['L_total']:.4f} feat={train_m['L_feat']:.4f} "
+                f"hm={train_m['L_heatmap']:.4f} share_f={100 * train_m['share_feat']:.1f}% "
+                f"share_h={100 * train_m['share_heatmap']:.1f}% "
                 f"STOP={sel_m['stop_recall']:.3f} SAFE={sel_m['safe_recall']:.3f} "
                 f"post={sel_m['post_fork_stop_recall']:.3f} fcos={sel_m['fdec_cosine']:.3f} sec={train_m['sec']:.1f}"
             )

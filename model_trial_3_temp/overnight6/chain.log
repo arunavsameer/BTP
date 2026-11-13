@@ -1,0 +1,9 @@
+2026-11-12T09:44:19+05:30 chain start device=cuda:0 epochs=30 batch=8
+2026-11-12T09:44:42+05:30 ALL_SMOKE_OK
+2026-11-12T09:44:42+05:30 START model 1
+2026-11-12T12:54:37+05:30 OK model 1 exit=0
+2026-11-12T12:54:37+05:30 START model 2
+2026-11-12T15:52:22+05:30 OK model 2 exit=0
+2026-11-12T15:52:22+05:30 START model 3
+2026-11-12T18:53:30+05:30 STOP model 3 (process already gone; last completed epoch 21); START model 4 only
+2026-11-12T21:54:17+05:30 STOP model 4 (last completed epoch 26); START model 5

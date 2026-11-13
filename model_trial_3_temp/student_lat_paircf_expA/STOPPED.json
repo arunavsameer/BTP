@@ -1,0 +1,9 @@
+{
+  "stopped": true,
+  "reason": "user requested stop",
+  "last_finished_epoch": 5,
+  "n_epoch_checkpoints": 5,
+  "best": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/student_lat_paircf_expA/checkpoint_best.pt",
+  "last": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp/student_lat_paircf_expA/checkpoint_last.pt",
+  "source_epoch38_unmodified": true
+}

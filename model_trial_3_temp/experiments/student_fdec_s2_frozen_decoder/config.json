@@ -1,0 +1,40 @@
+{
+  "variant": "S2",
+  "parent_decoder_frozen_all_epochs": true,
+  "init_from": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/experiments/student_fdec_s1/checkpoint_initial.pt",
+  "eta_fdec": 3.7169490058702985,
+  "alpha_kd": 0.5,
+  "lr": 0.0003,
+  "batch": 8,
+  "seed": 1337,
+  "epochs": 15,
+  "frame_offsets": [
+    -90,
+    -66,
+    -42,
+    -12,
+    0
+  ],
+  "pipeline_version": "optimized_v2",
+  "num_workers": 2,
+  "s1_reference": {
+    "decoder_unfreeze_epoch": 3,
+    "eta_fdec": 3.7169490058702985
+  },
+  "total_params": 475121,
+  "backbone_params": 409520,
+  "projection_params": 17792,
+  "decoder_params": 47809,
+  "rgb_prepare": {
+    "n_clips_decoded": 482,
+    "n_frames_stored": 7100,
+    "rgb_prepare_sec": 624.9065246023238,
+    "letterbox_at_prepare": true,
+    "stored_shape_sample": [
+      160,
+      160,
+      3
+    ],
+    "student_input_size": 160
+  }
+}

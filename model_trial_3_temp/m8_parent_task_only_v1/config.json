@@ -1,0 +1,30 @@
+{
+  "model": 8,
+  "seed": 1001,
+  "decoder_hash_init": "77f78c8714667617",
+  "student_init_hash": "4bc32534cb03b090",
+  "from": "random_student",
+  "no_test": true,
+  "S_task": null,
+  "S_latent": null,
+  "task_weights": {
+    "L_1s": 1.0,
+    "L_blob": 0.35,
+    "L_stop_hinge": 1.0,
+    "L_safe_hinge": 0.5,
+    "L_FP": 0.1,
+    "L_dir": 0.05
+  },
+  "params": {
+    "variant": "m1_stop_floor",
+    "total": 980171,
+    "trainable_now": 932362,
+    "encoder": 881290,
+    "predictor": 34560,
+    "proj_1x1": 16512,
+    "aux_head": 0,
+    "recent": 0,
+    "gate": 0,
+    "decoder": 47809
+  }
+}

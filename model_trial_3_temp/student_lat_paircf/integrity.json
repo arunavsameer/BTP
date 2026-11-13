@@ -1,0 +1,88 @@
+{
+  "rgb_complete": true,
+  "parent_complete": true,
+  "windows": {
+    "train": 22680,
+    "selection": 5120,
+    "test": 5120
+  },
+  "offsets": [
+    -90,
+    -84,
+    -78,
+    -72,
+    -66,
+    -60,
+    -54,
+    -48,
+    -42,
+    -36,
+    -30,
+    -24,
+    -18,
+    -12,
+    -6,
+    0
+  ],
+  "rgb_size": 256,
+  "F_dec_shape": [
+    128,
+    16,
+    16
+  ],
+  "H_teacher_shape": [
+    5,
+    5
+  ],
+  "decoder_hash": "77f78c8714667617",
+  "parent_ckpt": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt",
+  "replay": {
+    "n": 128,
+    "max_abs": 0.00036835670471191406,
+    "mean_abs": 5.716937226907248e-05,
+    "ok": true
+  },
+  "z_target_present": true,
+  "z_l1_used": false,
+  "z_note": "Z_t.npy present but not a function of cached F_dec (Z is adapter bottleneck of unwhitened fine; F_dec is task-whitened). Omitting Z L1.",
+  "source_hashes": {
+    "encoder.py": "df99d9f735c7b483",
+    "student.py": "f2ccfa45b4709419",
+    "loss.py": "6a4912cfa30034d7",
+    "parent_ckpt": "f8f9dacda7c18fe6"
+  },
+  "forbidden_weights_loaded": [],
+  "inference_tensor": "encoder F_ctx [B,128,16,16] \u2192 Pair-CF decoder (no bottleneck/LN/task_whiten/close)",
+  "train_supervised_tensor": "same F_ctx",
+  "channel_stats_n": 4000,
+  "param_audit": {
+    "total": 963659,
+    "trainable": 915850,
+    "frozen": 47809,
+    "encoder": 881290,
+    "predictor": 34560,
+    "decoder": 47809
+  },
+  "recipe": {
+    "optimizer": "AdamW",
+    "encoder_lr": 0.0003,
+    "predictor_lr": 0.0003,
+    "weight_decay": 0.0001,
+    "warmup_epochs": 5,
+    "min_lr": 1e-06,
+    "scheduler": "linear_warmup+cosine",
+    "epochs": 100,
+    "batch": 8,
+    "grad_clip": 1.0,
+    "feat_weight": 1.0,
+    "cos_weight": 0.2,
+    "mgd_weight": 0.5,
+    "rel_weight": 0.2,
+    "z_weight": 0.0,
+    "h_weight": 0.0,
+    "augmentation": "none (historical random_horizontal_flip=false)",
+    "upsample_repeats": 0,
+    "energy_alpha": 0.0,
+    "source": "model_trial_3/student_model/submit_student_lat.sh"
+  }
+}

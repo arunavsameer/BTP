@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+cache/
+checkpoints/
+logs/
+reports/
+visualizations/
+hf_cache/
+*.pt
+*.npy
+*.npz
+*.mp4

@@ -1,0 +1,4 @@
+start m6_taskaware seed=1006 device=cuda:0 hash=77f78c8714667617 params={'variant': 'm6_taskaware', 'total': 988622, 'trainable_now': 940813, 'encoder': 881290, 'predictor': 34560, 'proj_1x1': 16512, 'aux_head': 8451, 'recent': 0, 'gate': 0, 'decoder': 47809} cpu_ms=None
+smoke ep=1 device=cuda:0 unfreeze=False g_dec=0.0 drift=0.0 train=2.2103059887886047
+start m6_taskaware seed=1006 device=cuda:0 hash=77f78c8714667617 params={'variant': 'm6_taskaware', 'total': 988622, 'trainable_now': 940813, 'encoder': 881290, 'predictor': 34560, 'proj_1x1': 16512, 'aux_head': 8451, 'recent': 0, 'gate': 0, 'decoder': 47809} cpu_ms=None
+smoke ep=1 device=cuda:0 unfreeze=False g_dec=0.0 drift=0.0 train=2.2103059887886047

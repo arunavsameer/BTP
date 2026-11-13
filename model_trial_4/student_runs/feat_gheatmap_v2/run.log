@@ -1,0 +1,21 @@
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cuda params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+fixed_weights feat_w=1.0 heatmap_w=1.0
+epoch 1 L=1.6691 feat=0.6350 hm=1.0342 share_f=41.6% share_h=58.4% STOP=0.532 SAFE=0.048 post=0.555 fcos=0.661 sec=271.0
+epoch 2 L=1.5826 feat=0.5922 hm=0.9904 share_f=41.3% share_h=58.7% STOP=0.458 SAFE=0.000 post=0.422 fcos=0.687 sec=220.5
+epoch 3 L=1.5455 feat=0.5816 hm=0.9639 share_f=41.2% share_h=58.8% STOP=0.009 SAFE=0.000 post=0.000 fcos=0.691 sec=207.2
+epoch 4 L=1.5104 feat=0.5760 hm=0.9344 share_f=41.2% share_h=58.8% STOP=0.631 SAFE=0.000 post=0.751 fcos=0.683 sec=205.4
+epoch 5 L=1.4780 feat=0.5737 hm=0.9043 share_f=42.3% share_h=57.7% STOP=0.439 SAFE=0.074 post=0.572 fcos=0.684 sec=203.3
+epoch 6 L=1.3953 feat=0.5661 hm=0.8292 share_f=45.8% share_h=54.2% STOP=0.326 SAFE=0.029 post=0.471 fcos=0.697 sec=208.9
+epoch 7 L=1.2811 feat=0.5536 hm=0.7275 share_f=49.1% share_h=50.9% STOP=0.365 SAFE=0.465 post=0.514 fcos=0.722 sec=204.6
+epoch 8 L=1.1975 feat=0.5430 hm=0.6546 share_f=51.9% share_h=48.1% STOP=0.383 SAFE=0.710 post=0.549 fcos=0.729 sec=205.1
+epoch 9 L=1.1226 feat=0.5352 hm=0.5874 share_f=54.4% share_h=45.6% STOP=0.381 SAFE=0.790 post=0.598 fcos=0.737 sec=204.0
+epoch 10 L=1.0619 feat=0.5286 hm=0.5334 share_f=56.7% share_h=43.3% STOP=0.397 SAFE=0.688 post=0.604 fcos=0.736 sec=199.4
+epoch 11 L=1.0120 feat=0.5228 hm=0.4892 share_f=58.3% share_h=41.7% STOP=0.472 SAFE=0.695 post=0.618 fcos=0.742 sec=199.3
+epoch 12 L=0.9618 feat=0.5170 hm=0.4448 share_f=60.6% share_h=39.4% STOP=0.363 SAFE=0.806 post=0.549 fcos=0.755 sec=203.8
+epoch 13 L=0.9229 feat=0.5126 hm=0.4103 share_f=62.0% share_h=38.0% STOP=0.464 SAFE=0.852 post=0.694 fcos=0.754 sec=202.9
+epoch 14 L=0.8979 feat=0.5084 hm=0.3895 share_f=63.0% share_h=37.0% STOP=0.425 SAFE=0.845 post=0.592 fcos=0.760 sec=205.0
+epoch 15 L=0.8664 feat=0.5044 hm=0.3620 share_f=64.3% share_h=35.7% STOP=0.454 SAFE=0.811 post=0.645 fcos=0.762 sec=204.3
+epoch 16 L=0.8413 feat=0.5015 hm=0.3399 share_f=65.4% share_h=34.6% STOP=0.392 SAFE=0.861 post=0.587 fcos=0.764 sec=252.4

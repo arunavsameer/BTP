@@ -1,0 +1,70 @@
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cpu params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+integrity-only OK
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cpu params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cuda:0 params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cuda params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+epoch 1 L=0.8950 feat=0.5615 STOP=0.000 SAFE=1.000 post=0.000 fcos=0.749 sec=197.0
+epoch 2 L=0.8545 feat=0.5388 STOP=0.000 SAFE=1.000 post=0.000 fcos=0.760 sec=195.6
+epoch 3 L=0.8322 feat=0.5241 STOP=0.000 SAFE=0.942 post=0.000 fcos=0.773 sec=202.1
+epoch 4 L=0.7977 feat=0.5026 STOP=0.365 SAFE=0.910 post=0.509 fcos=0.790 sec=187.8
+epoch 5 L=0.7652 feat=0.4815 STOP=0.389 SAFE=0.901 post=0.555 fcos=0.807 sec=188.6
+epoch 6 L=0.7407 feat=0.4654 STOP=0.473 SAFE=0.924 post=0.653 fcos=0.811 sec=188.5
+epoch 7 L=0.7198 feat=0.4525 STOP=0.439 SAFE=0.907 post=0.566 fcos=0.818 sec=186.9
+epoch 8 L=0.7040 feat=0.4430 STOP=0.456 SAFE=0.901 post=0.572 fcos=0.818 sec=188.4
+epoch 9 L=0.6924 feat=0.4361 STOP=0.398 SAFE=0.945 post=0.491 fcos=0.818 sec=188.0
+epoch 10 L=0.6829 feat=0.4304 STOP=0.525 SAFE=0.917 post=0.653 fcos=0.823 sec=188.4
+epoch 11 L=0.6751 feat=0.4258 STOP=0.578 SAFE=0.876 post=0.723 fcos=0.825 sec=188.5
+epoch 12 L=0.6684 feat=0.4218 STOP=0.483 SAFE=0.923 post=0.633 fcos=0.827 sec=195.2
+epoch 13 L=0.6627 feat=0.4184 STOP=0.527 SAFE=0.896 post=0.668 fcos=0.826 sec=191.6
+epoch 14 L=0.6576 feat=0.4153 STOP=0.609 SAFE=0.874 post=0.757 fcos=0.823 sec=201.5
+epoch 15 L=0.6538 feat=0.4130 STOP=0.659 SAFE=0.851 post=0.795 fcos=0.826 sec=191.3
+epoch 16 L=0.6500 feat=0.4107 STOP=0.570 SAFE=0.885 post=0.702 fcos=0.826 sec=189.5
+epoch 17 L=0.6464 feat=0.4086 STOP=0.535 SAFE=0.910 post=0.636 fcos=0.828 sec=191.2
+epoch 18 L=0.6439 feat=0.4070 STOP=0.569 SAFE=0.892 post=0.688 fcos=0.827 sec=192.9
+epoch 19 L=0.6408 feat=0.4052 STOP=0.556 SAFE=0.897 post=0.685 fcos=0.828 sec=191.6
+epoch 20 L=0.6384 feat=0.4037 STOP=0.586 SAFE=0.888 post=0.702 fcos=0.827 sec=196.7
+epoch 21 L=0.6361 feat=0.4023 STOP=0.513 SAFE=0.902 post=0.642 fcos=0.829 sec=188.6
+epoch 22 L=0.6337 feat=0.4009 STOP=0.548 SAFE=0.891 post=0.671 fcos=0.826 sec=195.9
+epoch 23 L=0.6321 feat=0.3999 STOP=0.557 SAFE=0.895 post=0.731 fcos=0.826 sec=189.1
+epoch 24 L=0.6303 feat=0.3988 STOP=0.549 SAFE=0.901 post=0.685 fcos=0.827 sec=188.8
+epoch 25 L=0.6287 feat=0.3978 STOP=0.552 SAFE=0.894 post=0.673 fcos=0.829 sec=195.5
+epoch 26 L=0.6270 feat=0.3968 STOP=0.609 SAFE=0.886 post=0.754 fcos=0.824 sec=198.6
+epoch 27 L=0.6256 feat=0.3959 STOP=0.602 SAFE=0.886 post=0.754 fcos=0.828 sec=206.0
+epoch 28 L=0.6239 feat=0.3949 STOP=0.552 SAFE=0.900 post=0.679 fcos=0.828 sec=199.1
+epoch 29 L=0.6228 feat=0.3942 STOP=0.568 SAFE=0.890 post=0.708 fcos=0.827 sec=195.8
+epoch 30 L=0.6213 feat=0.3933 STOP=0.593 SAFE=0.884 post=0.723 fcos=0.826 sec=192.7
+epoch 31 L=0.6201 feat=0.3926 STOP=0.577 SAFE=0.885 post=0.708 fcos=0.827 sec=195.3
+epoch 32 L=0.6190 feat=0.3919 STOP=0.566 SAFE=0.890 post=0.699 fcos=0.825 sec=192.7
+epoch 33 L=0.6177 feat=0.3912 STOP=0.542 SAFE=0.903 post=0.691 fcos=0.827 sec=191.9
+epoch 34 L=0.6165 feat=0.3904 STOP=0.570 SAFE=0.888 post=0.691 fcos=0.824 sec=192.8
+epoch 35 L=0.6156 feat=0.3898 STOP=0.528 SAFE=0.899 post=0.630 fcos=0.824 sec=189.6
+epoch 36 L=0.6144 feat=0.3891 STOP=0.565 SAFE=0.890 post=0.699 fcos=0.825 sec=191.5
+epoch 37 L=0.6135 feat=0.3886 STOP=0.594 SAFE=0.876 post=0.725 fcos=0.825 sec=187.5
+epoch 38 L=0.6127 feat=0.3880 STOP=0.570 SAFE=0.885 post=0.697 fcos=0.825 sec=185.7
+epoch 39 L=0.6117 feat=0.3874 STOP=0.593 SAFE=0.886 post=0.746 fcos=0.825 sec=184.9
+epoch 40 L=0.6106 feat=0.3868 STOP=0.564 SAFE=0.892 post=0.705 fcos=0.824 sec=186.2
+epoch 41 L=0.6098 feat=0.3862 STOP=0.577 SAFE=0.879 post=0.714 fcos=0.824 sec=181.8
+epoch 42 L=0.6090 feat=0.3858 STOP=0.587 SAFE=0.880 post=0.737 fcos=0.822 sec=180.8
+epoch 43 L=0.6080 feat=0.3852 STOP=0.585 SAFE=0.875 post=0.737 fcos=0.824 sec=183.9
+epoch 44 L=0.6073 feat=0.3847 STOP=0.565 SAFE=0.893 post=0.694 fcos=0.823 sec=183.9
+epoch 45 L=0.6065 feat=0.3842 STOP=0.573 SAFE=0.886 post=0.708 fcos=0.823 sec=187.9
+epoch 46 L=0.6058 feat=0.3838 STOP=0.554 SAFE=0.893 post=0.685 fcos=0.822 sec=187.7
+epoch 47 L=0.6050 feat=0.3833 STOP=0.570 SAFE=0.892 post=0.705 fcos=0.822 sec=199.1
+epoch 48 L=0.6041 feat=0.3827 STOP=0.587 SAFE=0.885 post=0.728 fcos=0.822 sec=191.3
+epoch 49 L=0.6034 feat=0.3823 STOP=0.577 SAFE=0.885 post=0.720 fcos=0.822 sec=192.8
+epoch 50 L=0.6027 feat=0.3819 STOP=0.565 SAFE=0.888 post=0.688 fcos=0.822 sec=194.7
+epoch 51 L=0.6021 feat=0.3815 STOP=0.578 SAFE=0.886 post=0.720 fcos=0.822 sec=191.5
+epoch 52 L=0.6013 feat=0.3810 STOP=0.557 SAFE=0.891 post=0.699 fcos=0.821 sec=188.1
+epoch 53 L=0.6007 feat=0.3807 STOP=0.592 SAFE=0.886 post=0.746 fcos=0.820 sec=187.4

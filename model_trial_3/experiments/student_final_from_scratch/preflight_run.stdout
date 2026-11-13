@@ -1,0 +1,42 @@
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1102.527915192768, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 80, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 169, in run_preflight
+    flip = flip_symmetry_check(frame_store, rows)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 57, in flip_symmetry_check
+    fr = frame_store.get(cid, t)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/fdec_pilot_dataset.py", line 124, in get
+    raise KeyError(f"missing frame {key}")
+KeyError: "missing frame ('sample_0061_periph_ped_cut/collision/bg_00', 198)"
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 146, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 80, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 169, in run_preflight
+    flip = flip_symmetry_check(frame_store, rows)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 57, in flip_symmetry_check
+    fr = frame_store.get(cid, t)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/fdec_pilot_dataset.py", line 124, in get
+    raise KeyError(f"missing frame {key}")
+KeyError: "missing frame ('sample_0061_periph_ped_cut/collision/bg_00', 198)"

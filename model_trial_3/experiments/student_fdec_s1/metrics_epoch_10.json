@@ -1,0 +1,35 @@
+{
+  "epoch": 10,
+  "variant": "S1",
+  "train": {
+    "L_gt": 0.024830553360807243,
+    "L_kd": 0.04478338058572263,
+    "L_fdec": 0.2832147553563118,
+    "L_total": 1.0999170368909836,
+    "latent_mse": 1.8856280362606048,
+    "latent_cosine": 0.778870450258255
+  },
+  "n_steps": 100,
+  "timing": {
+    "dataloader_wait_sec": 0.046353737358003855,
+    "h2d_sec": 0.08793542673811316,
+    "forward_sec": 0.570335787255317,
+    "backward_sec": 0.6899200524203479,
+    "optimizer_sec": 0.18425145605579019,
+    "train_total_sec": 1.6032504430040717
+  },
+  "decoder_trainable": true,
+  "rgb_cache": {
+    "n_clips_decoded": 482,
+    "n_frames_stored": 7100,
+    "rgb_prepare_sec": 774.3847670010291,
+    "letterbox_at_prepare": true,
+    "stored_shape_sample": [
+      160,
+      160,
+      3
+    ],
+    "student_input_size": 160
+  },
+  "seconds": 1.6032504430040717
+}

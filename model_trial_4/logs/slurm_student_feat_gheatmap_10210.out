@@ -1,0 +1,151 @@
+=== SLURM job 10210 feat_gheatmap_v1 on DGX2 ===
+Friday 13 November 2026 03:49:59 AM IST
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-5b093adc-8df2-dad3-74e1-20d7bd34809f)
+{
+  "ok": true,
+  "device": "cpu",
+  "parent_ckpt": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt",
+  "decoder_hash": "77f78c8714667617",
+  "expected_hash": "77f78c8714667617",
+  "hash_ok": true,
+  "param_audit": {
+    "total": 963659,
+    "trainable": 915850,
+    "frozen": 47809,
+    "encoder": 881290,
+    "predictor": 34560,
+    "decoder": 47809
+  },
+  "encoder_got_grad": true,
+  "decoder_got_grad": false,
+  "loss_terms": {
+    "L_feat": 1.774476170539856,
+    "L_heatmap": 3.854339599609375,
+    "L_feat_contrib": 0.5,
+    "L_heatmap_contrib": 0.5,
+    "share_feat": 0.5,
+    "share_heatmap": 0.5,
+    "L_total": 1.0,
+    "L_1s": 1.8861669301986694,
+    "L_blob": 3.884619951248169,
+    "L_stop_hinge": 0.6022622585296631,
+    "L_safe_hinge": 0.0,
+    "L_close": 0.0,
+    "L_FP": 0.0,
+    "L_dir": 0.12586981058120728,
+    "L_bg": 0.0
+  },
+  "has_L_feat": true,
+  "has_L_heatmap": true,
+  "no_L_cos": true,
+  "no_L_mgd": true,
+  "trial3_untouched": true
+}
+smoke OK
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cuda params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+epoch 1 L=0.9671 feat=0.6269 hm=1.0267 share_f=52.9% share_h=47.1% STOP=0.834 SAFE=0.000 post=0.913 fcos=0.648 sec=209.5
+epoch 2 L=0.9978 feat=0.5912 hm=0.9563 share_f=52.7% share_h=47.3% STOP=0.834 SAFE=0.000 post=0.890 fcos=0.661 sec=208.4
+epoch 3 L=0.9986 feat=0.5839 hm=0.9158 share_f=52.0% share_h=48.0% STOP=0.936 SAFE=0.000 post=0.931 fcos=0.664 sec=207.2
+epoch 4 L=0.9996 feat=0.5776 hm=0.9048 share_f=51.6% share_h=48.4% STOP=0.817 SAFE=0.000 post=0.902 fcos=0.662 sec=207.2
+epoch 5 L=0.9983 feat=0.5732 hm=0.8852 share_f=51.7% share_h=48.3% STOP=0.607 SAFE=0.000 post=0.662 fcos=0.643 sec=207.5
+epoch 6 L=0.9978 feat=0.5696 hm=0.8399 share_f=52.6% share_h=47.4% STOP=0.349 SAFE=0.132 post=0.483 fcos=0.659 sec=207.8
+epoch 7 L=0.9974 feat=0.5550 hm=0.7438 share_f=54.1% share_h=45.9% STOP=0.313 SAFE=0.410 post=0.503 fcos=0.689 sec=208.2
+epoch 8 L=0.9956 feat=0.5422 hm=0.6645 share_f=55.3% share_h=44.7% STOP=0.388 SAFE=0.609 post=0.538 fcos=0.713 sec=207.6
+epoch 9 L=0.9962 feat=0.5354 hm=0.5886 share_f=55.7% share_h=44.3% STOP=0.364 SAFE=0.661 post=0.474 fcos=0.715 sec=206.7
+epoch 10 L=0.9967 feat=0.5293 hm=0.5245 share_f=56.5% share_h=43.5% STOP=0.450 SAFE=0.717 post=0.592 fcos=0.721 sec=208.4
+epoch 11 L=0.9966 feat=0.5238 hm=0.4767 share_f=56.7% share_h=43.3% STOP=0.459 SAFE=0.547 post=0.546 fcos=0.729 sec=207.2
+epoch 12 L=0.9963 feat=0.5191 hm=0.4389 share_f=57.4% share_h=42.6% STOP=0.379 SAFE=0.644 post=0.483 fcos=0.738 sec=209.1
+epoch 13 L=0.9955 feat=0.5159 hm=0.3980 share_f=57.6% share_h=42.4% STOP=0.332 SAFE=0.880 post=0.445 fcos=0.745 sec=208.1
+epoch 14 L=0.9971 feat=0.5130 hm=0.3759 share_f=57.5% share_h=42.5% STOP=0.380 SAFE=0.844 post=0.486 fcos=0.747 sec=207.1
+epoch 15 L=0.9969 feat=0.5104 hm=0.3544 share_f=57.9% share_h=42.1% STOP=0.394 SAFE=0.809 post=0.491 fcos=0.745 sec=208.3
+epoch 16 L=0.9965 feat=0.5082 hm=0.3380 share_f=58.0% share_h=42.0% STOP=0.321 SAFE=0.862 post=0.436 fcos=0.755 sec=208.5
+epoch 17 L=0.9957 feat=0.5059 hm=0.3181 share_f=58.0% share_h=42.0% STOP=0.369 SAFE=0.844 post=0.520 fcos=0.754 sec=207.7
+epoch 18 L=0.9955 feat=0.5038 hm=0.3049 share_f=58.2% share_h=41.8% STOP=0.337 SAFE=0.867 post=0.477 fcos=0.756 sec=206.7
+epoch 19 L=0.9969 feat=0.5022 hm=0.2897 share_f=57.8% share_h=42.2% STOP=0.358 SAFE=0.880 post=0.457 fcos=0.761 sec=207.3
+epoch 20 L=0.9992 feat=0.5003 hm=0.2860 share_f=58.1% share_h=41.9% STOP=0.382 SAFE=0.793 post=0.468 fcos=0.759 sec=207.3
+epoch 21 L=0.9952 feat=0.4988 hm=0.2803 share_f=58.3% share_h=41.7% STOP=0.329 SAFE=0.901 post=0.451 fcos=0.766 sec=206.7
+epoch 22 L=0.9983 feat=0.4971 hm=0.2661 share_f=58.4% share_h=41.6% STOP=0.359 SAFE=0.896 post=0.465 fcos=0.765 sec=207.7
+epoch 23 L=0.9967 feat=0.4957 hm=0.2580 share_f=58.2% share_h=41.8% STOP=0.355 SAFE=0.845 post=0.486 fcos=0.764 sec=206.7
+epoch 24 L=0.9965 feat=0.4941 hm=0.2562 share_f=58.4% share_h=41.6% STOP=0.364 SAFE=0.884 post=0.471 fcos=0.769 sec=207.0
+epoch 25 L=0.9977 feat=0.4926 hm=0.2516 share_f=58.1% share_h=41.9% STOP=0.376 SAFE=0.862 post=0.497 fcos=0.769 sec=206.8
+epoch 26 L=0.9971 feat=0.4911 hm=0.2441 share_f=58.4% share_h=41.6% STOP=0.319 SAFE=0.898 post=0.428 fcos=0.771 sec=208.2
+epoch 27 L=0.9971 feat=0.4894 hm=0.2424 share_f=58.6% share_h=41.4% STOP=0.356 SAFE=0.898 post=0.457 fcos=0.775 sec=208.2
+epoch 28 L=0.9977 feat=0.4879 hm=0.2339 share_f=58.5% share_h=41.5% STOP=0.261 SAFE=0.933 post=0.355 fcos=0.775 sec=207.1
+epoch 29 L=0.9976 feat=0.4869 hm=0.2322 share_f=58.5% share_h=41.5% STOP=0.333 SAFE=0.917 post=0.448 fcos=0.775 sec=206.8
+epoch 30 L=0.9964 feat=0.4852 hm=0.2266 share_f=58.4% share_h=41.6% STOP=0.337 SAFE=0.887 post=0.434 fcos=0.778 sec=208.1
+epoch 31 L=0.9971 feat=0.4837 hm=0.2204 share_f=58.4% share_h=41.6% STOP=0.347 SAFE=0.913 post=0.451 fcos=0.776 sec=206.3
+epoch 32 L=0.9974 feat=0.4823 hm=0.2206 share_f=58.3% share_h=41.7% STOP=0.333 SAFE=0.912 post=0.434 fcos=0.781 sec=206.9
+epoch 33 L=0.9976 feat=0.4810 hm=0.2194 share_f=58.6% share_h=41.4% STOP=0.289 SAFE=0.941 post=0.405 fcos=0.781 sec=206.0
+epoch 34 L=0.9970 feat=0.4799 hm=0.2199 share_f=58.5% share_h=41.5% STOP=0.370 SAFE=0.880 post=0.497 fcos=0.780 sec=206.4
+epoch 35 L=0.9972 feat=0.4786 hm=0.2105 share_f=58.3% share_h=41.7% STOP=0.304 SAFE=0.944 post=0.419 fcos=0.784 sec=206.4
+epoch 36 L=0.9985 feat=0.4774 hm=0.2079 share_f=58.0% share_h=42.0% STOP=0.334 SAFE=0.906 post=0.460 fcos=0.782 sec=206.7
+epoch 37 L=0.9950 feat=0.4759 hm=0.2111 share_f=59.1% share_h=40.9% STOP=0.340 SAFE=0.913 post=0.460 fcos=0.784 sec=206.6
+epoch 38 L=1.0015 feat=0.4749 hm=0.2084 share_f=58.3% share_h=41.7% STOP=0.351 SAFE=0.933 post=0.471 fcos=0.786 sec=208.4
+epoch 39 L=0.9971 feat=0.4737 hm=0.2028 share_f=58.3% share_h=41.7% STOP=0.278 SAFE=0.949 post=0.410 fcos=0.787 sec=206.6
+epoch 40 L=0.9969 feat=0.4726 hm=0.2041 share_f=58.7% share_h=41.3% STOP=0.322 SAFE=0.927 post=0.454 fcos=0.787 sec=207.6
+epoch 41 L=0.9972 feat=0.4714 hm=0.2016 share_f=58.9% share_h=41.1% STOP=0.351 SAFE=0.899 post=0.439 fcos=0.787 sec=206.6
+epoch 42 L=0.9970 feat=0.4703 hm=0.1986 share_f=58.5% share_h=41.5% STOP=0.346 SAFE=0.922 post=0.471 fcos=0.788 sec=206.8
+epoch 43 L=0.9993 feat=0.4693 hm=0.1992 share_f=58.7% share_h=41.3% STOP=0.303 SAFE=0.939 post=0.413 fcos=0.788 sec=207.1
+epoch 44 L=0.9986 feat=0.4683 hm=0.1932 share_f=58.6% share_h=41.4% STOP=0.315 SAFE=0.926 post=0.425 fcos=0.788 sec=207.1
+epoch 45 L=0.9968 feat=0.4671 hm=0.1935 share_f=58.8% share_h=41.2% STOP=0.317 SAFE=0.932 post=0.448 fcos=0.786 sec=206.2
+epoch 46 L=0.9980 feat=0.4660 hm=0.1921 share_f=58.4% share_h=41.6% STOP=0.289 SAFE=0.940 post=0.416 fcos=0.789 sec=206.8
+epoch 47 L=0.9983 feat=0.4650 hm=0.1920 share_f=58.4% share_h=41.6% STOP=0.303 SAFE=0.947 post=0.431 fcos=0.790 sec=207.6
+epoch 48 L=0.9978 feat=0.4640 hm=0.1894 share_f=58.8% share_h=41.2% STOP=0.333 SAFE=0.924 post=0.454 fcos=0.791 sec=205.9
+epoch 49 L=0.9988 feat=0.4630 hm=0.1892 share_f=58.5% share_h=41.5% STOP=0.341 SAFE=0.932 post=0.474 fcos=0.789 sec=205.6
+epoch 50 L=0.9962 feat=0.4620 hm=0.1883 share_f=58.7% share_h=41.3% STOP=0.296 SAFE=0.939 post=0.431 fcos=0.791 sec=207.3
+epoch 51 L=0.9994 feat=0.4612 hm=0.1868 share_f=58.7% share_h=41.3% STOP=0.309 SAFE=0.943 post=0.442 fcos=0.790 sec=206.6
+epoch 52 L=0.9998 feat=0.4600 hm=0.1877 share_f=58.5% share_h=41.5% STOP=0.337 SAFE=0.924 post=0.462 fcos=0.791 sec=206.5
+epoch 53 L=0.9971 feat=0.4591 hm=0.1835 share_f=58.7% share_h=41.3% STOP=0.303 SAFE=0.953 post=0.434 fcos=0.790 sec=206.6
+epoch 54 L=0.9988 feat=0.4581 hm=0.1853 share_f=58.5% share_h=41.5% STOP=0.341 SAFE=0.932 post=0.454 fcos=0.791 sec=208.0
+epoch 55 L=0.9976 feat=0.4571 hm=0.1839 share_f=59.0% share_h=41.0% STOP=0.317 SAFE=0.949 post=0.442 fcos=0.793 sec=208.1
+epoch 56 L=0.9965 feat=0.4562 hm=0.1840 share_f=58.8% share_h=41.2% STOP=0.251 SAFE=0.970 post=0.355 fcos=0.793 sec=207.0
+epoch 57 L=1.0006 feat=0.4553 hm=0.1856 share_f=58.9% share_h=41.1% STOP=0.317 SAFE=0.943 post=0.431 fcos=0.792 sec=207.0
+epoch 58 L=0.9980 feat=0.4544 hm=0.1844 share_f=59.0% share_h=41.0% STOP=0.301 SAFE=0.949 post=0.416 fcos=0.794 sec=206.9
+epoch 59 L=0.9976 feat=0.4535 hm=0.1816 share_f=59.0% share_h=41.0% STOP=0.307 SAFE=0.944 post=0.431 fcos=0.792 sec=206.4
+epoch 60 L=0.9984 feat=0.4526 hm=0.1827 share_f=58.8% share_h=41.2% STOP=0.298 SAFE=0.956 post=0.431 fcos=0.794 sec=205.6
+epoch 61 L=0.9996 feat=0.4519 hm=0.1816 share_f=58.8% share_h=41.2% STOP=0.300 SAFE=0.951 post=0.408 fcos=0.794 sec=206.3
+epoch 62 L=0.9977 feat=0.4509 hm=0.1827 share_f=58.8% share_h=41.2% STOP=0.317 SAFE=0.942 post=0.434 fcos=0.795 sec=207.6
+epoch 63 L=0.9965 feat=0.4501 hm=0.1788 share_f=59.1% share_h=40.9% STOP=0.291 SAFE=0.955 post=0.422 fcos=0.795 sec=206.2
+epoch 64 L=0.9995 feat=0.4493 hm=0.1799 share_f=59.0% share_h=41.0% STOP=0.301 SAFE=0.947 post=0.416 fcos=0.792 sec=205.5
+epoch 65 L=0.9985 feat=0.4484 hm=0.1804 share_f=59.0% share_h=41.0% STOP=0.302 SAFE=0.954 post=0.419 fcos=0.796 sec=205.6
+epoch 66 L=0.9995 feat=0.4478 hm=0.1813 share_f=58.6% share_h=41.4% STOP=0.324 SAFE=0.951 post=0.445 fcos=0.795 sec=205.7
+epoch 67 L=0.9960 feat=0.4469 hm=0.1764 share_f=59.2% share_h=40.8% STOP=0.288 SAFE=0.965 post=0.396 fcos=0.795 sec=205.5
+epoch 68 L=0.9986 feat=0.4462 hm=0.1767 share_f=59.3% share_h=40.7% STOP=0.302 SAFE=0.956 post=0.416 fcos=0.795 sec=206.1
+epoch 69 L=1.0000 feat=0.4455 hm=0.1774 share_f=58.9% share_h=41.1% STOP=0.297 SAFE=0.957 post=0.405 fcos=0.796 sec=205.8
+epoch 70 L=0.9964 feat=0.4448 hm=0.1782 share_f=59.1% share_h=40.9% STOP=0.307 SAFE=0.956 post=0.431 fcos=0.795 sec=206.4
+epoch 71 L=0.9986 feat=0.4441 hm=0.1798 share_f=58.7% share_h=41.3% STOP=0.298 SAFE=0.958 post=0.428 fcos=0.796 sec=205.7
+epoch 72 L=0.9992 feat=0.4435 hm=0.1782 share_f=58.9% share_h=41.1% STOP=0.297 SAFE=0.959 post=0.419 fcos=0.796 sec=205.2
+epoch 73 L=0.9968 feat=0.4429 hm=0.1775 share_f=59.1% share_h=40.9% STOP=0.298 SAFE=0.952 post=0.422 fcos=0.795 sec=205.7
+epoch 74 L=0.9985 feat=0.4423 hm=0.1751 share_f=59.3% share_h=40.7% STOP=0.313 SAFE=0.954 post=0.428 fcos=0.796 sec=204.9
+epoch 75 L=0.9987 feat=0.4418 hm=0.1772 share_f=59.1% share_h=40.9% STOP=0.293 SAFE=0.959 post=0.410 fcos=0.797 sec=204.9
+epoch 76 L=0.9986 feat=0.4412 hm=0.1778 share_f=58.8% share_h=41.2% STOP=0.309 SAFE=0.955 post=0.428 fcos=0.796 sec=206.7
+epoch 77 L=0.9982 feat=0.4408 hm=0.1771 share_f=59.1% share_h=40.9% STOP=0.303 SAFE=0.957 post=0.425 fcos=0.796 sec=206.2
+epoch 78 L=0.9972 feat=0.4402 hm=0.1776 share_f=59.0% share_h=41.0% STOP=0.295 SAFE=0.959 post=0.422 fcos=0.796 sec=205.1
+epoch 79 L=0.9993 feat=0.4398 hm=0.1773 share_f=58.9% share_h=41.1% STOP=0.302 SAFE=0.958 post=0.425 fcos=0.796 sec=206.1
+epoch 80 L=0.9981 feat=0.4394 hm=0.1791 share_f=58.8% share_h=41.2% STOP=0.300 SAFE=0.958 post=0.419 fcos=0.796 sec=205.6
+epoch 81 L=0.9960 feat=0.4389 hm=0.1757 share_f=59.1% share_h=40.9% STOP=0.293 SAFE=0.959 post=0.410 fcos=0.796 sec=205.6
+epoch 82 L=1.0020 feat=0.4387 hm=0.1762 share_f=58.9% share_h=41.1% STOP=0.305 SAFE=0.957 post=0.422 fcos=0.796 sec=205.9
+epoch 83 L=0.9969 feat=0.4383 hm=0.1771 share_f=59.0% share_h=41.0% STOP=0.295 SAFE=0.959 post=0.416 fcos=0.796 sec=206.1
+epoch 84 L=0.9981 feat=0.4380 hm=0.1776 share_f=58.9% share_h=41.1% STOP=0.304 SAFE=0.957 post=0.419 fcos=0.797 sec=205.3
+epoch 85 L=0.9996 feat=0.4377 hm=0.1759 share_f=58.8% share_h=41.2% STOP=0.297 SAFE=0.958 post=0.422 fcos=0.796 sec=205.7
+epoch 86 L=0.9973 feat=0.4375 hm=0.1773 share_f=59.0% share_h=41.0% STOP=0.300 SAFE=0.960 post=0.416 fcos=0.797 sec=204.7
+epoch 87 L=0.9993 feat=0.4372 hm=0.1754 share_f=59.1% share_h=40.9% STOP=0.302 SAFE=0.959 post=0.422 fcos=0.797 sec=204.8
+epoch 88 L=0.9967 feat=0.4370 hm=0.1763 share_f=59.2% share_h=40.8% STOP=0.292 SAFE=0.959 post=0.413 fcos=0.797 sec=206.7
+epoch 89 L=0.9988 feat=0.4368 hm=0.1744 share_f=59.2% share_h=40.8% STOP=0.289 SAFE=0.960 post=0.410 fcos=0.797 sec=206.5
+epoch 90 L=0.9991 feat=0.4367 hm=0.1742 share_f=59.2% share_h=40.8% STOP=0.298 SAFE=0.960 post=0.419 fcos=0.797 sec=205.6
+epoch 91 L=0.9973 feat=0.4365 hm=0.1759 share_f=59.1% share_h=40.9% STOP=0.294 SAFE=0.960 post=0.413 fcos=0.797 sec=206.9
+epoch 92 L=0.9985 feat=0.4364 hm=0.1740 share_f=59.3% share_h=40.7% STOP=0.298 SAFE=0.960 post=0.408 fcos=0.797 sec=205.5
+epoch 93 L=0.9974 feat=0.4363 hm=0.1754 share_f=59.1% share_h=40.9% STOP=0.293 SAFE=0.961 post=0.410 fcos=0.797 sec=205.2
+epoch 94 L=0.9992 feat=0.4362 hm=0.1756 share_f=59.3% share_h=40.7% STOP=0.298 SAFE=0.961 post=0.413 fcos=0.797 sec=207.3
+epoch 95 L=0.9989 feat=0.4362 hm=0.1699 share_f=59.7% share_h=40.3% STOP=0.296 SAFE=0.961 post=0.413 fcos=0.797 sec=206.3
+epoch 96 L=0.9969 feat=0.4361 hm=0.1761 share_f=59.1% share_h=40.9% STOP=0.297 SAFE=0.961 post=0.416 fcos=0.797 sec=205.8
+epoch 97 L=0.9993 feat=0.4361 hm=0.1744 share_f=59.1% share_h=40.9% STOP=0.295 SAFE=0.961 post=0.410 fcos=0.797 sec=206.0
+epoch 98 L=0.9998 feat=0.4360 hm=0.1765 share_f=59.0% share_h=41.0% STOP=0.300 SAFE=0.960 post=0.416 fcos=0.797 sec=205.4
+epoch 99 L=0.9971 feat=0.4360 hm=0.1770 share_f=59.0% share_h=41.0% STOP=0.293 SAFE=0.961 post=0.410 fcos=0.797 sec=205.2
+epoch 100 L=0.9966 feat=0.4360 hm=0.1758 share_f=59.1% share_h=40.9% STOP=0.295 SAFE=0.961 post=0.410 fcos=0.797 sec=204.8
+DONE selected_epoch=17 test_STOP=0.36177474402730375 test_SAFE=0.8679142934635204
+=== feat_gheatmap_v1 complete ===
+Friday 13 November 2026 11:00:28 AM IST

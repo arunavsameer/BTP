@@ -1,0 +1,6 @@
+{
+  "backbone_init_sha16": "057b56dde465bfec",
+  "decoder_init_sha16": "ea06c1ec2c464ce2",
+  "no_s0_s1_s2_weights": true,
+  "shared_backbone_file": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/experiments/student_fdec_unoptimized_baseline/shared_backbone_init.pt"
+}

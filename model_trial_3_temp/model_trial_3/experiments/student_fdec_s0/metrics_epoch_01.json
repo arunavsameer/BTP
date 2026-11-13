@@ -1,0 +1,54 @@
+{
+  "epoch": 1,
+  "variant": "S0",
+  "train": {
+    "L_gt": 0.06001280568596485,
+    "L_kd": 0.06652669435614371,
+    "L_total": 0.09327615286572837
+  },
+  "n_steps": 100,
+  "timing": {
+    "dataloader_wait_sec": 0.30355792213231325,
+    "h2d_sec": 0.08707386860623956,
+    "forward_sec": 0.8921214365400374,
+    "backward_sec": 1.1583899101242423,
+    "optimizer_sec": 0.21592600271105766,
+    "train_total_sec": 2.675912158098072
+  },
+  "decoder_trainable": true,
+  "rgb_cache": {
+    "n_clips_decoded": 482,
+    "n_frames_stored": 7100,
+    "rgb_prepare_sec": 697.6652035489678,
+    "letterbox_at_prepare": true,
+    "stored_shape_sample": [
+      160,
+      160,
+      3
+    ],
+    "student_input_size": 160
+  },
+  "val": {
+    "stop_recall": 0.0,
+    "safe_recall": 1.0,
+    "threat_recall": 0.0,
+    "mse_gt": 0.020970780359483458,
+    "recall_at_5fa": 0.016363636363636365,
+    "ap_high": 0.02059658963635619,
+    "pre_fork_stop_recall": 0.0,
+    "post_fork_stop_recall": 0.0,
+    "teacher_hm_mae_mean": 0.05463064124869918,
+    "teacher_hm_mse_mean": 0.03347896235897164,
+    "teacher_tier_agreement": 0.5845588235294118,
+    "teacher_stop_agreement": 0.7328431372549019,
+    "teacher_safe_agreement": 0.5845588235294118,
+    "n": 816,
+    "pair_gap_mean": NaN,
+    "pair_gap_median": NaN,
+    "pair_gap_p90": NaN,
+    "pair_warning_flip_rate": 0.0,
+    "n_pairs_verified_evaluated": 0
+  },
+  "dev_eval_sec": 2.3520861817523837,
+  "seconds": 5.0279983398504555
+}

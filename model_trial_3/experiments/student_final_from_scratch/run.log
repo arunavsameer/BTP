@@ -1,0 +1,506 @@
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1006.7871027039364, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1102.527915192768, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1020.8960611345246, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1020.8960611345246, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 80, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 189, in run_preflight
+    flip = flip_symmetry_check(frame_store, rows, prepared_ids)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 90, in flip_symmetry_check
+    "n_probes": len(pick),
+                    ^^^^
+NameError: name 'idxs' is not defined
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 146, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 80, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 189, in run_preflight
+    flip = flip_symmetry_check(frame_store, rows, prepared_ids)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 90, in flip_symmetry_check
+    "n_probes": len(pick),
+                    ^^^^
+NameError: name 'idxs' is not defined
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1108.773647736758, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1108.773647736758, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 80, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 197, in run_preflight
+    model = StudentFinal().to(device)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1381, in to
+    return self._apply(convert)
+           ~~~~~~~~~~~^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 933, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 933, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 933, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 964, in _apply
+    param_applied = fn(param)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1367, in convert
+    return t.to(
+           ~~~~^
+        device,
+        ^^^^^^^
+        dtype if t.is_floating_point() or t.is_complex() else None,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        non_blocking,
+        ^^^^^^^^^^^^^
+    )
+    ^
+torch.AcceleratorError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
+Search for `cudaErrorDevicesUnavailable' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 146, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 80, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 197, in run_preflight
+    model = StudentFinal().to(device)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1381, in to
+    return self._apply(convert)
+           ~~~~~~~~~~~^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 933, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 933, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 933, in _apply
+    module._apply(fn)
+    ~~~~~~~~~~~~~^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 964, in _apply
+    param_applied = fn(param)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/nn/modules/module.py", line 1367, in convert
+    return t.to(
+           ~~~~^
+        device,
+        ^^^^^^^
+        dtype if t.is_floating_point() or t.is_complex() else None,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        non_blocking,
+        ^^^^^^^^^^^^^
+    )
+    ^
+torch.AcceleratorError: CUDA error: CUDA-capable device(s) is/are busy or unavailable
+Search for `cudaErrorDevicesUnavailable' in https://docs.nvidia.com/cuda/cuda-runtime-api/group__CUDART__TYPES.html for more information.
+CUDA kernel errors might be asynchronously reported at some other API call, so the stacktrace below might be incorrect.
+For debugging consider passing CUDA_LAUNCH_BLOCKING=1
+Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
+
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1215.5333143705502, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1215.5333143705502, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 81, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 204, in run_preflight
+    overfit = overfit64_test(fresh, train_ds, overfit_ids, device, steps=300, lambda_gt=lambda_gt, lambda_kd=lambda_kd)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 133, in overfit64_test
+    for batch in loader:
+                 ^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 741, in __next__
+    data = self._next_data()
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 801, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/data/_utils/fetch.py", line 54, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/dataset.py", line 62, in __getitem__
+    h_teacher = np.asarray(self._H_arr[rid], dtype=np.float32)
+                           ~~~~~~~~~~~^^^^^
+TypeError: 'NoneType' object is not subscriptable
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 147, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 81, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 204, in run_preflight
+    overfit = overfit64_test(fresh, train_ds, overfit_ids, device, steps=300, lambda_gt=lambda_gt, lambda_kd=lambda_kd)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 133, in overfit64_test
+    for batch in loader:
+                 ^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 741, in __next__
+    data = self._next_data()
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/data/dataloader.py", line 801, in _next_data
+    data = self._dataset_fetcher.fetch(index)  # may raise StopIteration
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/data/_utils/fetch.py", line 54, in fetch
+    data = [self.dataset[idx] for idx in possibly_batched_index]
+            ~~~~~~~~~~~~^^^^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/dataset.py", line 62, in __getitem__
+    h_teacher = np.asarray(self._H_arr[rid], dtype=np.float32)
+                           ~~~~~~~~~~~^^^^^
+TypeError: 'NoneType' object is not subscriptable
+=== smoke 2026-11-09T13:19:40+05:30 device=auto ===
+{
+  "ok": true,
+  "checks": [
+    {
+      "name": "group_mean_gt",
+      "ok": true,
+      "shape": [
+        8280,
+        5,
+        5
+      ]
+    },
+    {
+      "name": "data_splits",
+      "ok": true
+    },
+    {
+      "name": "rgb_prepare_subset",
+      "ok": true,
+      "n_clips_decoded": 23,
+      "n_frames_stored": 120,
+      "rgb_prepare_sec": 98.03857786953449,
+      "letterbox_at_prepare": true,
+      "stored_shape_sample": [
+        160,
+        160,
+        3
+      ],
+      "student_input_size": 160
+    },
+    {
+      "name": "parent_dev_sanity",
+      "ok": true,
+      "stop_recall": 0.8974358974358975
+    },
+    {
+      "name": "flip_symmetry",
+      "ok": true,
+      "reason": "letterbox + column mirror consistent",
+      "max_pixel_flip_diff": 0.0,
+      "n_probes": 16
+    },
+    {
+      "name": "dataset_teacher_materialized",
+      "ok": true
+    },
+    {
+      "name": "train_forward_backward",
+      "ok": true,
+      "steps": 5,
+      "L_total": 1.1998556852340698,
+      "device": "cpu"
+    },
+    {
+      "name": "forward_eval",
+      "ok": true
+    }
+  ]
+}
+=== preflight 2026-11-09T13:21:48+05:30 ===
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1547.2488804506138, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1547.2488804506138, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 81, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 206, in run_preflight
+    overfit = overfit64_test(fresh, train_ds, overfit_ids, device, steps=300, lambda_gt=lambda_gt, lambda_kd=lambda_kd)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 139, in overfit64_test
+    loss.backward()
+    ~~~~~~~~~~~~~^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/_tensor.py", line 630, in backward
+    torch.autograd.backward(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        self, gradient, retain_graph, create_graph, inputs=inputs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/autograd/__init__.py", line 364, in backward
+    _engine_run_backward(
+    ~~~~~~~~~~~~~~~~~~~~^
+        tensors,
+        ^^^^^^^^
+    ...<5 lines>...
+        accumulate_grad=True,
+        ^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/autograd/graph.py", line 865, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        t_outputs, *args, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )  # Calls into the C++ engine to run the backward pass
+    ^
+RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 147, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 81, in main
+    pre = run_preflight(
+      cfg,
+    ...<9 lines>...
+      frame_store=store,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 206, in run_preflight
+    overfit = overfit64_test(fresh, train_ds, overfit_ids, device, steps=300, lambda_gt=lambda_gt, lambda_kd=lambda_kd)
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/utils/_contextlib.py", line 124, in decorate_context
+    return func(*args, **kwargs)
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/preflight.py", line 139, in overfit64_test
+    loss.backward()
+    ~~~~~~~~~~~~~^^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/_tensor.py", line 630, in backward
+    torch.autograd.backward(
+    ~~~~~~~~~~~~~~~~~~~~~~~^
+        self, gradient, retain_graph, create_graph, inputs=inputs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/autograd/__init__.py", line 364, in backward
+    _engine_run_backward(
+    ~~~~~~~~~~~~~~~~~~~~^
+        tensors,
+        ^^^^^^^^
+    ...<5 lines>...
+        accumulate_grad=True,
+        ^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/raid/money/miniconda3/lib/python3.13/site-packages/torch/autograd/graph.py", line 865, in _engine_run_backward
+    return Variable._execution_engine.run_backward(  # Calls into the C++ engine to run the backward pass
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        t_outputs, *args, **kwargs
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )  # Calls into the C++ engine to run the backward pass
+    ^
+RuntimeError: element 0 of tensors does not require grad and does not have a grad_fn
+=== test suite 2026-11-09T18:44:07+05:30 ===
+=== smoke ===
+{
+  "ok": true,
+  "returncode": 0,
+  "tail": "{\n  \"ok\": true,\n  \"checks\": [\n    {\n      \"name\": \"group_mean_gt\",\n      \"ok\": true,\n      \"shape\": [\n        8280,\n        5,\n        5\n      ]\n    },\n    {\n      \"name\": \"data_splits\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"rgb_prepare_subset\",\n      \"ok\": true,\n      \"n_clips_decoded\": 23,\n      \"n_frames_stored\": 120,\n      \"rgb_prepare_sec\": 56.9440789623186,\n      \"letterbox_at_prepare\": true,\n      \"stored_shape_sample\": [\n        160,\n        160,\n        3\n      ],\n      \"student_input_size\": 160\n    },\n    {\n      \"name\": \"parent_dev_sanity\",\n      \"ok\": true,\n      \"stop_recall\": 0.8974358974358975\n    },\n    {\n      \"name\": \"flip_symmetry\",\n      \"ok\": true,\n      \"reason\": \"letterbox + column mirror consistent\",\n      \"max_pixel_flip_diff\": 0.0,\n      \"n_probes\": 16\n    },\n    {\n      \"name\": \"dataset_teacher_materialized\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"train_forward_backward\",\n      \"ok\": true,\n      \"steps\": 5,\n      \"L_total\": 1.210558533668518,\n      \"device\": \"cpu\"\n    },\n    {\n      \"name\": \"forward_eval\",\n      \"ok\": true\n    },\n    {\n      \"name\": \"overfit64_backward\",\n      \"ok\": false,\n      \"n_windows\": 32,\n      \"steps\": 3,\n      \"stop_recall\": 0.0,\n      \"safe_recall\": 1.0,\n      \"confusion\": [\n        [\n          19,\n  
+=== mini_overfit64 ===
+rgb_prepare clips 50/62
+{
+  "ok": true,
+  "device": "cpu",
+  "overfit": {
+    "ok": false,
+    "n_windows": 64,
+    "steps": 30,
+    "stop_recall": 0.96875,
+    "safe_recall": 0.21875,
+    "confusion": [
+      [
+        7,
+        0,
+        25
+      ],
+      [
+        0,
+        0,
+        0
+      ],
+      [
+        1,
+        0,
+        31
+      ]
+    ]
+  },
+  "name": "mini_overfit64"
+}
+=== evaluate_split ===
+{
+  "ok": true,
+  "n_rows": 8,
+  "name": "evaluate_split"
+}
+ALL TESTS PASSED
+=== preflight 2026-11-09T18:49:47+05:30 ===
+Started PID=312580
+Smoke report: /home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/reports/student_final_from_scratch/smoke_report.json
+Status: /home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/check_student_final_status.sh
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1350.1505619361997, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1350.1505619361997, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Preflight proceed=True reasons=[]
+Preflight proceed=True reasons=[]
+proceed_to_training=True
+=== training 2026-11-09T19:16:38+05:30 ===
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 980.8513265773654, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 980.8513265773654, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Preflight proceed=True reasons=[]
+Preflight proceed=True reasons=[]
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 102, in main
+    out = run_training(
+      cfg,
+    ...<14 lines>...
+      flip_prob=flip_prob,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/train.py", line 275, in run_training
+    if p in decay:
+       ^^^^^^^^^^
+RuntimeError: The size of tensor a (3) must match the size of tensor b (48) at non-singleton dimension 3
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 147, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 102, in main
+    out = run_training(
+      cfg,
+    ...<14 lines>...
+      flip_prob=flip_prob,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/train.py", line 275, in run_training
+    if p in decay:
+       ^^^^^^^^^^
+RuntimeError: The size of tensor a (3) must match the size of tensor b (48) at non-singleton dimension 3
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+Built group-mean targets: {'n_rows': 8280, 'missing_or_fallback': 0, 'amb_windows_retained': 1197, 'group_mean_rewrites': 1187, 'peak_max': 1.0, 'peak_mean': 0.024480251595377922}
+rgb_prepare clips 50/482
+rgb_prepare clips 100/482
+rgb_prepare clips 150/482
+rgb_prepare clips 200/482
+rgb_prepare clips 250/482
+rgb_prepare clips 300/482
+rgb_prepare clips 350/482
+rgb_prepare clips 400/482
+rgb_prepare clips 450/482
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1268.948472856544, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+RGB prepare: {'n_clips_decoded': 482, 'n_frames_stored': 7100, 'rgb_prepare_sec': 1268.948472856544, 'letterbox_at_prepare': True, 'stored_shape_sample': [160, 160, 3], 'student_input_size': 160}
+Skipped preflight (loaded); proceed=True
+Skipped preflight (loaded); proceed=True
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 108, in main
+    out = run_training(
+      cfg,
+    ...<14 lines>...
+      flip_prob=flip_prob,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/train.py", line 313, in run_training
+    from collision_jepa3.evaluation.metrics import SAFE, STOP, THREAT
+ImportError: cannot import name 'THREAT' from 'collision_jepa3.evaluation.metrics' (/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/evaluation/metrics.py)
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 153, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/scripts/69_student_final_from_scratch.py", line 108, in main
+    out = run_training(
+      cfg,
+    ...<14 lines>...
+      flip_prob=flip_prob,
+    )
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/student_research/student_final/train.py", line 313, in run_training
+    from collision_jepa3.evaluation.metrics import SAFE, STOP, THREAT
+ImportError: cannot import name 'THREAT' from 'collision_jepa3.evaluation.metrics' (/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/collision_jepa3/evaluation/metrics.py)

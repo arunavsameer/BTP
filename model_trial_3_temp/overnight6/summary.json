@@ -1,0 +1,26 @@
+[
+  {
+    "model": "m1_stop_floor",
+    "status": "missing"
+  },
+  {
+    "model": "m2_ordinal",
+    "status": "missing"
+  },
+  {
+    "model": "m3_asymmetric",
+    "status": "missing"
+  },
+  {
+    "model": "m4_parent_recovery",
+    "status": "missing"
+  },
+  {
+    "model": "m5_multiscale",
+    "status": "missing"
+  },
+  {
+    "model": "m6_taskaware",
+    "status": "missing"
+  }
+]
