@@ -38,14 +38,33 @@ class HeatmapDecoder(nn.Module):
         self.pool = str(pool)
         self.net = _spatial_heatmap_tower(z_channels, hidden, self.dilated)
 
+    def forward_fine_logits(self, z: torch.Tensor) -> torch.Tensor:
+        """Layer-4 1×1 conv logits at 16×16, before AdaptiveMaxPool2d(5)."""
+        return self.net(z)
+
     def forward_with_logits(self, z: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        logits_fine = self.net(z)
+        logits_fine = self.forward_fine_logits(z)
         if logits_fine.shape[-2] != self.out_grid or logits_fine.shape[-1] != self.out_grid:
             pooled = F.adaptive_max_pool2d(logits_fine, self.out_grid)
         else:
             pooled = logits_fine
         h = torch.sigmoid(pooled).squeeze(1)
         return h, pooled.squeeze(1)
+
+    def forward_checkpoints(self, z: torch.Tensor) -> dict[str, torch.Tensor]:
+        """Student training heads: 16×16 logits + 5×5 probability + 5×5 logits."""
+        logits_fine = self.forward_fine_logits(z)
+        if logits_fine.shape[-2] != self.out_grid or logits_fine.shape[-1] != self.out_grid:
+            pooled = F.adaptive_max_pool2d(logits_fine, self.out_grid)
+        else:
+            pooled = logits_fine
+        p = torch.sigmoid(pooled).squeeze(1)
+        return {
+            "Z_16": logits_fine,
+            "P_5": p,
+            "Hhat_1s": p,
+            "Hhat_1s_logits": pooled.squeeze(1),
+        }
 
     def forward(self, z: torch.Tensor) -> torch.Tensor:
         h, _ = self.forward_with_logits(z)

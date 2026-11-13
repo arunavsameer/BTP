@@ -1,0 +1,47 @@
+=== SLURM job 10258 student_v2_featdecay on DGX2 ===
+Saturday 14 November 2026 02:22:23 AM IST
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-836aaa3c-d4b2-a740-5ed7-31ee350a4545)
+-rw-rw-r-- 1 asrivastava asrivastava 1.7M Nov 14 02:19 /raid/asrivastava/VJEPA2_BTP/model_trial_4_decay/resume_ep20.pt
+test_causality_no_future_leak_into_t0_t6 (__main__.StudentV2Tests.test_causality_no_future_leak_into_t0_t6) ... ok
+test_hazard_weights_and_hflip (__main__.StudentV2Tests.test_hazard_weights_and_hflip) ... ok
+test_lambda_feat_cosine_ramp (__main__.StudentV2Tests.test_lambda_feat_cosine_ramp) ... ok
+test_loss_flows_through_frozen_decoder (__main__.StudentV2Tests.test_loss_flows_through_frozen_decoder) ... ok
+test_trainable_param_count_in_gate (__main__.StudentV2Tests.test_trainable_param_count_in_gate) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.847s
+
+OK
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 z16=yes
+device=cuda params {'total': 427440, 'trainable': 379631, 'frozen': 47809, 'backbone': 379631, 'decoder': 47809}
+resume weights only from /raid/asrivastava/VJEPA2_BTP/model_trial_4_decay/resume_ep20.pt (no AdamW state in ckpt; moments reset, LR schedule continued)
+resume epoch=20 next=21 step=14180 lr=1.41e-03
+epoch 21 step=14889 L=0.3609 5x5=0.0408 16=0.0607 feat=0.5207 lam=0.498 share_f=0.73 STOP=0.680 SAFE=0.836 lr=1.40e-03 sec=203.2
+epoch 22 step=15598 L=0.3560 5x5=0.0399 16=0.0602 feat=0.5191 lam=0.493 share_f=0.73 STOP=0.694 SAFE=0.852 lr=1.39e-03 sec=228.3
+epoch 23 step=16307 L=0.3488 5x5=0.0388 16=0.0597 feat=0.5168 lam=0.484 share_f=0.72 STOP=0.682 SAFE=0.830 lr=1.37e-03 sec=227.9
+epoch 24 step=17016 L=0.3392 5x5=0.0379 16=0.0594 feat=0.5122 lam=0.472 share_f=0.72 STOP=0.613 SAFE=0.872 lr=1.36e-03 sec=239.2
+epoch 25 step=17725 L=0.3300 5x5=0.0377 16=0.0586 feat=0.5115 lam=0.457 share_f=0.72 STOP=0.697 SAFE=0.846 lr=1.34e-03 sec=230.3
+epoch 26 step=18434 L=0.3196 5x5=0.0374 16=0.0585 feat=0.5094 lam=0.439 share_f=0.71 STOP=0.629 SAFE=0.885 lr=1.33e-03 sec=231.3
+epoch 27 step=19143 L=0.3073 5x5=0.0364 16=0.0580 feat=0.5087 lam=0.418 share_f=0.70 STOP=0.666 SAFE=0.875 lr=1.31e-03 sec=234.8
+epoch 28 step=19852 L=0.2936 5x5=0.0368 16=0.0569 feat=0.5055 lam=0.396 share_f=0.69 STOP=0.658 SAFE=0.848 lr=1.29e-03 sec=232.4
+epoch 29 step=20561 L=0.2808 5x5=0.0361 16=0.0574 feat=0.5052 lam=0.371 share_f=0.68 STOP=0.623 SAFE=0.866 lr=1.28e-03 sec=233.4
+epoch 30 step=21270 L=0.2671 5x5=0.0361 16=0.0575 feat=0.5035 lam=0.345 share_f=0.66 STOP=0.669 SAFE=0.875 lr=1.26e-03 sec=230.4
+epoch 31 step=21979 L=0.2503 5x5=0.0347 16=0.0561 feat=0.5028 lam=0.317 share_f=0.65 STOP=0.661 SAFE=0.841 lr=1.24e-03 sec=234.3
+epoch 32 step=22688 L=0.2340 5x5=0.0342 16=0.0549 feat=0.5012 lam=0.289 share_f=0.63 STOP=0.658 SAFE=0.848 lr=1.22e-03 sec=228.9
+epoch 33 step=23397 L=0.2202 5x5=0.0339 16=0.0553 feat=0.5021 lam=0.261 share_f=0.61 STOP=0.634 SAFE=0.854 lr=1.20e-03 sec=229.4
+epoch 34 step=24106 L=0.2073 5x5=0.0339 16=0.0565 feat=0.5022 lam=0.233 share_f=0.58 STOP=0.641 SAFE=0.875 lr=1.18e-03 sec=242.1
+epoch 35 step=24815 L=0.1931 5x5=0.0344 16=0.0555 feat=0.5022 lam=0.205 share_f=0.55 STOP=0.645 SAFE=0.875 lr=1.16e-03 sec=227.6
+epoch 36 step=25524 L=0.1770 5x5=0.0327 16=0.0543 feat=0.5021 lam=0.179 share_f=0.52 STOP=0.653 SAFE=0.851 lr=1.14e-03 sec=227.8
+epoch 37 step=26233 L=0.1644 5x5=0.0326 16=0.0541 feat=0.5031 lam=0.154 share_f=0.49 STOP=0.698 SAFE=0.816 lr=1.12e-03 sec=263.1
+epoch 38 step=26942 L=0.1535 5x5=0.0329 16=0.0545 feat=0.5021 lam=0.132 share_f=0.45 STOP=0.639 SAFE=0.873 lr=1.10e-03 sec=262.3
+epoch 39 step=27651 L=0.1422 5x5=0.0321 16=0.0541 feat=0.5050 lam=0.111 share_f=0.41 STOP=0.623 SAFE=0.860 lr=1.08e-03 sec=337.1
+epoch 40 step=28360 L=0.1334 5x5=0.0322 16=0.0541 feat=0.5065 lam=0.093 share_f=0.37 STOP=0.574 SAFE=0.902 lr=1.05e-03 sec=339.9
+epoch 41 step=29069 L=0.1239 5x5=0.0318 16=0.0528 feat=0.5059 lam=0.078 share_f=0.33 STOP=0.636 SAFE=0.872 lr=1.03e-03 sec=334.6
+epoch 42 step=29778 L=0.1186 5x5=0.0317 16=0.0535 feat=0.5086 lam=0.066 share_f=0.30 STOP=0.634 SAFE=0.865 lr=1.01e-03 sec=327.3
+epoch 43 step=30487 L=0.1129 5x5=0.0312 16=0.0525 feat=0.5097 lam=0.057 share_f=0.27 STOP=0.650 SAFE=0.875 lr=9.85e-04 sec=329.5
+epoch 44 step=31196 L=0.1102 5x5=0.0307 16=0.0531 feat=0.5094 lam=0.052 share_f=0.26 STOP=0.625 SAFE=0.853 lr=9.62e-04 sec=327.9
+epoch 45 step=31905 L=0.1083 5x5=0.0308 16=0.0520 feat=0.5103 lam=0.050 share_f=0.25 STOP=0.633 SAFE=0.858 lr=9.38e-04 sec=324.0
+epoch 46 step=32614 L=0.1086 5x5=0.0305 16=0.0526 feat=0.5103 lam=0.050 share_f=0.25 STOP=0.630 SAFE=0.896 lr=9.14e-04 sec=328.2
+epoch 47 step=33323 L=0.1080 5x5=0.0303 16=0.0522 feat=0.5102 lam=0.050 share_f=0.25 STOP=0.629 SAFE=0.894 lr=8.90e-04 sec=336.8
+epoch 48 step=34032 L=0.1070 5x5=0.0299 16=0.0515 feat=0.5110 lam=0.050 share_f=0.25 STOP=0.654 SAFE=0.876 lr=8.65e-04 sec=338.7

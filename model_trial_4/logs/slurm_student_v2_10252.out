@@ -1,0 +1,48 @@
+=== SLURM job 10252 student_v2_v1 on DGX2 ===
+Saturday 14 November 2026 12:47:33 AM IST
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-836aaa3c-d4b2-a740-5ed7-31ee350a4545)
+test_causality_no_future_leak_into_t0_t6 (__main__.StudentV2Tests.test_causality_no_future_leak_into_t0_t6) ... ok
+test_hazard_weights_and_hflip (__main__.StudentV2Tests.test_hazard_weights_and_hflip) ... ok
+test_loss_flows_through_frozen_decoder (__main__.StudentV2Tests.test_loss_flows_through_frozen_decoder) ... ok
+test_trainable_param_count_in_gate (__main__.StudentV2Tests.test_trainable_param_count_in_gate) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.967s
+
+OK
+z16 0/32920
+z16 1280/32920
+z16 2560/32920
+z16 3840/32920
+z16 5120/32920
+z16 6400/32920
+z16 7680/32920
+z16 8960/32920
+z16 10240/32920
+z16 11520/32920
+z16 12800/32920
+z16 14080/32920
+z16 15360/32920
+z16 16640/32920
+z16 17920/32920
+z16 19200/32920
+z16 20480/32920
+z16 21760/32920
+z16 23040/32920
+z16 24320/32920
+z16 25600/32920
+z16 26880/32920
+z16 28160/32920
+z16 29440/32920
+z16 30720/32920
+z16 32000/32920
+wrote /raid/asrivastava/VJEPA2_BTP/model_trial_4/z16_sidecar_v1/Z_16.npy n=32920
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 z16=yes
+device=cuda params {'total': 427440, 'trainable': 379631, 'frozen': 47809, 'backbone': 379631, 'decoder': 47809}
+epoch 1 step=709 L=0.9246 5x5=0.2402 16=0.2140 feat=0.9409 STOP=0.000 SAFE=0.000 lr=3.08e-04 sec=196.1
+epoch 2 step=1418 L=0.7779 5x5=0.1874 16=0.1997 feat=0.7815 STOP=0.135 SAFE=0.695 lr=6.06e-04 sec=195.4
+epoch 3 step=2127 L=0.6564 5x5=0.1484 16=0.1483 feat=0.7195 STOP=0.283 SAFE=0.027 lr=9.04e-04 sec=195.2
+epoch 4 step=2836 L=0.5682 5x5=0.1141 16=0.1180 feat=0.6722 STOP=0.697 SAFE=0.081 lr=1.20e-03 sec=195.7
+epoch 5 step=3545 L=0.5364 5x5=0.1030 16=0.1076 feat=0.6517 STOP=0.587 SAFE=0.373 lr=1.50e-03 sec=198.1
+epoch 6 step=4254 L=0.5041 5x5=0.0897 16=0.0981 feat=0.6325 STOP=0.519 SAFE=0.597 lr=1.50e-03 sec=203.1

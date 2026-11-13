@@ -67,3 +67,129 @@ epoch 13 L=0.9229 feat=0.5126 hm=0.4103 share_f=62.0% share_h=38.0% STOP=0.464 S
 epoch 14 L=0.8979 feat=0.5084 hm=0.3895 share_f=63.0% share_h=37.0% STOP=0.425 SAFE=0.845 post=0.592 fcos=0.760 sec=205.0
 epoch 15 L=0.8664 feat=0.5044 hm=0.3620 share_f=64.3% share_h=35.7% STOP=0.454 SAFE=0.811 post=0.645 fcos=0.762 sec=204.3
 epoch 16 L=0.8413 feat=0.5015 hm=0.3399 share_f=65.4% share_h=34.6% STOP=0.392 SAFE=0.861 post=0.587 fcos=0.764 sec=252.4
+epoch 17 L=0.8226 feat=0.4985 hm=0.3241 share_f=66.2% share_h=33.8% STOP=0.452 SAFE=0.841 post=0.636 fcos=0.767 sec=226.1
+epoch 18 L=0.8063 feat=0.4955 hm=0.3107 share_f=67.1% share_h=32.9% STOP=0.449 SAFE=0.856 post=0.624 fcos=0.769 sec=208.4
+epoch 19 L=0.7844 feat=0.4933 hm=0.2912 share_f=67.8% share_h=32.2% STOP=0.374 SAFE=0.915 post=0.566 fcos=0.773 sec=222.2
+epoch 20 L=0.7822 feat=0.4910 hm=0.2912 share_f=68.0% share_h=32.0% STOP=0.481 SAFE=0.846 post=0.627 fcos=0.775 sec=245.7
+epoch 21 L=0.7696 feat=0.4887 hm=0.2810 share_f=68.5% share_h=31.5% STOP=0.406 SAFE=0.863 post=0.555 fcos=0.778 sec=215.9
+epoch 22 L=0.7576 feat=0.4863 hm=0.2713 share_f=69.3% share_h=30.7% STOP=0.375 SAFE=0.917 post=0.549 fcos=0.782 sec=272.2
+epoch 23 L=0.7490 feat=0.4844 hm=0.2646 share_f=69.5% share_h=30.5% STOP=0.441 SAFE=0.882 post=0.633 fcos=0.782 sec=302.7
+epoch 24 L=0.7368 feat=0.4819 hm=0.2549 share_f=69.9% share_h=30.1% STOP=0.436 SAFE=0.891 post=0.633 fcos=0.785 sec=214.9
+epoch 25 L=0.7318 feat=0.4800 hm=0.2517 share_f=70.1% share_h=29.9% STOP=0.407 SAFE=0.871 post=0.575 fcos=0.786 sec=210.8
+epoch 26 L=0.7230 feat=0.4783 hm=0.2447 share_f=70.6% share_h=29.4% STOP=0.364 SAFE=0.896 post=0.497 fcos=0.788 sec=213.3
+epoch 27 L=0.7160 feat=0.4765 hm=0.2395 share_f=70.9% share_h=29.1% STOP=0.410 SAFE=0.911 post=0.601 fcos=0.792 sec=213.8
+epoch 28 L=0.7116 feat=0.4748 hm=0.2367 share_f=71.2% share_h=28.8% STOP=0.357 SAFE=0.932 post=0.477 fcos=0.788 sec=215.7
+epoch 29 L=0.7057 feat=0.4731 hm=0.2326 share_f=71.5% share_h=28.5% STOP=0.403 SAFE=0.913 post=0.578 fcos=0.790 sec=213.1
+epoch 30 L=0.7019 feat=0.4716 hm=0.2303 share_f=71.6% share_h=28.4% STOP=0.386 SAFE=0.923 post=0.529 fcos=0.794 sec=211.7
+epoch 31 L=0.6953 feat=0.4699 hm=0.2254 share_f=71.9% share_h=28.1% STOP=0.415 SAFE=0.895 post=0.569 fcos=0.794 sec=208.7
+epoch 32 L=0.6890 feat=0.4685 hm=0.2205 share_f=72.0% share_h=28.0% STOP=0.431 SAFE=0.896 post=0.627 fcos=0.795 sec=211.5
+epoch 33 L=0.6883 feat=0.4670 hm=0.2212 share_f=72.1% share_h=27.9% STOP=0.378 SAFE=0.935 post=0.581 fcos=0.797 sec=278.7
+epoch 34 L=0.6867 feat=0.4658 hm=0.2209 share_f=72.0% share_h=28.0% STOP=0.448 SAFE=0.900 post=0.607 fcos=0.795 sec=269.1
+epoch 35 L=0.6778 feat=0.4642 hm=0.2136 share_f=72.4% share_h=27.6% STOP=0.381 SAFE=0.927 post=0.532 fcos=0.796 sec=208.7
+epoch 36 L=0.6805 feat=0.4629 hm=0.2176 share_f=72.3% share_h=27.7% STOP=0.387 SAFE=0.933 post=0.552 fcos=0.797 sec=209.8
+epoch 37 L=0.6742 feat=0.4615 hm=0.2127 share_f=72.9% share_h=27.1% STOP=0.430 SAFE=0.904 post=0.592 fcos=0.799 sec=206.4
+epoch 38 L=0.6699 feat=0.4603 hm=0.2096 share_f=72.5% share_h=27.5% STOP=0.417 SAFE=0.908 post=0.564 fcos=0.800 sec=223.5
+epoch 39 L=0.6721 feat=0.4590 hm=0.2131 share_f=72.6% share_h=27.4% STOP=0.356 SAFE=0.936 post=0.520 fcos=0.803 sec=348.7
+epoch 40 L=0.6656 feat=0.4580 hm=0.2076 share_f=72.9% share_h=27.1% STOP=0.429 SAFE=0.911 post=0.616 fcos=0.800 sec=330.5
+epoch 41 L=0.6613 feat=0.4566 hm=0.2047 share_f=73.2% share_h=26.8% STOP=0.383 SAFE=0.913 post=0.532 fcos=0.802 sec=386.8
+epoch 42 L=0.6558 feat=0.4556 hm=0.2002 share_f=73.3% share_h=26.7% STOP=0.435 SAFE=0.896 post=0.613 fcos=0.800 sec=394.3
+epoch 43 L=0.6531 feat=0.4543 hm=0.1988 share_f=73.4% share_h=26.6% STOP=0.354 SAFE=0.939 post=0.526 fcos=0.801 sec=334.0
+epoch 44 L=0.6500 feat=0.4531 hm=0.1969 share_f=73.6% share_h=26.4% STOP=0.321 SAFE=0.950 post=0.451 fcos=0.802 sec=331.1
+epoch 45 L=0.6470 feat=0.4519 hm=0.1951 share_f=73.6% share_h=26.4% STOP=0.408 SAFE=0.922 post=0.581 fcos=0.802 sec=345.5
+epoch 46 L=0.6457 feat=0.4508 hm=0.1949 share_f=73.5% share_h=26.5% STOP=0.364 SAFE=0.935 post=0.532 fcos=0.803 sec=349.4
+epoch 47 L=0.6451 feat=0.4496 hm=0.1954 share_f=73.5% share_h=26.5% STOP=0.382 SAFE=0.917 post=0.558 fcos=0.802 sec=342.7
+epoch 48 L=0.6404 feat=0.4485 hm=0.1918 share_f=73.9% share_h=26.1% STOP=0.376 SAFE=0.934 post=0.552 fcos=0.801 sec=324.8
+epoch 49 L=0.6392 feat=0.4474 hm=0.1918 share_f=73.7% share_h=26.3% STOP=0.418 SAFE=0.914 post=0.587 fcos=0.802 sec=323.9
+epoch 50 L=0.6361 feat=0.4462 hm=0.1899 share_f=73.8% share_h=26.2% STOP=0.367 SAFE=0.940 post=0.538 fcos=0.802 sec=387.9
+epoch 51 L=0.6354 feat=0.4451 hm=0.1903 share_f=74.0% share_h=26.0% STOP=0.392 SAFE=0.941 post=0.575 fcos=0.804 sec=342.7
+epoch 52 L=0.6328 feat=0.4441 hm=0.1887 share_f=73.8% share_h=26.2% STOP=0.368 SAFE=0.944 post=0.523 fcos=0.805 sec=330.2
+epoch 53 L=0.6283 feat=0.4428 hm=0.1854 share_f=74.1% share_h=25.9% STOP=0.381 SAFE=0.929 post=0.535 fcos=0.804 sec=280.4
+epoch 54 L=0.6312 feat=0.4419 hm=0.1894 share_f=73.8% share_h=26.2% STOP=0.407 SAFE=0.935 post=0.561 fcos=0.803 sec=219.9
+epoch 55 L=0.6285 feat=0.4408 hm=0.1876 share_f=74.1% share_h=25.9% STOP=0.359 SAFE=0.952 post=0.540 fcos=0.805 sec=216.7
+epoch 56 L=0.6270 feat=0.4398 hm=0.1872 share_f=73.9% share_h=26.1% STOP=0.351 SAFE=0.947 post=0.494 fcos=0.805 sec=250.0
+epoch 57 L=0.6288 feat=0.4387 hm=0.1901 share_f=73.9% share_h=26.1% STOP=0.375 SAFE=0.953 post=0.540 fcos=0.805 sec=213.2
+epoch 58 L=0.6226 feat=0.4376 hm=0.1850 share_f=74.0% share_h=26.0% STOP=0.367 SAFE=0.955 post=0.529 fcos=0.806 sec=213.2
+epoch 59 L=0.6210 feat=0.4368 hm=0.1843 share_f=74.2% share_h=25.8% STOP=0.353 SAFE=0.950 post=0.517 fcos=0.805 sec=209.9
+epoch 60 L=0.6221 feat=0.4358 hm=0.1863 share_f=73.9% share_h=26.1% STOP=0.364 SAFE=0.950 post=0.523 fcos=0.806 sec=213.8
+epoch 61 L=0.6182 feat=0.4350 hm=0.1831 share_f=74.0% share_h=26.0% STOP=0.370 SAFE=0.950 post=0.523 fcos=0.806 sec=236.3
+epoch 62 L=0.6195 feat=0.4342 hm=0.1853 share_f=73.9% share_h=26.1% STOP=0.397 SAFE=0.946 post=0.575 fcos=0.806 sec=226.4
+epoch 63 L=0.6155 feat=0.4334 hm=0.1821 share_f=74.3% share_h=25.7% STOP=0.369 SAFE=0.953 post=0.532 fcos=0.806 sec=243.4
+epoch 64 L=0.6156 feat=0.4326 hm=0.1831 share_f=74.1% share_h=25.9% STOP=0.371 SAFE=0.946 post=0.529 fcos=0.807 sec=246.3
+epoch 65 L=0.6154 feat=0.4318 hm=0.1836 share_f=74.1% share_h=25.9% STOP=0.370 SAFE=0.949 post=0.549 fcos=0.807 sec=231.4
+epoch 66 L=0.6157 feat=0.4312 hm=0.1845 share_f=73.8% share_h=26.2% STOP=0.403 SAFE=0.943 post=0.555 fcos=0.806 sec=233.1
+epoch 67 L=0.6088 feat=0.4304 hm=0.1783 share_f=74.5% share_h=25.5% STOP=0.383 SAFE=0.949 post=0.526 fcos=0.806 sec=245.5
+epoch 68 L=0.6081 feat=0.4297 hm=0.1784 share_f=74.5% share_h=25.5% STOP=0.363 SAFE=0.952 post=0.503 fcos=0.806 sec=238.3
+epoch 69 L=0.6086 feat=0.4291 hm=0.1795 share_f=74.3% share_h=25.7% STOP=0.383 SAFE=0.952 post=0.540 fcos=0.806 sec=243.5
+epoch 70 L=0.6080 feat=0.4285 hm=0.1795 share_f=74.3% share_h=25.7% STOP=0.341 SAFE=0.954 post=0.497 fcos=0.806 sec=233.7
+epoch 71 L=0.6096 feat=0.4279 hm=0.1817 share_f=73.9% share_h=26.1% STOP=0.353 SAFE=0.960 post=0.514 fcos=0.806 sec=241.0
+epoch 72 L=0.6071 feat=0.4273 hm=0.1798 share_f=74.2% share_h=25.8% STOP=0.377 SAFE=0.950 post=0.526 fcos=0.807 sec=229.6
+epoch 73 L=0.6059 feat=0.4267 hm=0.1791 share_f=74.3% share_h=25.7% STOP=0.357 SAFE=0.960 post=0.514 fcos=0.807 sec=229.8
+epoch 74 L=0.6027 feat=0.4262 hm=0.1765 share_f=74.5% share_h=25.5% STOP=0.368 SAFE=0.958 post=0.529 fcos=0.806 sec=226.8
+epoch 75 L=0.6044 feat=0.4258 hm=0.1786 share_f=74.3% share_h=25.7% STOP=0.350 SAFE=0.957 post=0.500 fcos=0.807 sec=238.4
+epoch 76 L=0.6040 feat=0.4253 hm=0.1788 share_f=74.1% share_h=25.9% STOP=0.356 SAFE=0.955 post=0.509 fcos=0.807 sec=240.8
+epoch 77 L=0.6032 feat=0.4249 hm=0.1783 share_f=74.2% share_h=25.8% STOP=0.344 SAFE=0.956 post=0.512 fcos=0.806 sec=231.2
+epoch 78 L=0.6037 feat=0.4244 hm=0.1793 share_f=74.1% share_h=25.9% STOP=0.378 SAFE=0.954 post=0.529 fcos=0.806 sec=232.7
+epoch 79 L=0.6024 feat=0.4241 hm=0.1783 share_f=74.2% share_h=25.8% STOP=0.375 SAFE=0.955 post=0.532 fcos=0.807 sec=240.2
+epoch 80 L=0.6038 feat=0.4237 hm=0.1801 share_f=73.9% share_h=26.1% STOP=0.376 SAFE=0.954 post=0.526 fcos=0.806 sec=242.7
+epoch 81 L=0.6002 feat=0.4233 hm=0.1769 share_f=74.3% share_h=25.7% STOP=0.390 SAFE=0.953 post=0.540 fcos=0.806 sec=217.8
+epoch 82 L=0.6008 feat=0.4231 hm=0.1778 share_f=74.3% share_h=25.7% STOP=0.373 SAFE=0.955 post=0.514 fcos=0.806 sec=241.7
+epoch 83 L=0.6013 feat=0.4227 hm=0.1786 share_f=74.1% share_h=25.9% STOP=0.369 SAFE=0.954 post=0.523 fcos=0.806 sec=243.4
+epoch 84 L=0.6010 feat=0.4225 hm=0.1786 share_f=74.1% share_h=25.9% STOP=0.366 SAFE=0.953 post=0.514 fcos=0.807 sec=243.2
+epoch 85 L=0.5991 feat=0.4222 hm=0.1769 share_f=74.2% share_h=25.8% STOP=0.350 SAFE=0.956 post=0.503 fcos=0.806 sec=268.0
+epoch 86 L=0.6003 feat=0.4220 hm=0.1783 share_f=74.1% share_h=25.9% STOP=0.353 SAFE=0.955 post=0.512 fcos=0.807 sec=273.2
+epoch 87 L=0.5982 feat=0.4218 hm=0.1763 share_f=74.3% share_h=25.7% STOP=0.362 SAFE=0.957 post=0.509 fcos=0.807 sec=200.1
+epoch 88 L=0.5988 feat=0.4216 hm=0.1772 share_f=74.3% share_h=25.7% STOP=0.367 SAFE=0.955 post=0.517 fcos=0.806 sec=194.6
+epoch 89 L=0.5968 feat=0.4215 hm=0.1753 share_f=74.5% share_h=25.5% STOP=0.354 SAFE=0.957 post=0.503 fcos=0.806 sec=198.2
+epoch 90 L=0.5964 feat=0.4213 hm=0.1751 share_f=74.5% share_h=25.5% STOP=0.369 SAFE=0.954 post=0.517 fcos=0.806 sec=194.4
+epoch 91 L=0.5981 feat=0.4212 hm=0.1769 share_f=74.3% share_h=25.7% STOP=0.361 SAFE=0.955 post=0.512 fcos=0.806 sec=195.8
+epoch 92 L=0.5960 feat=0.4211 hm=0.1749 share_f=74.5% share_h=25.5% STOP=0.358 SAFE=0.956 post=0.506 fcos=0.806 sec=194.5
+epoch 93 L=0.5973 feat=0.4210 hm=0.1763 share_f=74.3% share_h=25.7% STOP=0.359 SAFE=0.956 post=0.509 fcos=0.806 sec=200.4
+epoch 94 L=0.5974 feat=0.4209 hm=0.1764 share_f=74.4% share_h=25.6% STOP=0.354 SAFE=0.958 post=0.503 fcos=0.806 sec=193.5
+epoch 95 L=0.5916 feat=0.4208 hm=0.1708 share_f=75.1% share_h=24.9% STOP=0.359 SAFE=0.955 post=0.506 fcos=0.806 sec=194.1
+epoch 96 L=0.5978 feat=0.4208 hm=0.1770 share_f=74.2% share_h=25.8% STOP=0.356 SAFE=0.956 post=0.503 fcos=0.806 sec=192.8
+epoch 97 L=0.5960 feat=0.4208 hm=0.1753 share_f=74.4% share_h=25.6% STOP=0.359 SAFE=0.955 post=0.506 fcos=0.806 sec=295.6
+epoch 98 L=0.5980 feat=0.4207 hm=0.1773 share_f=74.2% share_h=25.8% STOP=0.358 SAFE=0.955 post=0.506 fcos=0.806 sec=214.8
+epoch 99 L=0.5985 feat=0.4207 hm=0.1778 share_f=74.1% share_h=25.9% STOP=0.356 SAFE=0.956 post=0.503 fcos=0.806 sec=223.9
+OSError: [Errno 122] Disk quota exceeded
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 284, in main
+    (exp / f"metrics_epoch_{ep:02d}.json").write_text(json.dumps(rec, indent=2, default=str), encoding="utf-8")
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/pathlib/_local.py", line 555, in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/pathlib/_abc.py", line 651, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 122] Disk quota exceeded
+OSError: [Errno 122] Disk quota exceeded
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 284, in main
+    (exp / f"metrics_epoch_{ep:02d}.json").write_text(json.dumps(rec, indent=2, default=str), encoding="utf-8")
+    ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/pathlib/_local.py", line 555, in write_text
+    return PathBase.write_text(self, data, encoding, errors, newline)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/raid/money/miniconda3/lib/python3.13/pathlib/_abc.py", line 651, in write_text
+    with self.open(mode='w', encoding=encoding, errors=errors, newline=newline) as f:
+         ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+OSError: [Errno 122] Disk quota exceeded
+
+During handling of the above exception, another exception occurred:
+
+OSError: [Errno 122] Disk quota exceeded
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 356, in <module>
+    main()
+    ~~~~^^
+  File "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_4/scripts/10_train_student.py", line 351, in main
+    (exp / ".failed").write_text(traceba

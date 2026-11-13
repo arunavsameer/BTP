@@ -30,10 +30,15 @@ class WinDS(Dataset):
         video_path = str(row.get("video_path", ""))
         h_now = self.heatmaps.get_now(cid, video_path, t)
         h_1s = np.asarray(self.gt[rid], dtype=np.float32)
+        z16 = pt.get("Z_16")
+        if z16 is None:
+            z16 = np.zeros((1, 16, 16), dtype=np.float32)
         return {
             "clip": torch.from_numpy(np.ascontiguousarray(clip)),
             "F_teacher": torch.from_numpy(pt["F_dec"]),
             "H_teacher": torch.from_numpy(pt["H_teacher"]),
+            "P_teacher_5": torch.from_numpy(pt["H_teacher"]),
+            "Z_teacher_16": torch.from_numpy(np.ascontiguousarray(z16)),
             "gt_1s": torch.from_numpy(h_1s),
             "h_1s": torch.from_numpy(h_1s),
             "h_now": torch.from_numpy(np.ascontiguousarray(h_now)),
@@ -53,6 +58,8 @@ def collate(batch):
         "clip": torch.stack([b["clip"] for b in batch]),
         "F_teacher": torch.stack([b["F_teacher"] for b in batch]),
         "H_teacher": torch.stack([b["H_teacher"] for b in batch]),
+        "P_teacher_5": torch.stack([b["P_teacher_5"] for b in batch]),
+        "Z_teacher_16": torch.stack([b["Z_teacher_16"] for b in batch]),
         "gt_1s": torch.stack([b["gt_1s"] for b in batch]),
         "h_1s": torch.stack([b["h_1s"] for b in batch]),
         "h_now": torch.stack([b["h_now"] for b in batch]),

@@ -1,0 +1,57 @@
+{
+  "epoch": 29,
+  "train": {
+    "L_feat": 0.47311719808418706,
+    "L_heatmap": 0.23256955542283403,
+    "L_feat_contrib": 0.47311719808418706,
+    "L_heatmap_contrib": 0.23256955542283403,
+    "share_feat": 0.7147853502415685,
+    "share_heatmap": 0.2852146493554332,
+    "feat_weight": 1.0,
+    "heatmap_weight": 1.0,
+    "L_total": 0.705686753725459,
+    "L_1s": 0.11171085710139991,
+    "L_blob": 0.30444604897195504,
+    "L_stop_hinge": 0.0054413126199711545,
+    "L_safe_hinge": 0.015036147201917918,
+    "L_close": 0.0,
+    "L_FP": 0.006648809686039608,
+    "L_dir": 0.013566316222764531,
+    "L_bg": 0.0,
+    "sec": 213.06772432196885
+  },
+  "selection": {
+    "confusion_matrix": [
+      [
+        3281,
+        163,
+        150
+      ],
+      [
+        512,
+        56,
+        40
+      ],
+      [
+        455,
+        93,
+        370
+      ]
+    ],
+    "stop_recall": 0.40305010893246185,
+    "safe_recall": 0.9129104062326099,
+    "threat_recall": 0.09210526315789473,
+    "stop_precision": 0.6607142857142857,
+    "safe_false_alarm_rate": 0.08708959376739012,
+    "balanced_stop_safe_recall": 0.6579802575825359,
+    "pre_fork_stop_recall": 0.2972027972027972,
+    "post_fork_stop_recall": 0.5780346820809249,
+    "n_prefork_stop": 572,
+    "n_postfork_stop": 346,
+    "gt_heatmap_mse": 0.031217853733459578,
+    "parent_heatmap_mae": 0.053101067848255565,
+    "n": 5120,
+    "fdec_cosine": 0.7904478311538696,
+    "fdec_l1": 0.7463353276252747
+  }
+}

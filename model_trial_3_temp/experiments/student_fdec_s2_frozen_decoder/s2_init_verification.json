@@ -1,5 +1,0 @@
-{
-  "source": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/experiments/student_fdec_s1/checkpoint_initial.pt",
-  "sha256_prefix": "2e8937d4a94a266c",
-  "note": "S2 starts from S1 initial weights (not epoch 15)"
-}

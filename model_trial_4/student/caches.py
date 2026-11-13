@@ -63,23 +63,36 @@ class RGBCache256:
 
 
 class ParentTargetCache:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, z16_root: str | Path | None = None):
         root = Path(root)
         mapping = json.loads((root / "mapping.json").read_text(encoding="utf-8"))
         self._map = {k: int(v) for k, v in mapping.items()}
         n = int(json.loads((root / "metadata.json").read_text())["num_training_anchors"])
+        self.n = n
         self.F = np.memmap(root / "F_dec.npy", dtype=np.float16, mode="r", shape=(n, 128, 16, 16))
         self.H = np.memmap(root / "H_teacher.npy", dtype=np.float16, mode="r", shape=(n, 5, 5))
+        self.Z = None
+        zroot = Path(z16_root) if z16_root is not None else root
+        zpath = zroot / "Z_16.npy"
+        if zpath.is_file():
+            self.Z = np.memmap(zpath, dtype=np.float16, mode="r", shape=(n, 1, 16, 16))
 
     def get_parent_targets(self, clip_id: str, anchor_frame: int) -> dict | None:
         key = f"{clip_id}::{int(anchor_frame)}"
         i = self._map.get(key)
         if i is None:
             return None
-        return {
+        out = {
             "F_dec": np.asarray(self.F[i], dtype=np.float32),
             "H_teacher": np.asarray(self.H[i], dtype=np.float32),
+            "index": i,
         }
+        if self.Z is not None:
+            out["Z_16"] = np.asarray(self.Z[i], dtype=np.float32)
+        return out
+
+    def peak_teacher(self, index: int) -> float:
+        return float(np.max(self.H[int(index)]))
 
 
 class SpatialHeatmaps:

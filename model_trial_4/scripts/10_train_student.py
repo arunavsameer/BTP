@@ -5,7 +5,7 @@ Loss is two components with **fixed** weights:
   1) L_feat: channel-normalized L1 vs cached parent F_dec
   2) Trial-3 G heatmap recipe (appear / small-blob / STOP+SAFE hinge / blob / FP / dir)
 
-Component weights are constants (default feat_weight=1, heatmap_weight=1).
+Component weights are constants (default feat_weight=1, heatmap_weight=2).
 
 Reads (never writes):
   - 256 RGB cache (shared_rgb_cache_256_v1)
@@ -79,9 +79,9 @@ def main() -> None:
     parser.add_argument("--num-workers", type=int, default=4)
     parser.add_argument("--integrity-only", action="store_true")
     parser.add_argument("--max-batches", type=int, default=0, help="If >0, cap train batches per epoch (local test).")
-    parser.add_argument("--run-name", default="feat_gheatmap_v2")
+    parser.add_argument("--run-name", default="feat_gheatmap_v3")
     parser.add_argument("--feat-weight", type=float, default=1.0)
-    parser.add_argument("--heatmap-weight", type=float, default=1.0)
+    parser.add_argument("--heatmap-weight", type=float, default=2.0)
     parser.add_argument("--rgb-cache", default=None)
     parser.add_argument("--parent-cache", default=None)
     parser.add_argument("--parent-ckpt", default=None)

@@ -1,0 +1,62 @@
+=== SLURM job 10249 feat_gheatmap_v3 on DGX2 ===
+Friday 13 November 2026 11:53:18 PM IST
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-b78ec6a9-374b-3220-b0c0-50432315e4a0)
+run_dir=/raid/asrivastava/VJEPA2_BTP/model_trial_4/student_runs/feat_gheatmap_v3 heatmap_weight=2.0
+{
+  "ok": true,
+  "device": "cpu",
+  "parent_ckpt": "/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt",
+  "decoder_hash": "77f78c8714667617",
+  "expected_hash": "77f78c8714667617",
+  "hash_ok": true,
+  "param_audit": {
+    "total": 963659,
+    "trainable": 915850,
+    "frozen": 47809,
+    "encoder": 881290,
+    "predictor": 34560,
+    "decoder": 47809
+  },
+  "encoder_got_grad": true,
+  "decoder_got_grad": false,
+  "feat_weight": 1.0,
+  "heatmap_weight": 1.0,
+  "loss_terms": {
+    "L_feat": 1.750223159790039,
+    "L_heatmap": 3.4542274475097656,
+    "L_feat_contrib": 1.750223159790039,
+    "L_heatmap_contrib": 3.4542274475097656,
+    "share_feat": 0.3362935483455658,
+    "share_heatmap": 0.6637064814567566,
+    "feat_weight": 1.0,
+    "heatmap_weight": 1.0,
+    "L_total": 5.204450607299805,
+    "L_1s": 1.6395162343978882,
+    "L_blob": 3.4911439418792725,
+    "L_stop_hinge": 0.5865615010261536,
+    "L_safe_hinge": 0.0,
+    "L_close": 0.0,
+    "L_FP": 0.0,
+    "L_dir": 0.12498872727155685,
+    "L_bg": 0.0
+  },
+  "has_L_feat": true,
+  "has_L_heatmap": true,
+  "no_L_cos": true,
+  "no_L_mgd": true,
+  "trial3_untouched": true
+}
+smoke OK
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 ckpt=/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt
+F_dec→decoder vs H_teacher {'n': 128, 'max_abs': 0.00036835670471191406, 'mean_abs': 5.716937226907248e-05, 'ok': True}
+device=cuda params {'total': 963659, 'trainable': 915850, 'frozen': 47809, 'encoder': 881290, 'predictor': 34560, 'decoder': 47809}
+fixed_weights feat_w=1.0 heatmap_w=2.0
+epoch 1 L=2.6731 feat=0.6599 hm=1.0066 share_f=27.7% share_h=72.3% STOP=0.629 SAFE=0.000 post=0.720 fcos=0.603 sec=244.2
+epoch 2 L=2.5542 feat=0.6114 hm=0.9714 share_f=27.7% share_h=72.3% STOP=0.733 SAFE=0.000 post=0.821 fcos=0.634 sec=235.6
+epoch 3 L=2.5160 feat=0.5996 hm=0.9582 share_f=27.4% share_h=72.6% STOP=0.234 SAFE=0.000 post=0.185 fcos=0.653 sec=235.1
+epoch 4 L=2.5097 feat=0.5985 hm=0.9556 share_f=27.4% share_h=72.6% STOP=0.193 SAFE=0.000 post=0.231 fcos=0.625 sec=222.0
+epoch 5 L=2.4572 feat=0.6031 hm=0.9271 share_f=28.5% share_h=71.5% STOP=0.225 SAFE=0.000 post=0.341 fcos=0.578 sec=220.9
+epoch 6 L=2.3614 feat=0.6073 hm=0.8771 share_f=31.3% share_h=68.7% STOP=0.329 SAFE=0.000 post=0.474 fcos=0.561 sec=222.0
+epoch 7 L=2.2231 feat=0.5968 hm=0.8131 share_f=32.7% share_h=67.3% STOP=0.279 SAFE=0.052 post=0.413 fcos=0.635 sec=218.9
+slurmstepd: error: *** JOB 10249 ON DGX2 CANCELLED AT 2026-11-14T00:30:21 ***

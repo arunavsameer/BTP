@@ -1,0 +1,25 @@
+=== SLURM job 10260 student_v3_coord_v1 on DGX2 ===
+Saturday 14 November 2026 03:51:26 AM IST
+GPU 0: NVIDIA A100-SXM4-40GB (UUID: GPU-4ba4736d-11ca-e800-1d07-3eb61df18dff)
+test_causality_no_future_leak_into_t0_t6 (__main__.StudentV3Tests.test_causality_no_future_leak_into_t0_t6) ... ok
+test_coord_and_delta3_are_causal_priors (__main__.StudentV3Tests.test_coord_and_delta3_are_causal_priors) ... ok
+test_trainable_param_count_near_v2_plus_extras (__main__.StudentV3Tests.test_trainable_param_count_near_v2_plus_extras) ... ok
+
+----------------------------------------------------------------------
+Ran 3 tests in 0.394s
+
+OK
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 z16=yes
+device=cuda params {'total': 441136, 'trainable': 393327, 'frozen': 47809, 'backbone': 393327, 'decoder': 47809} arch=v3
+epoch 1 step=709 L=0.9246 5x5=0.2437 16=0.2122 feat=0.9375 lam=0.500 share_f=0.53 STOP=0.000 SAFE=0.000 lr=3.08e-04 sec=317.9
+epoch 2 step=1418 L=0.7503 5x5=0.1829 16=0.1861 feat=0.7626 lam=0.500 share_f=0.53 STOP=0.059 SAFE=0.000 lr=6.06e-04 sec=312.8
+epoch 3 step=2127 L=0.6371 5x5=0.1456 16=0.1428 feat=0.6973 lam=0.500 share_f=0.57 STOP=0.424 SAFE=0.006 lr=9.04e-04 sec=304.6
+epoch 4 step=2836 L=0.5717 5x5=0.1192 16=0.1209 feat=0.6633 lam=0.500 share_f=0.60 STOP=0.319 SAFE=0.164 lr=1.20e-03 sec=290.2
+epoch 5 step=3545 L=0.5291 5x5=0.1010 16=0.1062 feat=0.6439 lam=0.500 share_f=0.62 STOP=0.592 SAFE=0.074 lr=1.50e-03 sec=289.3
+epoch 6 step=4254 L=0.4990 5x5=0.0892 16=0.0972 feat=0.6252 lam=0.500 share_f=0.64 STOP=0.476 SAFE=0.573 lr=1.50e-03 sec=285.0
+epoch 7 step=4963 L=0.4705 5x5=0.0772 16=0.0896 feat=0.6073 lam=0.500 share_f=0.66 STOP=0.575 SAFE=0.701 lr=1.50e-03 sec=289.7
+epoch 8 step=5672 L=0.4469 5x5=0.0685 16=0.0819 feat=0.5928 lam=0.500 share_f=0.67 STOP=0.571 SAFE=0.422 lr=1.50e-03 sec=297.5
+epoch 9 step=6381 L=0.4344 5x5=0.0643 16=0.0792 feat=0.5817 lam=0.500 share_f=0.68 STOP=0.507 SAFE=0.752 lr=1.49e-03 sec=301.7
+epoch 10 step=7090 L=0.4222 5x5=0.0595 16=0.0760 feat=0.5733 lam=0.500 share_f=0.69 STOP=0.633 SAFE=0.797 lr=1.49e-03 sec=312.6
+epoch 11 step=7799 L=0.4104 5x5=0.0557 16=0.0727 feat=0.5639 lam=0.500 share_f=0.70 STOP=0.471 SAFE=0.774 lr=1.49e-03 sec=318.3

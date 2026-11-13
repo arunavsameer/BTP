@@ -18,6 +18,109 @@ def peak_class_t(gt: torch.Tensor) -> torch.Tensor:
     return y
 
 
+def _sample_reduce(per: torch.Tensor, sw: torch.Tensor) -> torch.Tensor:
+    return (per * sw).sum() / sw.sum().clamp_min(1e-6)
+
+
+def _per_sample_wl1(pred: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    err = (pred.float() - target.float().detach()).abs().mean(dim=1, keepdim=True)
+    w = weight.to(dtype=err.dtype)
+    return (w * err).flatten(1).sum(1) / w.flatten(1).sum(1).clamp_min(1e-6)
+
+
+def _per_sample_cosine(pred: torch.Tensor, target: torch.Tensor, weight: torch.Tensor) -> torch.Tensor:
+    p = F.normalize(pred.float().permute(0, 2, 3, 1), dim=-1, eps=1e-6)
+    t = F.normalize(target.float().detach().permute(0, 2, 3, 1), dim=-1, eps=1e-6)
+    loc = 1.0 - (p * t).sum(dim=-1)
+    w = weight.squeeze(1).to(dtype=loc.dtype)
+    return (w * loc).flatten(1).sum(1) / w.flatten(1).sum(1).clamp_min(1e-6)
+
+
+def _per_sample_rel(pred: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    p = F.normalize(pred.float().flatten(2), dim=1)
+    t = F.normalize(target.float().detach().flatten(2), dim=1)
+    gp = torch.bmm(p.transpose(1, 2), p)
+    gt = torch.bmm(t.transpose(1, 2), t)
+    return (gp - gt).pow(2).mean(dim=(1, 2))
+
+
+def latent_sample_weights(gt: torch.Tensor, pre_fork: torch.Tensor) -> torch.Tensor:
+    y = peak_class_t(gt)
+    stop = y == STOP
+    pref = pre_fork.to(dtype=torch.bool)
+    w = torch.ones(gt.size(0), device=gt.device, dtype=gt.dtype)
+    w = w + 3.0 * stop.to(w.dtype)
+    w = w + 2.0 * (stop & pref).to(w.dtype)
+    return w
+
+
+def parent_correct_stop_kd(h: torch.Tensor, ht: torch.Tensor, gt: torch.Tensor) -> torch.Tensor:
+    yg, yp = peak_class_t(gt), peak_class_t(ht)
+    m = (yg == STOP) & (yp == STOP)
+    if not bool(m.any()):
+        return h.new_zeros(())
+    return ((h - ht).abs()[m]).mean()
+
+
+def safe_peak_hinge(h: torch.Tensor, gt: torch.Tensor, cut: float = 0.25) -> torch.Tensor:
+    y = peak_class_t(gt)
+    p = h.flatten(1).max(1).values
+    m = y == SAFE
+    if not bool(m.any()):
+        return h.new_zeros(())
+    return F.relu(p[m] - cut).mean()
+
+
+def collapse_recovery_losses(out, batch, mu, sigma, predictor, decoder, dec_init):
+    """M1 latent weights + STOP spatial boost + parent-correct STOP KD + SAFE brake."""
+    fs, ft = out["F"], batch["F_teacher"]
+    gt = batch["gt_1s"].float()
+    ht = batch["H_teacher"].float()
+    h = out["Hhat_1s"].float()
+    pref = batch["pre_fork"]
+    w = blob_weights(ft, None, gt, energy_alpha=0.0, appear_boost=0.0, stop_boost=2.0)
+    sw = latent_sample_weights(gt, pref)
+    fs_n = (fs - mu) / (sigma + 1e-6)
+    ft_n = (ft - mu) / (sigma + 1e-6)
+    lf = _sample_reduce(_per_sample_wl1(fs_n, ft_n, w), sw)
+    lc = _sample_reduce(_per_sample_cosine(fs, ft, w), sw)
+    lr = _sample_reduce(_per_sample_rel(fs, ft), sw)
+    mask = (torch.rand(fs.size(0), 1, fs.size(2), fs.size(3), device=fs.device) < 0.5).to(fs.dtype)
+    f_mgd = predictor(out["F_ctx"], mask=mask)
+    if f_mgd.shape != fs_n.shape:
+        f_mgd = F.interpolate(f_mgd, size=fs_n.shape[-2:], mode="bilinear", align_corners=False)
+    lm = _sample_reduce(_per_sample_wl1((f_mgd - mu) / (sigma + 1e-6), ft_n, w), sw)
+    lh = occupied_heatmap(h, gt)
+    lfl = stop_floor(h, gt, 0.75)
+    lkd = parent_correct_stop_kd(h, ht, gt)
+    lsf = safe_peak_hinge(h, gt, 0.25)
+    l_reg = decoder_anchor(decoder, dec_init)
+    parts = {
+        "L_feat": lf,
+        "L_cos": lc,
+        "L_rel": lr,
+        "L_mgd": lm,
+        "L_h": lh,
+        "L_floor": lfl,
+        "L_kd": lkd,
+        "L_safe": lsf,
+        "L_dec_reg": l_reg,
+    }
+    total = (
+        1.0 * lf
+        + 0.2 * lc
+        + 0.5 * lm
+        + 0.2 * lr
+        + 0.8 * lh
+        + 1.8 * lfl
+        + 1.0 * lkd
+        + 0.4 * lsf
+        + 0.01 * l_reg
+    )
+    parts["L_total_base"] = total
+    return parts, total, peak_class_t(gt)
+
+
 def latent_terms(out, batch, mu, sigma, predictor):
     fs, ft = out["F"], batch["F_teacher"]
     w = blob_weights(ft, None, batch["gt_1s"], energy_alpha=0.0, appear_boost=0.0, stop_boost=0.0)

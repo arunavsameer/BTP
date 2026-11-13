@@ -1,0 +1,17 @@
+test_causality_no_future_leak_into_t0_t6 (__main__.StudentV2Tests.test_causality_no_future_leak_into_t0_t6) ... ok
+test_hazard_weights_and_hflip (__main__.StudentV2Tests.test_hazard_weights_and_hflip) ... ok
+test_loss_flows_through_frozen_decoder (__main__.StudentV2Tests.test_loss_flows_through_frozen_decoder) ... ok
+test_trainable_param_count_in_gate (__main__.StudentV2Tests.test_trainable_param_count_in_gate) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.812s
+
+OK
+windows (22680, 5120, 5120)
+decoder_hash=77f78c8714667617 z16=on_the_fly
+device=cuda params {'total': 427440, 'trainable': 379631, 'frozen': 47809, 'backbone': 379631, 'decoder': 47809}
+overfit n=32 stop=10
+epoch 1 step=1 L=1.5706 5x5=0.6665 16=0.1727 feat=1.4628 STOP=0.000 SAFE=1.000 lr=1.59e-04 sec=2.0
+DONE selected_epoch=1 test_STOP=0.0 test_SAFE=1.0
+overfit done
+Saturday 14 November 2026 12:38:07 AM IST

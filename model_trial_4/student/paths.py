@@ -10,6 +10,7 @@ TRIAL3 = Path("/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3")
 TEMP3 = Path("/home/asrivastava/VJEPA2_BTP/BTP/model_trial_3_temp")
 RAID3 = Path("/raid/asrivastava/VJEPA2_BTP/model_trial_3")
 RAID3_TEMP = Path("/raid/asrivastava/VJEPA2_BTP/model_trial_3_temp")
+RAID4 = Path("/raid/asrivastava/VJEPA2_BTP/model_trial_4")
 
 EXPECTED_DECODER_HASH = "77f78c8714667617"
 PARENT_CKPT_NAME = "checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt"
@@ -68,3 +69,10 @@ def run_dir(name: str = RUN_NAME) -> Path:
     if env:
         return Path(env)
     return TRIAL4 / "student_runs" / name
+
+
+def z16_cache() -> Path:
+    env = os.environ.get("STUDENT_Z16_CACHE")
+    if env:
+        return Path(env)
+    return RAID4 / "z16_sidecar_v1"
