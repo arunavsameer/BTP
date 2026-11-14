@@ -1,0 +1,819 @@
+=== batch start 2026-10-25T00:49:25+05:30 ===
+=== BEGIN gr40d clip_02_1177s-1194s.mp4 1176.7697669163908 1194.3261405232338 2026-10-25T00:49:25+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  28%|██▊       | 234/843 [00:00<00:00, 2331.36it/s]Loading weights:  56%|█████▌    | 468/843 [00:00<00:00, 2281.35it/s]Loading weights:  94%|█████████▍| 795/843 [00:00<00:00, 2724.65it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2714.76it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=526 fps=30.000 size=854x480 dur=17.50s origin=1176.770s
+t= 1179.77s  STOP    peak=0.770
+t= 1179.97s  STOP    peak=0.922
+t= 1180.17s  STOP    peak=0.891
+t= 1180.37s  STOP    peak=0.996
+t= 1180.57s  STOP    peak=1.000
+t= 1180.77s  STOP    peak=1.000
+t= 1180.97s  STOP    peak=0.988
+t= 1181.17s  THREAT  peak=0.559
+t= 1181.37s  SAFE    peak=0.009
+t= 1181.57s  SAFE    peak=0.069
+t= 1181.77s  SAFE    peak=0.050
+t= 1181.97s  THREAT  peak=0.578
+t= 1182.17s  THREAT  peak=0.547
+t= 1182.37s  STOP    peak=0.668
+t= 1182.57s  THREAT  peak=0.512
+t= 1182.77s  STOP    peak=0.703
+t= 1182.97s  STOP    peak=0.770
+t= 1183.17s  THREAT  peak=0.354
+t= 1183.37s  STOP    peak=0.801
+t= 1183.57s  THREAT  peak=0.367
+t= 1183.77s  THREAT  peak=0.508
+t= 1183.97s  STOP    peak=0.715
+t= 1184.17s  SAFE    peak=0.079
+t= 1184.37s  SAFE    peak=0.012
+t= 1184.57s  SAFE    peak=0.009
+t= 1184.77s  STOP    peak=0.609
+t= 1184.97s  STOP    peak=0.863
+t= 1185.17s  STOP    peak=0.883
+t= 1185.37s  STOP    peak=0.688
+t= 1185.57s  STOP    peak=0.973
+t= 1185.77s  STOP    peak=0.945
+t= 1185.97s  STOP    peak=0.844
+t= 1186.17s  SAFE    peak=0.110
+t= 1186.37s  SAFE    peak=0.020
+t= 1186.57s  SAFE    peak=0.023
+t= 1186.77s  SAFE    peak=0.216
+t= 1186.97s  STOP    peak=0.633
+t= 1187.17s  STOP    peak=0.934
+t= 1187.37s  THREAT  peak=0.273
+t= 1187.57s  SAFE    peak=0.006
+t= 1187.77s  THREAT  peak=0.516
+t= 1187.97s  STOP    peak=0.879
+t= 1188.17s  STOP    peak=0.930
+t= 1188.37s  STOP    peak=0.941
+t= 1188.57s  THREAT  peak=0.365
+t= 1188.77s  SAFE    peak=0.014
+t= 1188.97s  SAFE    peak=0.036
+t= 1189.17s  SAFE    peak=0.212
+t= 1189.37s  STOP    peak=0.785
+t= 1189.57s  STOP    peak=0.910
+t= 1189.77s  THREAT  peak=0.586
+t= 1189.97s  SAFE    peak=0.065
+t= 1190.17s  SAFE    peak=0.032
+t= 1190.37s  SAFE    peak=0.050
+t= 1190.57s  THREAT  peak=0.295
+t= 1190.77s  STOP    peak=0.625
+t= 1190.97s  STOP    peak=0.652
+t= 1191.17s  STOP    peak=0.719
+t= 1191.37s  STOP    peak=0.738
+t= 1191.57s  STOP    peak=0.781
+t= 1191.77s  STOP    peak=0.844
+t= 1191.97s  STOP    peak=0.832
+t= 1192.17s  SAFE    peak=0.248
+t= 1192.37s  SAFE    peak=0.238
+t= 1192.57s  THREAT  peak=0.500
+t= 1192.77s  SAFE    peak=0.146
+t= 1192.97s  SAFE    peak=0.095
+t= 1193.17s  SAFE    peak=0.025
+t= 1193.37s  SAFE    peak=0.074
+t= 1193.57s  SAFE    peak=0.014
+t= 1193.77s  SAFE    peak=0.081
+t= 1193.97s  SAFE    peak=0.029
+t= 1194.17s  THREAT  peak=0.402
+counts SAFE=26 THREAT=14 STOP=33
+wrote visualizations/street_vlog/gr40d/clip_02_1177s-1194s.mp4
+wrote visualizations/street_vlog/gr40d/clip_02_1177s-1194s.csv
+=== OK gr40d clip_02_1177s-1194s.mp4 2026-10-25T00:49:54+05:30 ===
+=== BEGIN gr40d clip_03_2201s-2221s.mp4 2201.411274984765 2220.63338424239 2026-10-25T00:49:54+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  26%|██▌       | 216/843 [00:00<00:00, 2129.32it/s]Loading weights:  52%|█████▏    | 441/843 [00:00<00:00, 2196.45it/s]Loading weights:  82%|████████▏ | 689/843 [00:00<00:00, 2323.26it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2619.76it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=576 fps=30.000 size=854x480 dur=19.17s origin=2201.411s
+t= 2204.41s  STOP    peak=0.730
+t= 2204.61s  STOP    peak=0.723
+t= 2204.81s  STOP    peak=0.617
+t= 2205.01s  SAFE    peak=0.190
+t= 2205.21s  THREAT  peak=0.307
+t= 2205.41s  THREAT  peak=0.270
+t= 2205.61s  THREAT  peak=0.430
+t= 2205.81s  THREAT  peak=0.574
+t= 2206.01s  THREAT  peak=0.535
+t= 2206.21s  SAFE    peak=0.241
+t= 2206.41s  SAFE    peak=0.133
+t= 2206.61s  SAFE    peak=0.021
+t= 2206.81s  SAFE    peak=0.003
+t= 2207.01s  THREAT  peak=0.389
+t= 2207.21s  THREAT  peak=0.555
+t= 2207.41s  STOP    peak=0.621
+t= 2207.61s  STOP    peak=0.652
+t= 2207.81s  THREAT  peak=0.504
+t= 2208.01s  THREAT  peak=0.268
+t= 2208.21s  THREAT  peak=0.559
+t= 2208.41s  THREAT  peak=0.305
+t= 2208.61s  THREAT  peak=0.322
+t= 2208.81s  SAFE    peak=0.212
+t= 2209.01s  THREAT  peak=0.270
+t= 2209.21s  THREAT  peak=0.324
+t= 2209.41s  SAFE    peak=0.235
+t= 2209.61s  SAFE    peak=0.130
+t= 2209.81s  THREAT  peak=0.527
+t= 2210.01s  THREAT  peak=0.365
+t= 2210.21s  SAFE    peak=0.142
+t= 2210.41s  SAFE    peak=0.167
+t= 2210.61s  SAFE    peak=0.227
+t= 2210.81s  THREAT  peak=0.287
+t= 2211.01s  SAFE    peak=0.233
+t= 2211.21s  THREAT  peak=0.461
+t= 2211.41s  SAFE    peak=0.206
+t= 2211.61s  THREAT  peak=0.281
+t= 2211.81s  SAFE    peak=0.177
+t= 2212.01s  THREAT  peak=0.311
+t= 2212.21s  SAFE    peak=0.245
+t= 2212.41s  SAFE    peak=0.212
+t= 2212.61s  SAFE    peak=0.137
+t= 2212.81s  SAFE    peak=0.161
+t= 2213.01s  SAFE    peak=0.100
+t= 2213.21s  SAFE    peak=0.138
+t= 2213.41s  STOP    peak=0.711
+t= 2213.61s  THREAT  peak=0.570
+t= 2213.81s  THREAT  peak=0.504
+t= 2214.01s  SAFE    peak=0.108
+t= 2214.21s  THREAT  peak=0.404
+t= 2214.41s  THREAT  peak=0.422
+t= 2214.61s  SAFE    peak=0.016
+t= 2214.81s  SAFE    peak=0.045
+t= 2215.01s  SAFE    peak=0.104
+t= 2215.21s  SAFE    peak=0.185
+t= 2215.41s  SAFE    peak=0.032
+t= 2215.61s  SAFE    peak=0.216
+t= 2215.81s  SAFE    peak=0.195
+t= 2216.01s  SAFE    peak=0.128
+t= 2216.21s  SAFE    peak=0.146
+t= 2216.41s  THREAT  peak=0.258
+t= 2216.61s  SAFE    peak=0.208
+t= 2216.81s  THREAT  peak=0.281
+t= 2217.01s  SAFE    peak=0.132
+t= 2217.21s  SAFE    peak=0.166
+t= 2217.41s  SAFE    peak=0.232
+t= 2217.61s  SAFE    peak=0.034
+t= 2217.81s  SAFE    peak=0.206
+t= 2218.01s  SAFE    peak=0.101
+t= 2218.21s  THREAT  peak=0.461
+t= 2218.41s  SAFE    peak=0.202
+t= 2218.61s  SAFE    peak=0.034
+t= 2218.81s  SAFE    peak=0.004
+t= 2219.01s  SAFE    peak=0.062
+t= 2219.21s  SAFE    peak=0.022
+t= 2219.41s  SAFE    peak=0.149
+t= 2219.61s  SAFE    peak=0.053
+t= 2219.81s  SAFE    peak=0.172
+t= 2220.01s  SAFE    peak=0.148
+t= 2220.21s  SAFE    peak=0.198
+t= 2220.41s  SAFE    peak=0.204
+counts SAFE=48 THREAT=27 STOP=6
+wrote visualizations/street_vlog/gr40d/clip_03_2201s-2221s.mp4
+wrote visualizations/street_vlog/gr40d/clip_03_2201s-2221s.csv
+=== OK gr40d clip_03_2201s-2221s.mp4 2026-10-25T00:50:26+05:30 ===
+=== BEGIN gr40d clip_04_73s-91s.mp4 72.66715358845768 90.8642875807471 2026-10-25T00:50:26+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  25%|██▌       | 213/843 [00:00<00:00, 2115.43it/s]Loading weights:  51%|█████     | 426/843 [00:00<00:00, 2088.80it/s]Loading weights:  75%|███████▌  | 635/843 [00:00<00:00, 2083.92it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2534.20it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=545 fps=30.000 size=854x480 dur=18.13s origin=72.667s
+t=   75.67s  THREAT  peak=0.428
+t=   75.87s  STOP    peak=0.703
+t=   76.07s  SAFE    peak=0.220
+t=   76.27s  SAFE    peak=0.079
+t=   76.47s  THREAT  peak=0.318
+t=   76.67s  THREAT  peak=0.400
+t=   76.87s  STOP    peak=0.965
+t=   77.07s  STOP    peak=0.801
+t=   77.27s  THREAT  peak=0.535
+t=   77.47s  SAFE    peak=0.047
+t=   77.67s  SAFE    peak=0.057
+t=   77.87s  THREAT  peak=0.566
+t=   78.07s  THREAT  peak=0.268
+t=   78.27s  SAFE    peak=0.223
+t=   78.47s  THREAT  peak=0.312
+t=   78.67s  SAFE    peak=0.081
+t=   78.87s  STOP    peak=0.961
+t=   79.07s  STOP    peak=0.945
+t=   79.27s  STOP    peak=0.875
+t=   79.47s  THREAT  peak=0.256
+t=   79.67s  STOP    peak=0.719
+t=   79.87s  STOP    peak=0.848
+t=   80.07s  SAFE    peak=0.101
+t=   80.27s  SAFE    peak=0.006
+t=   80.47s  SAFE    peak=0.003
+t=   80.67s  SAFE    peak=0.001
+t=   80.87s  SAFE    peak=0.179
+t=   81.07s  SAFE    peak=0.176
+t=   81.27s  THREAT  peak=0.551
+t=   81.47s  THREAT  peak=0.262
+t=   81.67s  SAFE    peak=0.222
+t=   81.87s  SAFE    peak=0.137
+t=   82.07s  SAFE    peak=0.031
+t=   82.27s  THREAT  peak=0.258
+t=   82.47s  THREAT  peak=0.262
+t=   82.67s  THREAT  peak=0.408
+t=   82.87s  THREAT  peak=0.291
+t=   83.07s  SAFE    peak=0.145
+t=   83.27s  SAFE    peak=0.029
+t=   83.47s  THREAT  peak=0.516
+t=   83.67s  THREAT  peak=0.482
+t=   83.87s  STOP    peak=0.680
+t=   84.07s  STOP    peak=0.617
+t=   84.27s  THREAT  peak=0.361
+t=   84.47s  SAFE    peak=0.041
+t=   84.67s  SAFE    peak=0.068
+t=   84.87s  SAFE    peak=0.017
+t=   85.07s  SAFE    peak=0.007
+t=   85.27s  SAFE    peak=0.016
+t=   85.47s  SAFE    peak=0.028
+t=   85.67s  SAFE    peak=0.062
+t=   85.87s  SAFE    peak=0.239
+t=   86.07s  THREAT  peak=0.289
+t=   86.27s  SAFE    peak=0.140
+t=   86.47s  SAFE    peak=0.226
+t=   86.67s  THREAT  peak=0.443
+t=   86.87s  SAFE    peak=0.108
+t=   87.07s  STOP    peak=0.703
+t=   87.27s  THREAT  peak=0.562
+t=   87.47s  STOP    peak=0.793
+t=   87.67s  STOP    peak=0.746
+t=   87.87s  STOP    peak=0.730
+t=   88.07s  SAFE    peak=0.200
+t=   88.27s  SAFE    peak=0.132
+t=   88.47s  SAFE    peak=0.157
+t=   88.67s  SAFE    peak=0.015
+t=   88.87s  SAFE    peak=0.152
+t=   89.07s  THREAT  peak=0.414
+t=   89.27s  THREAT  peak=0.422
+t=   89.47s  SAFE    peak=0.108
+t=   89.67s  THREAT  peak=0.395
+t=   89.87s  SAFE    peak=0.024
+t=   90.07s  SAFE    peak=0.041
+t=   90.27s  SAFE    peak=0.004
+t=   90.47s  SAFE    peak=0.071
+t=   90.67s  SAFE    peak=0.015
+counts SAFE=39 THREAT=23 STOP=14
+wrote visualizations/street_vlog/gr40d/clip_04_73s-91s.mp4
+wrote visualizations/street_vlog/gr40d/clip_04_73s-91s.csv
+=== OK gr40d clip_04_73s-91s.mp4 2026-10-25T00:50:56+05:30 ===
+=== BEGIN gr40d clip_05_252s-272s.mp4 252.4853612674675 271.9462591059917 2026-10-25T00:50:56+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  24%|██▍       | 204/843 [00:00<00:00, 2027.94it/s]Loading weights:  50%|█████     | 423/843 [00:00<00:00, 2122.14it/s]Loading weights:  75%|███████▌  | 636/843 [00:00<00:00, 2054.88it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2504.69it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=584 fps=30.000 size=854x480 dur=19.43s origin=252.485s
+t=  255.49s  SAFE    peak=0.141
+t=  255.69s  SAFE    peak=0.077
+t=  255.89s  SAFE    peak=0.010
+t=  256.09s  SAFE    peak=0.002
+t=  256.29s  SAFE    peak=0.010
+t=  256.49s  SAFE    peak=0.184
+t=  256.69s  SAFE    peak=0.029
+t=  256.89s  SAFE    peak=0.012
+t=  257.09s  SAFE    peak=0.021
+t=  257.29s  SAFE    peak=0.024
+t=  257.49s  SAFE    peak=0.050
+t=  257.69s  SAFE    peak=0.081
+t=  257.89s  SAFE    peak=0.040
+t=  258.09s  SAFE    peak=0.017
+t=  258.29s  THREAT  peak=0.297
+t=  258.49s  THREAT  peak=0.547
+t=  258.69s  STOP    peak=0.629
+t=  258.89s  STOP    peak=0.648
+t=  259.09s  THREAT  peak=0.467
+t=  259.29s  THREAT  peak=0.578
+t=  259.49s  THREAT  peak=0.535
+t=  259.69s  STOP    peak=0.715
+t=  259.89s  THREAT  peak=0.395
+t=  260.09s  STOP    peak=0.688
+t=  260.29s  STOP    peak=0.723
+t=  260.49s  STOP    peak=0.699
+t=  260.69s  THREAT  peak=0.451
+t=  260.89s  SAFE    peak=0.105
+t=  261.09s  THREAT  peak=0.379
+t=  261.29s  THREAT  peak=0.359
+t=  261.49s  THREAT  peak=0.389
+t=  261.69s  SAFE    peak=0.114
+t=  261.89s  THREAT  peak=0.277
+t=  262.09s  SAFE    peak=0.155
+t=  262.29s  SAFE    peak=0.136
+t=  262.49s  SAFE    peak=0.177
+t=  262.69s  SAFE    peak=0.116
+t=  262.89s  SAFE    peak=0.110
+t=  263.09s  SAFE    peak=0.019
+t=  263.29s  SAFE    peak=0.094
+t=  263.49s  SAFE    peak=0.095
+t=  263.69s  SAFE    peak=0.162
+t=  263.89s  SAFE    peak=0.190
+t=  264.09s  SAFE    peak=0.141
+t=  264.29s  THREAT  peak=0.348
+t=  264.49s  THREAT  peak=0.281
+t=  264.69s  THREAT  peak=0.508
+t=  264.89s  STOP    peak=0.797
+t=  265.09s  THREAT  peak=0.256
+t=  265.29s  STOP    peak=0.945
+t=  265.49s  STOP    peak=0.875
+t=  265.69s  SAFE    peak=0.075
+t=  265.89s  THREAT  peak=0.500
+t=  266.09s  THREAT  peak=0.559
+t=  266.29s  STOP    peak=0.695
+t=  266.49s  STOP    peak=0.680
+t=  266.69s  STOP    peak=0.949
+t=  266.89s  STOP    peak=0.992
+t=  267.09s  STOP    peak=0.965
+t=  267.29s  THREAT  peak=0.461
+t=  267.49s  STOP    peak=0.910
+t=  267.69s  STOP    peak=0.852
+t=  267.89s  STOP    peak=0.715
+t=  268.09s  SAFE    peak=0.047
+t=  268.29s  THREAT  peak=0.441
+t=  268.49s  THREAT  peak=0.350
+t=  268.69s  STOP    peak=0.859
+t=  268.89s  STOP    peak=0.840
+t=  269.09s  STOP    peak=0.723
+t=  269.29s  STOP    peak=0.676
+t=  269.49s  STOP    peak=0.660
+t=  269.69s  STOP    peak=0.609
+t=  269.89s  STOP    peak=0.746
+t=  270.09s  THREAT  peak=0.527
+t=  270.29s  STOP    peak=0.602
+t=  270.49s  THREAT  peak=0.430
+t=  270.69s  STOP    peak=0.664
+t=  270.89s  THREAT  peak=0.371
+t=  271.09s  THREAT  peak=0.512
+t=  271.29s  THREAT  peak=0.562
+t=  271.49s  THREAT  peak=0.559
+t=  271.69s  THREAT  peak=0.287
+t=  271.89s  THREAT  peak=0.574
+counts SAFE=29 THREAT=28 STOP=26
+wrote visualizations/street_vlog/gr40d/clip_05_252s-272s.mp4
+wrote visualizations/street_vlog/gr40d/clip_05_252s-272s.csv
+=== OK gr40d clip_05_252s-272s.mp4 2026-10-25T00:51:29+05:30 ===
+=== BEGIN gr40d clip_06_578s-593s.mp4 578.319436893243 593.4521167416624 2026-10-25T00:51:29+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  25%|██▍       | 208/843 [00:00<00:00, 2078.76it/s]Loading weights:  49%|████▉     | 416/843 [00:00<00:00, 2030.67it/s]Loading weights:  74%|███████▎  | 620/843 [00:00<00:00, 1967.81it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2410.69it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=454 fps=30.000 size=854x480 dur=15.10s origin=578.319s
+t=  581.32s  STOP    peak=0.949
+t=  581.52s  STOP    peak=0.621
+t=  581.72s  STOP    peak=0.734
+t=  581.92s  SAFE    peak=0.147
+t=  582.12s  SAFE    peak=0.164
+t=  582.32s  SAFE    peak=0.035
+t=  582.52s  SAFE    peak=0.078
+t=  582.72s  THREAT  peak=0.301
+t=  582.92s  THREAT  peak=0.410
+t=  583.12s  SAFE    peak=0.107
+t=  583.32s  SAFE    peak=0.047
+t=  583.52s  SAFE    peak=0.186
+t=  583.72s  SAFE    peak=0.105
+t=  583.92s  SAFE    peak=0.208
+t=  584.12s  THREAT  peak=0.340
+t=  584.32s  SAFE    peak=0.167
+t=  584.52s  THREAT  peak=0.266
+t=  584.72s  THREAT  peak=0.285
+t=  584.92s  THREAT  peak=0.574
+t=  585.12s  STOP    peak=0.621
+t=  585.32s  STOP    peak=0.668
+t=  585.52s  STOP    peak=0.629
+t=  585.72s  STOP    peak=0.688
+t=  585.92s  STOP    peak=0.941
+t=  586.12s  STOP    peak=0.926
+t=  586.32s  STOP    peak=0.941
+t=  586.52s  STOP    peak=0.957
+t=  586.72s  STOP    peak=0.992
+t=  586.92s  STOP    peak=0.988
+t=  587.12s  STOP    peak=0.973
+t=  587.32s  STOP    peak=0.988
+t=  587.52s  STOP    peak=0.914
+t=  587.72s  STOP    peak=0.910
+t=  587.92s  STOP    peak=0.980
+t=  588.12s  STOP    peak=0.992
+t=  588.32s  STOP    peak=0.996
+t=  588.52s  STOP    peak=0.984
+t=  588.72s  STOP    peak=0.992
+t=  588.92s  STOP    peak=0.992
+t=  589.12s  STOP    peak=0.918
+t=  589.32s  STOP    peak=0.895
+t=  589.52s  SAFE    peak=0.133
+t=  589.72s  SAFE    peak=0.059
+t=  589.92s  SAFE    peak=0.056
+t=  590.12s  SAFE    peak=0.026
+t=  590.32s  SAFE    peak=0.108
+t=  590.52s  THREAT  peak=0.396
+t=  590.72s  SAFE    peak=0.175
+t=  590.92s  THREAT  peak=0.459
+t=  591.12s  SAFE    peak=0.175
+t=  591.32s  THREAT  peak=0.377
+t=  591.52s  THREAT  peak=0.543
+t=  591.72s  THREAT  peak=0.357
+t=  591.92s  THREAT  peak=0.289
+t=  592.12s  SAFE    peak=0.040
+t=  592.32s  SAFE    peak=0.028
+t=  592.52s  SAFE    peak=0.104
+t=  592.72s  SAFE    peak=0.058
+t=  592.92s  SAFE    peak=0.202
+t=  593.12s  SAFE    peak=0.146
+t=  593.32s  THREAT  peak=0.266
+counts SAFE=23 THREAT=13 STOP=25
+wrote visualizations/street_vlog/gr40d/clip_06_578s-593s.mp4
+wrote visualizations/street_vlog/gr40d/clip_06_578s-593s.csv
+=== OK gr40d clip_06_578s-593s.mp4 2026-10-25T00:51:56+05:30 ===
+=== BEGIN gr40d clip_07_649s-665s.mp4 648.9312457773718 665.3063923692174 2026-10-25T00:51:56+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  24%|██▍       | 206/843 [00:00<00:00, 2021.05it/s]Loading weights:  50%|█████     | 422/843 [00:00<00:00, 2059.91it/s]Loading weights:  75%|███████▍  | 630/843 [00:00<00:00, 2068.40it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2489.16it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=492 fps=30.000 size=854x480 dur=16.37s origin=648.931s
+t=  651.93s  STOP    peak=0.715
+t=  652.13s  THREAT  peak=0.527
+t=  652.33s  STOP    peak=0.629
+t=  652.53s  STOP    peak=0.617
+t=  652.73s  STOP    peak=0.820
+t=  652.93s  STOP    peak=0.746
+t=  653.13s  STOP    peak=0.797
+t=  653.33s  STOP    peak=0.684
+t=  653.53s  STOP    peak=0.766
+t=  653.73s  STOP    peak=0.742
+t=  653.93s  STOP    peak=0.656
+t=  654.13s  STOP    peak=0.793
+t=  654.33s  STOP    peak=0.727
+t=  654.53s  THREAT  peak=0.369
+t=  654.73s  THREAT  peak=0.312
+t=  654.93s  THREAT  peak=0.471
+t=  655.13s  SAFE    peak=0.189
+t=  655.33s  SAFE    peak=0.079
+t=  655.53s  THREAT  peak=0.264
+t=  655.73s  SAFE    peak=0.152
+t=  655.93s  THREAT  peak=0.443
+t=  656.13s  STOP    peak=0.727
+t=  656.33s  STOP    peak=0.824
+t=  656.53s  STOP    peak=0.910
+t=  656.73s  STOP    peak=0.891
+t=  656.93s  STOP    peak=0.891
+t=  657.13s  STOP    peak=0.891
+t=  657.33s  STOP    peak=0.816
+t=  657.53s  STOP    peak=0.902
+t=  657.73s  STOP    peak=0.938
+t=  657.93s  STOP    peak=0.980
+t=  658.13s  STOP    peak=0.949
+t=  658.33s  THREAT  peak=0.516
+t=  658.53s  STOP    peak=0.879
+t=  658.73s  STOP    peak=1.000
+t=  658.93s  STOP    peak=0.996
+t=  659.13s  STOP    peak=0.996
+t=  659.33s  STOP    peak=0.945
+t=  659.53s  STOP    peak=0.793
+t=  659.73s  STOP    peak=0.883
+t=  659.93s  STOP    peak=0.676
+t=  660.13s  THREAT  peak=0.434
+t=  660.33s  STOP    peak=0.859
+t=  660.53s  STOP    peak=0.848
+t=  660.73s  THREAT  peak=0.385
+t=  660.93s  STOP    peak=0.656
+t=  661.13s  THREAT  peak=0.486
+t=  661.33s  THREAT  peak=0.555
+t=  661.53s  STOP    peak=0.613
+t=  661.73s  STOP    peak=0.664
+t=  661.93s  STOP    peak=0.668
+t=  662.13s  STOP    peak=0.746
+t=  662.33s  STOP    peak=0.750
+t=  662.53s  THREAT  peak=0.574
+t=  662.73s  STOP    peak=0.652
+t=  662.93s  STOP    peak=0.641
+t=  663.13s  STOP    peak=0.723
+t=  663.33s  STOP    peak=0.660
+t=  663.53s  STOP    peak=0.602
+t=  663.73s  THREAT  peak=0.562
+t=  663.93s  STOP    peak=0.859
+t=  664.13s  STOP    peak=0.844
+t=  664.33s  STOP    peak=0.730
+t=  664.53s  STOP    peak=0.832
+t=  664.73s  STOP    peak=0.914
+t=  664.93s  STOP    peak=0.812
+t=  665.13s  STOP    peak=0.891
+counts SAFE=3 THREAT=13 STOP=51
+wrote visualizations/street_vlog/gr40d/clip_07_649s-665s.mp4
+wrote visualizations/street_vlog/gr40d/clip_07_649s-665s.csv
+=== OK gr40d clip_07_649s-665s.mp4 2026-10-25T00:52:25+05:30 ===
+=== BEGIN gr40d clip_08_1469s-1485s.mp4 1469.3407867015221 1485.43397657554 2026-10-25T00:52:25+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  26%|██▌       | 218/843 [00:00<00:00, 2093.69it/s]Loading weights:  51%|█████     | 428/843 [00:00<00:00, 2080.56it/s]Loading weights:  76%|███████▌  | 637/843 [00:00<00:00, 2078.28it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2516.81it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=482 fps=30.000 size=854x480 dur=16.03s origin=1469.341s
+t= 1472.34s  STOP    peak=0.984
+t= 1472.54s  STOP    peak=0.977
+t= 1472.74s  STOP    peak=0.730
+t= 1472.94s  SAFE    peak=0.045
+t= 1473.14s  SAFE    peak=0.017
+t= 1473.34s  SAFE    peak=0.141
+t= 1473.54s  SAFE    peak=0.027
+t= 1473.74s  SAFE    peak=0.011
+t= 1473.94s  SAFE    peak=0.050
+t= 1474.14s  SAFE    peak=0.021
+t= 1474.34s  SAFE    peak=0.184
+t= 1474.54s  THREAT  peak=0.252
+t= 1474.74s  SAFE    peak=0.114
+t= 1474.94s  SAFE    peak=0.119
+t= 1475.14s  SAFE    peak=0.095
+t= 1475.34s  SAFE    peak=0.110
+t= 1475.54s  SAFE    peak=0.130
+t= 1475.74s  THREAT  peak=0.438
+t= 1475.94s  SAFE    peak=0.118
+t= 1476.14s  SAFE    peak=0.119
+t= 1476.34s  SAFE    peak=0.227
+t= 1476.54s  THREAT  peak=0.582
+t= 1476.74s  STOP    peak=0.641
+t= 1476.94s  STOP    peak=0.758
+t= 1477.14s  STOP    peak=0.797
+t= 1477.34s  STOP    peak=0.719
+t= 1477.54s  STOP    peak=0.812
+t= 1477.74s  STOP    peak=0.754
+t= 1477.94s  STOP    peak=0.875
+t= 1478.14s  STOP    peak=0.941
+t= 1478.34s  STOP    peak=0.996
+t= 1478.54s  STOP    peak=0.988
+t= 1478.74s  SAFE    peak=0.239
+t= 1478.94s  THREAT  peak=0.590
+t= 1479.14s  SAFE    peak=0.124
+t= 1479.34s  THREAT  peak=0.270
+t= 1479.54s  SAFE    peak=0.028
+t= 1479.74s  SAFE    peak=0.017
+t= 1479.94s  SAFE    peak=0.133
+t= 1480.14s  STOP    peak=0.660
+t= 1480.34s  THREAT  peak=0.475
+t= 1480.54s  SAFE    peak=0.197
+t= 1480.74s  SAFE    peak=0.101
+t= 1480.94s  SAFE    peak=0.091
+t= 1481.14s  SAFE    peak=0.082
+t= 1481.34s  SAFE    peak=0.154
+t= 1481.54s  SAFE    peak=0.229
+t= 1481.74s  SAFE    peak=0.103
+t= 1481.94s  SAFE    peak=0.195
+t= 1482.14s  THREAT  peak=0.287
+t= 1482.34s  SAFE    peak=0.164
+t= 1482.54s  SAFE    peak=0.104
+t= 1482.74s  SAFE    peak=0.159
+t= 1482.94s  THREAT  peak=0.270
+t= 1483.14s  SAFE    peak=0.158
+t= 1483.34s  STOP    peak=0.672
+t= 1483.54s  THREAT  peak=0.279
+t= 1483.74s  THREAT  peak=0.516
+t= 1483.94s  STOP    peak=0.621
+t= 1484.14s  STOP    peak=0.695
+t= 1484.34s  STOP    peak=0.895
+t= 1484.54s  STOP    peak=0.785
+t= 1484.74s  STOP    peak=0.895
+t= 1484.94s  STOP    peak=0.914
+t= 1485.14s  STOP    peak=0.770
+t= 1485.34s  STOP    peak=0.992
+counts SAFE=33 THREAT=10 STOP=23
+wrote visualizations/street_vlog/gr40d/clip_08_1469s-1485s.mp4
+wrote visualizations/street_vlog/gr40d/clip_08_1469s-1485s.csv
+=== OK gr40d clip_08_1469s-1485s.mp4 2026-10-25T00:52:52+05:30 ===
+=== BEGIN gr40d clip_09_1966s-1984s.mp4 1965.7788370766618 1984.461193147482 2026-10-25T00:52:52+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  26%|██▋       | 222/843 [00:00<00:00, 2208.28it/s]Loading weights:  53%|█████▎    | 443/843 [00:00<00:00, 1920.50it/s]Loading weights:  80%|███████▉  | 673/843 [00:00<00:00, 2074.54it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2337.19it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=560 fps=30.000 size=854x480 dur=18.63s origin=1965.779s
+t= 1968.78s  STOP    peak=0.648
+t= 1968.98s  STOP    peak=0.637
+t= 1969.18s  THREAT  peak=0.594
+t= 1969.38s  STOP    peak=0.688
+t= 1969.58s  STOP    peak=0.660
+t= 1969.78s  STOP    peak=0.668
+t= 1969.98s  STOP    peak=0.652
+t= 1970.18s  STOP    peak=0.695
+t= 1970.38s  STOP    peak=0.754
+t= 1970.58s  STOP    peak=0.746
+t= 1970.78s  STOP    peak=0.699
+t= 1970.98s  STOP    peak=0.660
+t= 1971.18s  THREAT  peak=0.447
+t= 1971.38s  THREAT  peak=0.570
+t= 1971.58s  STOP    peak=0.605
+t= 1971.78s  THREAT  peak=0.469
+t= 1971.98s  THREAT  peak=0.582
+t= 1972.18s  STOP    peak=0.859
+t= 1972.38s  STOP    peak=0.773
+t= 1972.58s  STOP    peak=0.645
+t= 1972.78s  STOP    peak=0.750
+t= 1972.98s  STOP    peak=0.766
+t= 1973.18s  STOP    peak=0.805
+t= 1973.38s  STOP    peak=0.754
+t= 1973.58s  STOP    peak=0.723
+t= 1973.78s  THREAT  peak=0.312
+t= 1973.98s  SAFE    peak=0.193
+t= 1974.18s  SAFE    peak=0.062
+t= 1974.38s  SAFE    peak=0.086
+t= 1974.58s  SAFE    peak=0.033
+t= 1974.78s  SAFE    peak=0.063
+t= 1974.98s  THREAT  peak=0.264
+t= 1975.18s  SAFE    peak=0.060
+t= 1975.38s  THREAT  peak=0.447
+t= 1975.58s  SAFE    peak=0.084
+t= 1975.78s  SAFE    peak=0.118
+t= 1975.98s  THREAT  peak=0.289
+t= 1976.18s  THREAT  peak=0.393
+t= 1976.38s  SAFE    peak=0.212
+t= 1976.58s  SAFE    peak=0.031
+t= 1976.78s  SAFE    peak=0.100
+t= 1976.98s  THREAT  peak=0.305
+t= 1977.18s  SAFE    peak=0.163
+t= 1977.38s  SAFE    peak=0.056
+t= 1977.58s  SAFE    peak=0.230
+t= 1977.78s  THREAT  peak=0.508
+t= 1977.98s  SAFE    peak=0.248
+t= 1978.18s  THREAT  peak=0.381
+t= 1978.38s  THREAT  peak=0.426
+t= 1978.58s  THREAT  peak=0.449
+t= 1978.78s  STOP    peak=0.605
+t= 1978.98s  STOP    peak=0.617
+t= 1979.18s  STOP    peak=0.617
+t= 1979.38s  STOP    peak=0.641
+t= 1979.58s  STOP    peak=0.719
+t= 1979.78s  THREAT  peak=0.574
+t= 1979.98s  STOP    peak=0.617
+t= 1980.18s  STOP    peak=0.652
+t= 1980.38s  STOP    peak=0.672
+t= 1980.58s  STOP    peak=0.684
+t= 1980.78s  STOP    peak=0.773
+t= 1980.98s  STOP    peak=0.762
+t= 1981.18s  STOP    peak=0.781
+t= 1981.38s  STOP    peak=0.621
+t= 1981.58s  STOP    peak=0.730
+t= 1981.78s  STOP    peak=0.641
+t= 1981.98s  STOP    peak=0.703
+t= 1982.18s  STOP    peak=0.730
+t= 1982.38s  STOP    peak=0.637
+t= 1982.58s  STOP    peak=0.727
+t= 1982.78s  THREAT  peak=0.484
+t= 1982.98s  STOP    peak=0.641
+t= 1983.18s  STOP    peak=0.656
+t= 1983.38s  STOP    peak=0.617
+t= 1983.58s  STOP    peak=0.836
+t= 1983.78s  STOP    peak=0.727
+t= 1983.98s  STOP    peak=0.695
+t= 1984.18s  STOP    peak=0.727
+t= 1984.38s  STOP    peak=0.770
+counts SAFE=15 THREAT=17 STOP=47
+wrote visualizations/street_vlog/gr40d/clip_09_1966s-1984s.mp4
+wrote visualizations/street_vlog/gr40d/clip_09_1966s-1984s.csv
+=== OK gr40d clip_09_1966s-1984s.mp4 2026-10-25T00:53:24+05:30 ===
+=== BEGIN gr40c clip_01_753s-770s.mp4 752.5494252392793 769.6522831434336 2026-10-25T00:53:24+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  26%|██▌       | 220/843 [00:00<00:00, 2178.24it/s]Loading weights:  52%|█████▏    | 438/843 [00:00<00:00, 2113.71it/s]Loading weights:  79%|███████▉  | 664/843 [00:00<00:00, 2178.10it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2523.10it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40c/teacher_phase_a_best.pt epoch 1 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=513 fps=30.000 size=854x480 dur=17.07s origin=752.549s
+t=  755.55s  STOP    peak=0.695
+t=  755.75s  STOP    peak=0.676
+t=  755.95s  STOP    peak=0.688
+t=  756.15s  STOP    peak=0.680
+t=  756.35s  STOP    peak=0.719
+t=  756.55s  STOP    peak=0.680
+t=  756.75s  STOP    peak=0.660
+t=  756.95s  STOP    peak=0.750
+t=  757.15s  STOP    peak=0.754
+t=  757.35s  STOP    peak=0.668
+t=  757.55s  STOP    peak=0.762
+t=  757.75s  STOP    peak=0.727
+t=  757.95s  STOP    peak=0.770
+t=  758.15s  STOP    peak=0.898
+t=  758.35s  STOP    peak=0.816
+t=  758.55s  STOP    peak=0.660
+t=  758.75s  STOP    peak=0.863
+t=  758.95s  STOP    peak=0.793
+t=  759.15s  STOP    peak=0.750
+t=  759.35s  STOP    peak=0.734
+t=  759.55s  STOP    peak=0.684
+t=  759.75s  STOP    peak=0.602
+t=  759.95s  STOP    peak=0.707
+t=  760.15s  STOP    peak=0.805
+t=  760.35s  STOP    peak=0.867
+t=  760.55s  STOP    peak=0.973
+t=  760.75s  STOP    peak=0.973
+t=  760.95s  STOP    peak=0.898
+t=  761.15s  STOP    peak=0.836
+t=  761.35s  STOP    peak=0.703
+t=  761.55s  THREAT  peak=0.535
+t=  761.75s  THREAT  peak=0.531
+t=  761.95s  STOP    peak=0.715
+t=  762.15s  STOP    peak=0.965
+t=  762.35s  STOP    peak=0.938
+t=  762.55s  STOP    peak=0.836
+t=  762.75s  STOP    peak=0.906
+t=  762.95s  STOP    peak=0.777
+t=  763.15s  STOP    peak=0.773
+t=  763.35s  STOP    peak=0.676
+t=  763.55s  STOP    peak=0.797
+t=  763.75s  STOP    peak=0.805
+t=  763.95s  STOP    peak=0.875
+t=  764.15s  STOP    peak=0.926
+t=  764.35s  STOP    peak=0.895
+t=  764.55s  STOP    peak=0.883
+t=  764.75s  STOP    peak=0.949
+t=  764.95s  STOP    peak=0.969
+t=  765.15s  STOP    peak=0.945
+t=  765.35s  STOP    peak=0.867
+t=  765.55s  STOP    peak=0.918
+t=  765.75s  STOP    peak=0.926
+t=  765.95s  STOP    peak=0.949
+t=  766.15s  STOP    peak=0.980
+t=  766.35s  STOP    peak=0.988
+t=  766.55s  STOP    peak=0.977
+t=  766.75s  STOP    peak=0.969
+t=  766.95s  STOP    peak=0.973
+t=  767.15s  STOP    peak=0.988
+t=  767.35s  STOP    peak=0.949
+t=  767.55s  STOP    peak=0.930
+t=  767.75s  STOP    peak=0.977
+t=  767.95s  STOP    peak=0.883
+t=  768.15s  STOP    peak=0.969
+t=  768.35s  STOP    peak=0.867
+t=  768.55s  STOP    peak=0.961
+t=  768.75s  STOP    peak=0.961
+t=  768.95s  STOP    peak=0.957
+t=  769.15s  STOP    peak=0.992
+t=  769.35s  STOP    peak=0.914
+t=  769.55s  STOP    peak=0.883
+counts SAFE=0 THREAT=2 STOP=69
+wrote visualizations/street_vlog/gr40c/clip_01_753s-770s.mp4
+wrote visualizations/street_vlog/gr40c/clip_01_753s-770s.csv
+=== OK gr40c clip_01_753s-770s.mp4 2026-10-25T00:53:53+05:30 ===
+=== BEGIN gr40c clip_02_1177s-1194s.mp4 1176.7697669163908 1194.3261405232338 2026-10-25T00:53:53+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  26%|██▌       | 218/843 [00:00<00:00, 2153.14it/s]Loading weights:  51%|█████▏    | 434/843 [00:00<00:00, 2108.08it/s]Loading weights:  77%|███████▋  | 645/843 [00:00<00:00, 2105.11it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2518.81it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40c/teacher_phase_a_best.pt epoch 1 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=526 fps=30.000 size=854x480 dur=17.50s origin=1176.770s
+t= 1179.77s  STOP    peak=0.949
+t= 1179.97s  STOP    peak=0.957
+t= 1180.17s  STOP    peak=0.961
+t= 1180.37s  STOP    peak=0.996
+t= 1180.57s  STOP    peak=0.996
+t= 1180.77s  STOP    peak=1.000
+t= 1180.97s  STOP    peak=0.996
+t= 1181.17s  STOP    peak=0.949
+t= 1181.37s  THREAT  peak=0.258
+t= 1181.57s  SAFE    peak=0.233
+t= 1181.77s  SAFE    peak=0.049
+t= 1181.97s  THREAT  peak=0.369
+t= 1182.17s  STOP    peak=0.652
+t= 1182.37s  STOP    peak=0.910
+t= 1182.57s  STOP    peak=0.844
+t= 1182.77s  STOP    peak=0.727
+t= 1182.97s  STOP    peak=0.887
+t= 1183.17s  STOP    peak=0.746
+t= 1183.37s  STOP    peak=0.930
+t= 1183.57s  STOP    peak=0.629
+t= 1183.77s  STOP    peak=0.785
+t= 1183.97s  STOP    peak=0.879
+t= 1184.17s  SAFE    peak=0.116
+t= 1184.37s  SAFE    peak=0.052
+t= 1184.57s  SAFE    peak=0.095
+t= 1184.77s  STOP    peak=0.676
+t= 1184.97s  STOP    peak=0.926
+t= 1185.17s  STOP    peak=0.941
+t= 1185.37s  STOP    peak=0.914
+t= 1185.57s  STOP    peak=0.984
+t= 1185.77s  STOP    peak=0.977
+t= 1185.97s  STOP    peak=0.980
+t= 1186.17s  STOP    peak=0.934
+t= 1186.37s  STOP    peak=0.879
+t= 1186.57s  SAFE    peak=0.208
+t= 1186.77s  THREAT  peak=0.516
+t= 1186.97s  STOP    peak=0.672
+t= 1187.17s  STOP    peak=0.875
+t= 1187.37s  THREAT  peak=0.559
+t= 1187.57s  THREAT  peak=0.297
+t= 1187.77s  THREAT  peak=0.578
+t= 1187.97s  STOP    peak=0.863
+t= 1188.17s  STOP    peak=0.984
+t= 1188.37s  STOP    peak=0.992
+t= 1188.57s  THREAT  peak=0.461
+t= 1188.77s  SAFE    peak=0.101
+t= 1188.97s  SAFE    peak=0.233
+t= 1189.17s  THREAT  peak=0.428
+t= 1189.37s  STOP    peak=0.891
+t= 1189.57s  STOP    peak=0.988
+t= 1189.77s  STOP    peak=0.934
+t= 1189.97s  STOP    peak=0.648
+t= 1190.17s  SAFE    peak=0.173
+t= 1190.37s  SAFE    peak=0.160
+t= 1190.57s  THREAT  peak=0.512
+t= 1190.77s  THREAT  peak=0.516
+t= 1190.97s  STOP    peak=0.688
+t= 1191.17s  THREAT  peak=0.582
+t= 1191.37s  STOP    peak=0.676
+t= 1191.57s  STOP    peak=0.672
+t= 1191.77s  STOP    peak=0.785
+t= 1191.97s  STOP    peak=0.723
+t= 1192.17s  STOP    peak=0.707
+t= 1192.37s  STOP    peak=0.676
+t= 1192.57s  STOP    peak=0.684
+t= 1192.77s  THREAT  peak=0.346
+t= 1192.97s  THREAT  peak=0.342
+t= 1193.17s  SAFE    peak=0.139
+t= 1193.37s  SAFE    peak=0.125
+t= 1193.57s  THREAT  peak=0.383
+t= 1193.77s  THREAT  peak=0.346
+t= 1193.97s  THREAT  peak=0.355
+t= 1194.17s  STOP    peak=0.648
+counts SAFE=12 THREAT=16 STOP=45
+wrote visualizations/street_vlog/gr40c/clip_02_1177s-1194s.mp4
+wrote visualizations/street_vlog/gr40c/clip_02_1177s-1194s.csv
+=== OK gr40c clip_02_1177s-1194s.mp4 2026-10-25T00:54:24+05:30 ===
+=== BEGIN gr40c clip_03_2201s-2221s.mp4 2201.411274984765 2220.63338424239 2026-10-25T00:54:24+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  21%|██        | 174/843 [00:00<00:00, 1739.45it/s]Loading weights:  43%|████▎     | 360/843 [00:00<00:00, 1768.13it/s]Loading weights:  64%|██████▍   | 540/843 [00:00<00:00, 1766.22it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2118.79it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40c/teacher_phase_a_best.pt epoch 1 backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+video frames=576 fps=30.000 size=854x480 dur=19.17s origin=2201.411s
+t= 2204.41s  STOP    peak=0.828
+t= 2204.61s  STOP    peak=0.816
+t= 2204.81s  STOP    peak=0.730
+t= 2205.01s  STOP    peak=0.695

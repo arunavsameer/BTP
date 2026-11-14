@@ -1,0 +1,10 @@
+./run_convnextv2_atto.sh: line 29: hostname: command not found
+=== Atto ConvNeXt-V2 convnextv2_atto_v1 on  ===
+Sat Nov 14 02:40:46 AM IST 2026
+GPU 0: NVIDIA GeForce RTX 4060 Laptop GPU (UUID: GPU-5ce8ecd7-16df-5a06-1453-2684a4aa0bd3)
+torch 2.13.0+cu130 cuda True
+test_block_mask_ones_matches_dense (__main__.SparseConvTests.test_block_mask_ones_matches_dense) ... ok
+test_mask_ratio_and_shape (__main__.SparseConvTests.test_mask_ratio_and_shape) ... ok
+test_submanifold_zeros_masked (__main__.SparseConvTests.test_submanifold_zeros_masked) ... ok
+test_atto_shapes_and_frozen_decoder (__main__.StudentShapeTests.test_atto_shapes_and_frozen_decoder) ... ok
+test_loss_backward_skips_decoder (__main__.StudentShapeTests.test_loss_backward_skips_decoder) ... 

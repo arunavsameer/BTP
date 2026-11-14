@@ -51,6 +51,31 @@ impl3_FOMO/cache/
 # Zipped weight archives
 *.pt.zip
 
+# Weight blobs, checkpoints, and tensor dumps.
+# Does not match source (*.py, *.yaml, *.yml, *.md, *.json, *.sh).
+# Already-tracked files are left as-is; this only keeps new blobs out.
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.ckpt
+*.npy
+*.npz
+**/checkpoints/
+**/cache/
+**/hf_cache/
+**/*_cache/
+**/*_cache_*/
+
+# TorchScript weight exports (MobileCLIP). No TypeScript sources in this repo.
+mobileclip*.ts
+
+# Video inputs. impl/input/ is already ignored as a tree.
+**/input/*.mp4
+
+# Generated preview videos (street-vlog renders and similar).
+**/visualizations/
+
 # Rendered videos. Output directories are already ignored above.
 *.mp4
 

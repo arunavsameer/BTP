@@ -1,0 +1,298 @@
+=== wide batch start 2026-10-25T01:02:35+05:30 ===
+=== BEGIN gr40d 2026-10-25T01:02:35+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  25%|██▌       | 212/843 [00:00<00:00, 2118.55it/s]Loading weights:  51%|█████     | 428/843 [00:00<00:00, 2134.99it/s]Loading weights:  76%|███████▌  | 642/843 [00:00<00:00, 2128.06it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2490.83it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 phase frozen backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+writing wide overlays to /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d
+decoding clip_01_753s-770s.mp4 752.5s–769.7s
+  513 frames, letterboxing
+  80/423 anchors  peak 0.742
+=== wide batch restart 2026-10-25T01:04:02+05:30 ===
+=== BEGIN gr40d 2026-10-25T01:04:02+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  28%|██▊       | 232/843 [00:00<00:00, 2280.62it/s]Loading weights:  55%|█████▍    | 461/843 [00:00<00:00, 2274.60it/s]Loading weights:  93%|█████████▎| 783/843 [00:00<00:00, 2701.92it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2724.64it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40d/teacher_phase_a_best.pt epoch 9 phase frozen backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+writing wide overlays to /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d
+decoding clip_01_753s-770s.mp4 752.5s–769.7s
+  513 frames, letterboxing
+  80/423 anchors  peak 0.742
+  160/423 anchors  peak 0.867
+  240/423 anchors  peak 0.820
+  320/423 anchors  peak 0.926
+  400/423 anchors  peak 0.926
+  423/423 anchors  peak 0.130
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_01_753s-770s.mp4 (513 frames, pred peak 0.984)
+decoding clip_02_1177s-1194s.mp4 1176.8s–1194.3s
+  526 frames, letterboxing
+  80/436 anchors  peak 0.719
+  160/436 anchors  peak 0.883
+  240/436 anchors  peak 0.520
+  320/436 anchors  peak 0.084
+  400/436 anchors  peak 0.060
+  436/436 anchors  peak 0.539
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_02_1177s-1194s.mp4 (526 frames, pred peak 1.000)
+decoding clip_03_2201s-2221s.mp4 2201.4s–2220.6s
+  576 frames, letterboxing
+  80/486 anchors  peak 0.307
+  160/486 anchors  peak 0.562
+  240/486 anchors  peak 0.243
+  320/486 anchors  peak 0.175
+  400/486 anchors  peak 0.273
+  480/486 anchors  peak 0.301
+  486/486 anchors  peak 0.520
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_03_2201s-2221s.mp4 (576 frames, pred peak 0.770)
+decoding clip_04_73s-91s.mp4 72.7s–90.9s
+  545 frames, letterboxing
+  80/455 anchors  peak 0.395
+  160/455 anchors  peak 0.211
+  240/455 anchors  peak 0.691
+  320/455 anchors  peak 0.562
+  400/455 anchors  peak 0.164
+  455/455 anchors  peak 0.157
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_04_73s-91s.mp4 (545 frames, pred peak 0.980)
+decoding clip_05_252s-272s.mp4 252.5s–271.9s
+  584 frames, letterboxing
+  80/494 anchors  peak 0.073
+  160/494 anchors  peak 0.523
+  240/494 anchors  peak 0.229
+  320/494 anchors  peak 0.531
+  400/494 anchors  peak 0.824
+  480/494 anchors  peak 0.641
+  494/494 anchors  peak 0.641
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_05_252s-272s.mp4 (584 frames, pred peak 1.000)
+decoding clip_06_578s-593s.mp4 578.3s–593.5s
+  454 frames, letterboxing
+  80/364 anchors  peak 0.243
+  160/364 anchors  peak 0.949
+  240/364 anchors  peak 0.895
+  320/364 anchors  peak 0.346
+  364/364 anchors  peak 0.359
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_06_578s-593s.mp4 (454 frames, pred peak 1.000)
+decoding clip_07_649s-665s.mp4 648.9s–665.3s
+  492 frames, letterboxing
+  80/402 anchors  peak 0.340
+  160/402 anchors  peak 0.902
+  240/402 anchors  peak 0.906
+  320/402 anchors  peak 0.762
+  400/402 anchors  peak 0.875
+  402/402 anchors  peak 0.809
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_07_649s-665s.mp4 (492 frames, pred peak 1.000)
+decoding clip_08_1469s-1485s.mp4 1469.3s–1485.4s
+  482 frames, letterboxing
+  80/392 anchors  peak 0.188
+  160/392 anchors  peak 0.867
+  240/392 anchors  peak 0.562
+  320/392 anchors  peak 0.432
+  392/392 anchors  peak 0.996
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_08_1469s-1485s.mp4 (482 frames, pred peak 0.996)
+decoding clip_09_1966s-1984s.mp4 1965.8s–1984.5s
+  560 frames, letterboxing
+  80/470 anchors  peak 0.695
+  160/470 anchors  peak 0.578
+  240/470 anchors  peak 0.250
+  320/470 anchors  peak 0.633
+  400/470 anchors  peak 0.727
+  470/470 anchors  peak 0.812
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_09_1966s-1984s.mp4 (560 frames, pred peak 0.887)
+summary
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_01_753s-770s.mp4  frames=513  peak=0.984375
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_02_1177s-1194s.mp4  frames=526  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_03_2201s-2221s.mp4  frames=576  peak=0.769531
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_04_73s-91s.mp4  frames=545  peak=0.980469
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_05_252s-272s.mp4  frames=584  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_06_578s-593s.mp4  frames=454  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_07_649s-665s.mp4  frames=492  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_08_1469s-1485s.mp4  frames=482  peak=0.996094
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40d/clip_09_1966s-1984s.mp4  frames=560  peak=0.886719
+=== OK gr40d 2026-10-25T01:24:50+05:30 ===
+=== BEGIN gr40c 2026-10-25T01:24:50+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  25%|██▌       | 212/843 [00:00<00:00, 2090.06it/s]Loading weights:  50%|█████     | 422/843 [00:00<00:00, 2034.71it/s]Loading weights:  74%|███████▍  | 628/843 [00:00<00:00, 2044.14it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2424.50it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40c/teacher_phase_a_best.pt epoch 1 phase frozen backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+writing wide overlays to /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c
+decoding clip_01_753s-770s.mp4 752.5s–769.7s
+  513 frames, letterboxing
+  80/423 anchors  peak 0.895
+  160/423 anchors  peak 0.977
+  240/423 anchors  peak 0.871
+  320/423 anchors  peak 0.984
+  400/423 anchors  peak 0.961
+  423/423 anchors  peak 0.875
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_01_753s-770s.mp4 (513 frames, pred peak 0.992)
+decoding clip_02_1177s-1194s.mp4 1176.8s–1194.3s
+  526 frames, letterboxing
+  80/436 anchors  peak 0.949
+  160/436 anchors  peak 0.977
+  240/436 anchors  peak 0.715
+  320/436 anchors  peak 0.277
+  400/436 anchors  peak 0.270
+  436/436 anchors  peak 0.699
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_02_1177s-1194s.mp4 (526 frames, pred peak 1.000)
+decoding clip_03_2201s-2221s.mp4 2201.4s–2220.6s
+  576 frames, letterboxing
+  80/486 anchors  peak 0.770
+  160/486 anchors  peak 0.633
+  240/486 anchors  peak 0.602
+  320/486 anchors  peak 0.238
+  400/486 anchors  peak 0.206
+  480/486 anchors  peak 0.346
+  486/486 anchors  peak 0.346
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_03_2201s-2221s.mp4 (576 frames, pred peak 0.836)
+decoding clip_04_73s-91s.mp4 72.7s–90.9s
+  545 frames, letterboxing
+  80/455 anchors  peak 0.938
+  160/455 anchors  peak 0.688
+  240/455 anchors  peak 0.836
+  320/455 anchors  peak 0.660
+  400/455 anchors  peak 0.812
+  455/455 anchors  peak 0.430
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_04_73s-91s.mp4 (545 frames, pred peak 0.996)
+decoding clip_05_252s-272s.mp4 252.5s–271.9s
+  584 frames, letterboxing
+  80/494 anchors  peak 0.060
+  160/494 anchors  peak 0.633
+  240/494 anchors  peak 0.053
+  320/494 anchors  peak 0.754
+  400/494 anchors  peak 0.816
+  480/494 anchors  peak 0.629
+  494/494 anchors  peak 0.582
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_05_252s-272s.mp4 (584 frames, pred peak 1.000)
+decoding clip_06_578s-593s.mp4 578.3s–593.5s
+  454 frames, letterboxing
+  80/364 anchors  peak 0.469
+  160/364 anchors  peak 0.949
+  240/364 anchors  peak 0.977
+  320/364 anchors  peak 0.781
+  364/364 anchors  peak 0.660
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_06_578s-593s.mp4 (454 frames, pred peak 0.996)
+decoding clip_07_649s-665s.mp4 648.9s–665.3s
+  492 frames, letterboxing
+  80/402 anchors  peak 0.715
+  160/402 anchors  peak 0.973
+  240/402 anchors  peak 0.980
+  320/402 anchors  peak 0.957
+  400/402 anchors  peak 0.973
+  402/402 anchors  peak 0.949
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_07_649s-665s.mp4 (492 frames, pred peak 0.996)
+decoding clip_08_1469s-1485s.mp4 1469.3s–1485.4s
+  482 frames, letterboxing
+  80/392 anchors  peak 0.520
+  160/392 anchors  peak 0.898
+  240/392 anchors  peak 0.895
+  320/392 anchors  peak 0.404
+  392/392 anchors  peak 0.996
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_08_1469s-1485s.mp4 (482 frames, pred peak 1.000)
+decoding clip_09_1966s-1984s.mp4 1965.8s–1984.5s
+  560 frames, letterboxing
+  80/470 anchors  peak 0.723
+  160/470 anchors  peak 0.641
+  240/470 anchors  peak 0.574
+  320/470 anchors  peak 0.715
+  400/470 anchors  peak 0.801
+  470/470 anchors  peak 0.781
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_09_1966s-1984s.mp4 (560 frames, pred peak 0.895)
+summary
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_01_753s-770s.mp4  frames=513  peak=0.992188
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_02_1177s-1194s.mp4  frames=526  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_03_2201s-2221s.mp4  frames=576  peak=0.835938
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_04_73s-91s.mp4  frames=545  peak=0.996094
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_05_252s-272s.mp4  frames=584  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_06_578s-593s.mp4  frames=454  peak=0.996094
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_07_649s-665s.mp4  frames=492  peak=0.996094
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_08_1469s-1485s.mp4  frames=482  peak=1.000000
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40c/clip_09_1966s-1984s.mp4  frames=560  peak=0.894531
+=== OK gr40c 2026-10-25T01:45:44+05:30 ===
+=== BEGIN gr40b 2026-10-25T01:45:44+05:30 ===
+Loading weights:   0%|          | 0/843 [00:00<?, ?it/s]Loading weights:  26%|██▌       | 216/843 [00:00<00:00, 2123.48it/s]Loading weights:  51%|█████     | 429/843 [00:00<00:00, 2080.13it/s]Loading weights:  76%|███████▌  | 638/843 [00:00<00:00, 2055.65it/s]Loading weights: 100%|██████████| 843/843 [00:00<00:00, 2487.99it/s]
+loaded checkpoints/direct_h1s_appear_blob_gr40b/teacher_phase_a_best.pt epoch 2 phase frozen backbone facebook/vjepa2-vitg-fpc64-256 hidden 1408
+writing wide overlays to /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b
+decoding clip_01_753s-770s.mp4 752.5s–769.7s
+  513 frames, letterboxing
+  80/423 anchors  peak 0.746
+  160/423 anchors  peak 0.902
+  240/423 anchors  peak 0.479
+  320/423 anchors  peak 0.961
+  400/423 anchors  peak 0.930
+  423/423 anchors  peak 0.672
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_01_753s-770s.mp4 (513 frames, pred peak 0.969)
+decoding clip_02_1177s-1194s.mp4 1176.8s–1194.3s
+  526 frames, letterboxing
+  80/436 anchors  peak 0.738
+  160/436 anchors  peak 0.836
+  240/436 anchors  peak 0.578
+  320/436 anchors  peak 0.035
+  400/436 anchors  peak 0.094
+  436/436 anchors  peak 0.547
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_02_1177s-1194s.mp4 (526 frames, pred peak 0.988)
+decoding clip_03_2201s-2221s.mp4 2201.4s–2220.6s
+  576 frames, letterboxing
+  80/486 anchors  peak 0.703
+  160/486 anchors  peak 0.167
+  240/486 anchors  peak 0.412
+  320/486 anchors  peak 0.091
+  400/486 anchors  peak 0.142
+  480/486 anchors  peak 0.197
+  486/486 anchors  peak 0.153
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_03_2201s-2221s.mp4 (576 frames, pred peak 0.754)
+decoding clip_04_73s-91s.mp4 72.7s–90.9s
+  545 frames, letterboxing
+  80/455 anchors  peak 0.648
+  160/455 anchors  peak 0.527
+  240/455 anchors  peak 0.723
+  320/455 anchors  peak 0.134
+  400/455 anchors  peak 0.613
+  455/455 anchors  peak 0.281
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_04_73s-91s.mp4 (545 frames, pred peak 0.949)
+decoding clip_05_252s-272s.mp4 252.5s–271.9s
+  584 frames, letterboxing
+  80/494 anchors  peak 0.011
+  160/494 anchors  peak 0.467
+  240/494 anchors  peak 0.238
+  320/494 anchors  peak 0.660
+  400/494 anchors  peak 0.777
+  480/494 anchors  peak 0.590
+  494/494 anchors  peak 0.633
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_05_252s-272s.mp4 (584 frames, pred peak 0.988)
+decoding clip_06_578s-593s.mp4 578.3s–593.5s
+  454 frames, letterboxing
+  80/364 anchors  peak 0.375
+  160/364 anchors  peak 0.926
+  240/364 anchors  peak 0.867
+  320/364 anchors  peak 0.426
+  364/364 anchors  peak 0.559
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_06_578s-593s.mp4 (454 frames, pred peak 0.984)
+decoding clip_07_649s-665s.mp4 648.9s–665.3s
+  492 frames, letterboxing
+  80/402 anchors  peak 0.648
+  160/402 anchors  peak 0.816
+  240/402 anchors  peak 0.941
+  320/402 anchors  peak 0.820
+  400/402 anchors  peak 0.926
+  402/402 anchors  peak 0.840
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_07_649s-665s.mp4 (492 frames, pred peak 0.977)
+decoding clip_08_1469s-1485s.mp4 1469.3s–1485.4s
+  482 frames, letterboxing
+  80/392 anchors  peak 0.137
+  160/392 anchors  peak 0.777
+  240/392 anchors  peak 0.746
+  320/392 anchors  peak 0.223
+  392/392 anchors  peak 0.938
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_08_1469s-1485s.mp4 (482 frames, pred peak 0.977)
+decoding clip_09_1966s-1984s.mp4 1965.8s–1984.5s
+  560 frames, letterboxing
+  80/470 anchors  peak 0.684
+  160/470 anchors  peak 0.494
+  240/470 anchors  peak 0.043
+  320/470 anchors  peak 0.523
+  400/470 anchors  peak 0.707
+  470/470 anchors  peak 0.664
+  wrote /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_09_1966s-1984s.mp4 (560 frames, pred peak 0.789)
+summary
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_01_753s-770s.mp4  frames=513  peak=0.968750
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_02_1177s-1194s.mp4  frames=526  peak=0.988281
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_03_2201s-2221s.mp4  frames=576  peak=0.753906
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_04_73s-91s.mp4  frames=545  peak=0.949219
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_05_252s-272s.mp4  frames=584  peak=0.988281
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_06_578s-593s.mp4  frames=454  peak=0.984375
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_07_649s-665s.mp4  frames=492  peak=0.976562
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_08_1469s-1485s.mp4  frames=482  peak=0.976562
+  /storage/BTP/model_trial_3/visualizations/street_vlog/gr40b/clip_09_1966s-1984s.mp4  frames=560  peak=0.789062
+=== OK gr40b 2026-10-25T02:06:43+05:30 ===
+=== wide batch end 2026-10-25T02:06:43+05:30 ===

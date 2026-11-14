@@ -1,0 +1,9 @@
+windows (22680, 5120, 5120) cache=/storage/BTP/model_trial_3/checkpoints/parent_target_cache_v2
+skip 920 train windows missing local RGB frames
+windows after RGB filter (21760, 5120, 5120)
+decoder_hash=77f78c8714667617 parent_ckpt=/storage/BTP/model_trial_3/checkpoints/pair_cf_treatment_s1337_best.pt
+rgb_cache=/storage/BTP/model_trial_3/cache/frames
+device=cuda amp=torch.bfloat16 params {'variant': 'atto', 'total': 4422222, 'trainable': 4374413, 'frozen': 47809, 'backbone': 4374413, 'decoder': 47809, 'depths': [2, 2, 6, 2], 'dims': [40, 80, 160, 320]}
+loaded F_dec stats /storage/BTP/model_trial_5/student_runs/fdec_channel_stats.npz
+/usr/lib/python3.14/multiprocessing/resource_tracker.py:475: UserWarning: resource_tracker: There appear to be 14 leaked semaphore objects to clean up at shutdown: {'/mp-6v31pfxr', '/mp-1mlfj514', '/mp-hd9vzfhz', '/mp-mmxe8p13', '/mp-yww6whxs', '/mp-cagi_oaq', '/mp-cad0nqvg', '/mp-yblhhwlq', '/mp-ak3vp55w', '/mp-xef98gh3', '/mp-pb8d30ib', '/mp-w61t40xf', '/mp-areo7mum', '/mp-c547yhnz'}
+  warnings.warn(
