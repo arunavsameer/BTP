@@ -5,8 +5,17 @@ from __future__ import annotations
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-TRIAL3 = Path("/storage/BTP/model_trial_3")
-PYTHON = Path("/storage/BTP/impl/venv/bin/python")
+_BTP = ROOT.parent
+if not (_BTP / "model_trial_3").is_dir() and Path("/storage/BTP/model_trial_3").is_dir():
+    _BTP = Path("/storage/BTP")
+TRIAL3 = _BTP / "model_trial_3"
+TRIAL4 = _BTP / "model_trial_4"
+_PY_CANDIDATES = (
+    Path("/raid/money/miniconda3/bin/python"),
+    Path("/raid/money/miniconda3/envs/btp-student/bin/python"),
+    Path("/storage/BTP/impl/venv/bin/python"),
+)
+PYTHON = next((p for p in _PY_CANDIDATES if p.is_file()), Path("python3"))
 
 # --- class cuts: same as model_trial_3/configs/default.yaml warning.* ---
 SAFE_PEAK = 0.25  # caution_threshold: max(h_1s) below this is SAFE
@@ -59,6 +68,13 @@ DEFAULT_CHECKPOINT = TRIAL3 / "checkpoints" / "m1_stop_floor_epoch_10.pt"
 MANIFEST_PATH = TRIAL3 / "cache" / "manifest.jsonl"
 SPLITS_PATH = TRIAL3 / "cache" / "splits.json"
 FRAME_CACHE_ROOT = TRIAL3 / "cache"
-DATASET_ROOT = Path("/storage/BTP/groups15-n400")
+_GROUPS15 = _BTP / "blender_sim" / "datasets" / "groups15_n400_s67_n400"
+_GROUPS15_ALT = _BTP / "blender_sim" / "datasets" / "groups15-n400"
+_GROUPS15_STORAGE = Path("/storage/BTP/groups15-n400")
+DATASET_ROOT = (
+    _GROUPS15 if _GROUPS15.is_dir()
+    else _GROUPS15_ALT if _GROUPS15_ALT.is_dir()
+    else _GROUPS15_STORAGE
+)
 N_CLIPS = 12
 PREFERRED_SPLIT = "test"

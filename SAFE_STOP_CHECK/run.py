@@ -131,6 +131,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     p.add_argument("--n-clips", type=int, default=N_CLIPS)
     p.add_argument("--smoke", action="store_true", help="render only the first clip")
+    p.add_argument("--no-render", action="store_true", help="score only; skip overlay mp4s")
     return p.parse_args(argv)
 
 
@@ -172,24 +173,26 @@ def main(argv: list[str] | None = None) -> None:
             raise RuntimeError(f"no predictions for {rec['clip_id']}")
         rows, clip = score_clip(gt, preds)
         rows_by_t = {r["t"]: r for r in rows}
-        frames = render_clip_frames(
-            rec,
-            letterboxed,
-            preds,
-            gt,
-            rows_by_t,
-            clip,
-            src_w=int(meta["source_width"]),
-            src_h=int(meta["source_height"]),
-        )
-        video = out_dir / f"{stem}.mp4"
-        write_mp4(video, frames)
+        video = ""
+        if not args.no_render:
+            frames = render_clip_frames(
+                rec,
+                letterboxed,
+                preds,
+                gt,
+                rows_by_t,
+                clip,
+                src_w=int(meta["source_width"]),
+                src_h=int(meta["source_height"]),
+            )
+            video = str(out_dir / f"{stem}.mp4")
+            write_mp4(Path(video), frames)
         row = {
             "clip_id": rec["clip_id"],
             "sample_id": rec.get("sample_id"),
             "outcome_type": rec.get("outcome_type"),
             "scenario_type": rec.get("scenario_type"),
-            "video": str(video),
+            "video": video,
             "n_frames": clip["n_frames"],
             "n_safe_frames": clip["n_safe_frames"],
             "n_stop_frames": clip["n_stop_frames"],
@@ -202,7 +205,7 @@ def main(argv: list[str] | None = None) -> None:
         }
         table.append(row)
         print(
-            f"  wrote {video}  SAFE={fmt_score(clip['safe_score'])}  "
+            f"  {'wrote '+video if video else 'scored'}  SAFE={fmt_score(clip['safe_score'])}  "
             f"STOP={fmt_score(clip['stop_score'])}  "
             f"n_safe={clip['n_safe_frames']} n_stop={clip['n_stop_frames']}",
             flush=True,

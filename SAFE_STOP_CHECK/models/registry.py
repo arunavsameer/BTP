@@ -14,6 +14,11 @@ _ADAPTERS: dict[str, type[StudentModel]] = {
     "pair_cf": PairCFAdapter,
     "trial4_epoch_22": Trial4Adapter,
     "trial4_epoch_28": Trial4Adapter,
+    "trial4_v2": Trial4Adapter,
+    "trial4_v3": Trial4Adapter,
+    "trial4_v4": Trial4Adapter,
+    "trial4_v5": Trial4Adapter,
+    "trial4_v6": Trial4Adapter,
 }
 
 

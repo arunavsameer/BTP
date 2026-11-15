@@ -1,0 +1,17 @@
+{
+  "run": "student_v6_clean_gated",
+  "arch": "CollisionStudentV6",
+  "init_gate_bias": -0.5,
+  "feat_decay": {
+    "start": 20,
+    "duration": 25,
+    "lam_start": 0.5,
+    "lam_end": 0.1
+  },
+  "decoder_unfreeze": {
+    "start_epoch": 21,
+    "lr_mult": 0.15,
+    "warmup_epochs": 2
+  },
+  "notes": "V2 backbone + ResidualGatedFusionV6. Loss: 8*L_5x5 + L_16x16 + lam_feat*L_feat."
+}

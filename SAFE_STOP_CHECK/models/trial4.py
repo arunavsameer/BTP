@@ -14,9 +14,9 @@ from typing import Any
 import numpy as np
 import torch
 
+from config import TRIAL4
 from models.base import StudentModel
 
-TRIAL4 = Path("/storage/BTP/model_trial_4")
 HIDDEN = 128  # StudentV2/V3 motion / context channels
 
 
@@ -28,7 +28,12 @@ def _infer_ffn_hidden(backbone: dict) -> int:
 
 
 def _detect_arch(backbone: dict) -> str:
-    if "time_embed" in backbone:
+    keys = list(backbone)
+    if any(str(k).startswith("gated_fusion") for k in keys):
+        return "v6"
+    if any(str(k).startswith("gated_fuse") for k in keys):
+        return "v4"
+    if "time_embed" in backbone or any("time_embed" in str(k) for k in keys):
         return "v3"
     vel = backbone.get("vel_fuse.conv.weight")
     if vel is not None and int(vel.shape[1]) == 291:
@@ -69,6 +74,9 @@ class Trial4Adapter(StudentModel):
         from student.decoder import HeatmapDecoder
         from student.v2.model import CollisionStudentV2
         from student.v3.model import CollisionStudentV3
+        from student.v4.model import CollisionStudentV4
+        from student.v5.model import CollisionStudentV5
+        from student.v6.model import CollisionStudentV6
 
         backbone_sd = blob["backbone"]
         decoder_sd = blob["decoder"]
@@ -83,8 +91,17 @@ class Trial4Adapter(StudentModel):
         decoder = HeatmapDecoder(
             z_channels=z_ch, hidden=dec_hidden, dilated=dilated, out_grid=5, pool="max"
         )
-        cls = CollisionStudentV3 if arch == "v3" else CollisionStudentV2
-        model = cls(decoder, ffn_hidden=ffn_hidden)
+        cls = {
+            "v2": CollisionStudentV2,
+            "v3": CollisionStudentV3,
+            "v4": CollisionStudentV4,
+            "v5": CollisionStudentV5,
+            "v6": CollisionStudentV6,
+        }[arch]
+        if arch in ("v4", "v5", "v6"):
+            model = cls(decoder, ffn_hidden=ffn_hidden)
+        else:
+            model = cls(decoder, ffn_hidden=ffn_hidden)
         try:
             model.backbone.load_state_dict(backbone_sd, strict=True)
             model.decoder.load_state_dict(decoder_sd, strict=True)
