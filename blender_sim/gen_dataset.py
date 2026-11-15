@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -441,6 +442,17 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         ),
     )
     p.add_argument(
+        "--pairs",
+        action="store_true",
+        help=(
+            "Pair pack: --n of EACH family (parallel_person, static_shape, crowd) "
+            "in rotating order P,S,C,P,S,C so a cancel leaves ~equal counts. "
+            "Pair families write collision plus one miss side under bg_00; bg_01 "
+            "is always an empty mkdir. Crowd files sit at the sample root. "
+            "Not the old 3-outcome groups pack; pixels are not prefix-cached."
+        ),
+    )
+    p.add_argument(
         "--bg-variants",
         type=int,
         default=2,
@@ -448,7 +460,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         metavar="K",
         help=(
             "Background variants per sample when --groups. Default: 2. "
-            "Each variant gets a distinct time-of-day slot plus full/sparse/bare scatter."
+            "Each variant gets a distinct time-of-day slot plus full/sparse/bare scatter. "
+            "With --pairs this flag is ignored: only bg_00 is rendered; bg_01 is empty."
         ),
     )
     p.add_argument(
@@ -461,6 +474,23 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "(e.g. jaywalker,car_cut_in). Default: cycle the catalog."
         ),
     )
+    p.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Blender CPU threads for each Blender worker (0 = AUTO). Sets BTP_THREADS.",
+    )
+    p.add_argument(
+        "--jobs",
+        type=int,
+        default=None,
+        metavar="J",
+        help=(
+            "Concurrent Blender processes (clip shards). Pairs/groups: one sample per job; "
+            "classic plan: one episode per job. Env: BTP_JOBS. Default 1 (one GPU-safe process)."
+        ),
+    )
     p.add_argument("--dry-run", action="store_true",
                    help="Write pack.json + plan.json and print the mix; do not launch Blender.")
     p.add_argument("--self-test", action="store_true", help="Run the planner unit test and exit.")
@@ -468,6 +498,30 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _print_mix(plan: dict) -> None:
+    if str(plan.get("layout") or "") == "pairs":
+        from pair_pack import FAMILY_LETTER, iter_pair_clips
+
+        clips = list(iter_pair_clips(plan))
+        rotation = str(plan.get("rotation") or "")
+        print(
+            f"  layout=pairs  n={plan.get('n')}/family  "
+            f"samples={len(plan.get('samples') or [])}  "
+            f"clips={len(clips)}  prefix_cache={plan.get('prefix_cache')}"
+        )
+        print(f"  rotation: {rotation}")
+        for sample in plan.get("samples") or []:
+            letter = FAMILY_LETTER.get(str(sample.get("family") or ""), "?")
+            outs = ",".join(sample.get("outcomes") or [])
+            layout = sample.get("files_layout") or "outcome_bg"
+            if layout == "flat":
+                print(f"    {letter}  {sample['dir']}  flat  scenario={sample['scenario']}")
+            else:
+                miss = sample.get("miss_side") or "?"
+                print(
+                    f"    {letter}  {sample['dir']}  outcomes=[{outs}]  "
+                    f"bg_00=real bg_01=empty  miss={miss}"
+                )
+        return
     if str(plan.get("layout") or "") == "groups":
         n_clips = sum(
             len(s.get("outcomes") or []) * len(s.get("backgrounds") or [])
@@ -506,11 +560,35 @@ def _print_mix(plan: dict) -> None:
         print(f"    {ep['id']:04d}{mark}  {ep['scenario']}")
 
 
-def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) -> int:
+def resolve_jobs(args: argparse.Namespace) -> int:
+    raw = getattr(args, "jobs", None)
+    if raw is None:
+        env = os.environ.get("BTP_JOBS", "").strip()
+        raw = int(env) if env else 1
+    return max(1, int(raw))
+
+
+def _blender_child_env(args: argparse.Namespace) -> dict[str, str]:
+    env = os.environ.copy()
+    if os.environ.get("OMP_NUM_THREADS", "").strip() == "1":
+        env.pop("OMP_NUM_THREADS", None)
+    if getattr(args, "threads", None) is not None:
+        n = int(args.threads)
+        env["BTP_THREADS"] = str(n)
+        if n > 0:
+            env["BLENDER_SYSTEM_THREADS"] = str(n)
+    return env
+
+
+def build_blender_cmd(
+    plan_path: Path,
+    pack_dir: Path,
+    args: argparse.Namespace,
+    *,
+    plan_sample_idx: str = "",
+    plan_episode_idx: str = "",
+) -> list[str]:
     run = _ROOT / "run.sh"
-    if not run.is_file():
-        print(f"missing {run}", file=sys.stderr)
-        return 127
     cmd = [
         str(run),
         "--plan", str(plan_path),
@@ -521,6 +599,10 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
         "--media", str(args.media),
         "--threat-grid", str(int(args.threat_grid)),
     ]
+    if plan_sample_idx:
+        cmd += ["--plan-sample-idx", plan_sample_idx]
+    if plan_episode_idx:
+        cmd += ["--plan-episode-idx", plan_episode_idx]
     if args.frames > 0:
         cmd += ["--frames", str(int(args.frames))]
     elif float(getattr(args, "duration", 0.0) or 0.0) > 0.0:
@@ -545,11 +627,256 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
         cmd.append("--no-trees")
     if str(getattr(args, "wind", "auto")) not in ("", "auto"):
         cmd += ["--wind", str(args.wind)]
-    print(f"[gen_dataset] exec: {' '.join(cmd)}", flush=True)
-    env = os.environ.copy()
-    # One Blender, one GPU. EEVEE is already the bottleneck; a second
-    # process on the same card just thrashes VRAM and does not overlap.
-    return int(subprocess.call(cmd, cwd=str(_ROOT), env=env))
+    if getattr(args, "threads", None) is not None:
+        cmd += ["--threads", str(int(args.threads))]
+    return cmd
+
+
+def plan_job_shards(plan: dict) -> list[tuple[str, str]]:
+    """Return (plan_sample_idx, plan_episode_idx) shards safe for parallel Blender."""
+    layout = str(plan.get("layout") or "")
+    if layout in ("pairs", "groups"):
+        n = len(plan.get("samples") or [])
+        return [(str(i), "") for i in range(n)]
+    episodes = plan.get("episodes") or []
+    if episodes:
+        return [("", str(i)) for i in range(len(episodes))]
+    return [("", "")]
+
+
+def _clip_done(
+    pack_dir: Path,
+    clip: dict,
+    *,
+    layout: str,
+    want_overlay: bool,
+    video_name: str = "preview.mp4",
+) -> bool:
+    if layout == "pairs":
+        sample_dir = pack_dir / str(clip["sample_dir"])
+        rel = str(clip.get("relpath") or "")
+        ep_dir = sample_dir if (clip.get("files_layout") == "flat" or not rel) else (sample_dir / rel)
+    else:
+        ep_dir = pack_dir / str(clip["sample_dir"]) / str(clip["relpath"])
+    video_path = ep_dir / video_name
+    if not video_path.is_file():
+        return False
+    if want_overlay:
+        return (ep_dir / "spatial_overlay.mp4").is_file()
+    return True
+
+
+def count_pack_clips_done(
+    pack_dir: Path, plan: dict, args: argparse.Namespace
+) -> tuple[int, int]:
+    """How many planned clips have required deliverables on disk."""
+    layout = str(plan.get("layout") or "")
+    want_overlay = bool(args.spatial_overlay) and not bool(args.no_render)
+    if layout == "pairs":
+        from pair_pack import iter_pair_clips
+
+        clips = list(iter_pair_clips(plan))
+        n_ok = sum(
+            1
+            for c in clips
+            if _clip_done(pack_dir, c, layout=layout, want_overlay=want_overlay)
+        )
+        return n_ok, len(clips)
+    if layout == "groups":
+        from outcome_groups import iter_clips
+
+        clips = list(iter_clips(plan))
+        n_ok = sum(
+            1
+            for c in clips
+            if _clip_done(pack_dir, c, layout=layout, want_overlay=want_overlay)
+        )
+        return n_ok, len(clips)
+    return 0, 0
+
+
+def verify_pack_complete(
+    pack_dir: Path, plan: dict, args: argparse.Namespace
+) -> int:
+    n_ok, n_clips = count_pack_clips_done(pack_dir, plan, args)
+    if n_clips <= 0:
+        return 0
+    if n_ok >= n_clips:
+        return 0
+    layout = str(plan.get("layout") or "pack")
+    print(
+        f"[gen_dataset] pack incomplete: {n_ok}/{n_clips} clip(s) on disk ({layout})",
+        file=sys.stderr,
+    )
+    want_overlay = bool(args.spatial_overlay) and not bool(args.no_render)
+    from pair_pack import iter_pair_clips
+    from outcome_groups import iter_clips
+
+    if layout == "pairs":
+        todo = list(iter_pair_clips(plan))
+    elif layout == "groups":
+        todo = list(iter_clips(plan))
+    else:
+        todo = []
+    for clip in todo:
+        if not _clip_done(pack_dir, clip, layout=layout, want_overlay=want_overlay):
+            rel = clip.get("relpath") or clip.get("outcome") or "?"
+            print(
+                f"  missing: {clip.get('sample_dir', '?')}/{rel}",
+                file=sys.stderr,
+            )
+    return 2
+
+
+def finalize_pack_index(pack_dir: Path, plan: dict, args: argparse.Namespace) -> None:
+    layout = str(plan.get("layout") or "")
+    want_overlay = bool(args.spatial_overlay) and not bool(args.no_render)
+    if layout == "pairs":
+        from pair_pack import iter_pair_clips
+
+        clips = list(iter_pair_clips(plan))
+        index_rows = []
+        for clip in clips:
+            if not _clip_done(pack_dir, clip, layout=layout, want_overlay=want_overlay):
+                continue
+            outcome = str(clip["outcome"])
+            y = None if outcome == "clip" else (1 if outcome == "collision" else 0)
+            sample_dir = pack_dir / str(clip["sample_dir"])
+            rel = str(clip.get("relpath") or "")
+            ep_dir = (
+                sample_dir
+                if (clip.get("files_layout") == "flat" or not rel)
+                else (sample_dir / rel)
+            )
+            index_rows.append(
+                {
+                    "sample_id": clip["sample_id"],
+                    "family": clip["family"],
+                    "scenario": clip["scenario"],
+                    "outcome": outcome,
+                    "bg_id": clip.get("bg_id"),
+                    "path": str(ep_dir.relative_to(pack_dir)),
+                    "video": "preview.mp4",
+                    "spatial_overlay": "spatial_overlay.mp4" if want_overlay else None,
+                    "y": y,
+                }
+            )
+        payload = {
+            "layout": "pairs",
+            "n_ok": len(index_rows),
+            "n_clips": len(clips),
+            "rotation": plan.get("rotation"),
+            "prefix_cache": False,
+            "train_glob": (
+                "{parallel_person,static_shape}/sample_*/"
+                "{collision,miss_left,miss_right}/bg_00/preview.mp4"
+            ),
+            "crowd_glob": "crowd/sample_*/preview.mp4",
+            "clips": index_rows,
+        }
+        (pack_dir / "pairs_index.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+        return
+    if layout == "groups":
+        from outcome_groups import iter_clips
+
+        clips = list(iter_clips(plan))
+        index_rows = []
+        for clip in clips:
+            if not _clip_done(pack_dir, clip, layout=layout, want_overlay=want_overlay):
+                continue
+            sample_dir = pack_dir / str(clip["sample_dir"])
+            ep_dir = sample_dir / str(clip["relpath"])
+            outcome = str(clip["outcome"])
+            index_rows.append(
+                {
+                    "sample_id": clip["sample_id"],
+                    "scenario": clip["scenario"],
+                    "outcome": outcome,
+                    "bg_id": clip["bg_id"],
+                    "bg_style": clip["bg_style"],
+                    "bg_lighting": clip.get("bg_lighting"),
+                    "path": str(ep_dir.relative_to(pack_dir)),
+                    "video": "preview.mp4",
+                    "spatial_overlay": "spatial_overlay.mp4" if want_overlay else None,
+                    "diverge_frame": clip["diverge_frame"],
+                    "y": 1 if outcome == "collision" else 0,
+                }
+            )
+        payload = {
+            "layout": "groups",
+            "n_ok": len(index_rows),
+            "n_clips": len(clips),
+            "train_glob": "sample_*/{collision,miss_left,miss_right}/bg_*/preview.mp4",
+            "clips": index_rows,
+        }
+        (pack_dir / "groups_index.json").write_text(
+            json.dumps(payload, indent=2), encoding="utf-8"
+        )
+
+
+def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) -> int:
+    run = _ROOT / "run.sh"
+    if not run.is_file():
+        print(f"missing {run}", file=sys.stderr)
+        return 127
+    jobs = resolve_jobs(args)
+    env = _blender_child_env(args)
+    plan_doc: dict = {}
+    if plan_path.is_file():
+        try:
+            plan_doc = json.loads(plan_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            plan_doc = {}
+    shards = plan_job_shards(plan_doc) if plan_doc else [("", "")]
+    if jobs <= 1 or len(shards) <= 1:
+        cmd = build_blender_cmd(plan_path, pack_dir, args)
+        print(f"[gen_dataset] exec: {' '.join(cmd)}", flush=True)
+        rc = int(subprocess.call(cmd, cwd=str(_ROOT), env=env))
+        if plan_doc:
+            finalize_pack_index(pack_dir, plan_doc, args)
+            pack_rc = verify_pack_complete(pack_dir, plan_doc, args)
+            if pack_rc != 0 and rc == 0:
+                rc = pack_rc
+        return rc
+
+    print(
+        f"[gen_dataset] parallel jobs={jobs}  shards={len(shards)}  "
+        f"(one Blender per sample/episode; collision+miss stay serial per shard)",
+        flush=True,
+    )
+
+    def _run_shard(shard: tuple[str, str]) -> int:
+        sample_idx, ep_idx = shard
+        cmd = build_blender_cmd(
+            plan_path,
+            pack_dir,
+            args,
+            plan_sample_idx=sample_idx,
+            plan_episode_idx=ep_idx,
+        )
+        tag = sample_idx or ep_idx or "all"
+        print(f"[gen_dataset] shard {tag}: {' '.join(cmd)}", flush=True)
+        return int(subprocess.call(cmd, cwd=str(_ROOT), env=env))
+
+    rc = 0
+    workers = min(jobs, len(shards))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        futures = {pool.submit(_run_shard, shard): shard for shard in shards}
+        for fut in as_completed(futures):
+            sample_idx, ep_idx = futures[fut]
+            shard_rc = int(fut.result())
+            tag = sample_idx or ep_idx or "all"
+            print(f"[gen_dataset] shard {tag} exited {shard_rc}", flush=True)
+            if shard_rc != 0:
+                rc = shard_rc
+    if plan_doc:
+        finalize_pack_index(pack_dir, plan_doc, args)
+        pack_rc = verify_pack_complete(pack_dir, plan_doc, args)
+        if pack_rc != 0:
+            rc = pack_rc if rc == 0 else rc
+    return rc
 
 
 def _self_test() -> None:
@@ -618,6 +945,21 @@ def _self_test() -> None:
     assert "same_dir_hold" in catalog
     assert "same_dir_pulling" in catalog
     assert not {"same_dir_closing", "same_dir_hold", "same_dir_pulling"} & set(FORKABLE_SCENARIOS)
+    from scenario_compose import all_scenario_names
+    named = set(all_scenario_names(cfg))
+    assert "static_shape" in named
+    assert "static_shape" not in catalog
+    assert "static_shape" not in FORKABLE_SCENARIOS
+    assert "parallel_person" in named
+    assert "parallel_person" not in catalog
+    assert "parallel_person" not in FORKABLE_SCENARIOS
+
+    from pair_pack import build_pair_plan, iter_pair_clips as iter_pair
+    pp = build_pair_plan(2, 21, cfg)
+    assert pp["layout"] == "pairs"
+    assert pp["rotation"] == "P,S,C,P,S,C"
+    assert len(list(iter_pair(pp))) == 10
+    assert pp["prefix_cache"] is False
 
     parent = Path(tempfile.mkdtemp(prefix="btp_ds_"))
     existing = parent / pack_dirname(seed=1, n=2, name="groups15")
@@ -631,6 +973,22 @@ def _self_test() -> None:
     kids = sorted(p.name for p in parent.iterdir())
     assert kids == [existing.name], kids
     assert (existing / "keep.txt").read_text(encoding="utf-8") == "ok"
+
+    import io
+    from contextlib import redirect_stdout
+
+    pair_parent = Path(tempfile.mkdtemp(prefix="btp_pairs_"))
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        rc_p = main([
+            "--dry-run", "--pairs", "-n", "2", "--seed", "21",
+            "--datasets", str(pair_parent), "--name", "pairs15_side_static_crowd",
+        ])
+    assert rc_p == 0
+    printed = buf.getvalue()
+    assert "P,S,C,P,S,C" in printed, printed
+    assert "rotation:" in printed
+    assert list(pair_parent.iterdir()) == []
     print("gen_dataset self-test: OK")
 
 
@@ -652,6 +1010,9 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
+    if bool(args.groups) and bool(getattr(args, "pairs", False)):
+        print("--groups and --pairs are mutually exclusive", file=sys.stderr)
+        return 2
     if bool(args.groups):
         from outcome_groups import build_group_plan
         n_bg = max(1, min(8, int(args.bg_variants)))
@@ -665,6 +1026,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         if str(getattr(args, "ego_mode", "auto")) in ("", "auto"):
             args.ego_mode = "walk"
+    elif bool(getattr(args, "pairs", False)):
+        from pair_pack import build_pair_plan
+        plan = build_pair_plan(int(args.n), int(args.seed), cfg)
+        if str(getattr(args, "ego_mode", "auto")) in ("", "auto"):
+            args.ego_mode = "walk"
     else:
         plan = build_plan(int(args.n), int(args.seed), cfg, theme=theme)
     parent = Path(args.datasets) if args.datasets else (_ROOT / "datasets")
@@ -672,6 +1038,8 @@ def main(argv: list[str] | None = None) -> int:
     pack_name = str(args.name or "")
     if bool(args.groups) and not pack_name:
         pack_name = "groups15"
+    if bool(getattr(args, "pairs", False)) and not pack_name:
+        pack_name = "pairs15_side_static_crowd"
     dirname = pack_dirname(seed=int(args.seed), n=int(args.n), name=pack_name)
     extra = {
         "media": args.media,
@@ -686,23 +1054,35 @@ def main(argv: list[str] | None = None) -> int:
         "ego_height": str(getattr(args, "ego_height", "auto")),
         "chaos": args.chaos,
         "no_trees": bool(args.no_trees),
-        "theme": "groups" if bool(args.groups) else theme,
+        "theme": (
+            "pairs" if bool(getattr(args, "pairs", False))
+            else ("groups" if bool(args.groups) else theme)
+        ),
         "note": (
-            "Outcome groups: one threat scenario, collision plus one miss "
-            "side (miss_left or miss_right, 50/50 per sample from --seed) "
-            "that share frames until diverge_s, and K background variants "
-            "(trees/buildings/furniture plus a distinct time-of-day lighting "
-            "slot per bg_YY)."
-            if bool(args.groups)
+            "Pair pack: --n of each family in rotating order "
+            "parallel, static_shape, crowd. Collision plus one miss side "
+            "(miss_left or miss_right, 50/50 from --seed). Only bg_00 is "
+            "rendered; bg_01 is an empty mkdir. Crowd files sit at the "
+            "sample root. World+ego cached per sample; second clip only "
+            "changes actor lateral. Do not concat-copy a groups prefix."
+            if bool(getattr(args, "pairs", False))
             else (
-                "Scenario tokens are chosen here. Lighting, weather, path type, "
-                "walk speed, FOV, body proportions, colours, and clutter are "
-                "drawn per episode from the pipeline RNG (same --seed)."
-                + (
-                    " Theme 'peripheral': empty sidewalk ahead; cars/people stay "
-                    "on the side until they cut in."
-                    if theme == "peripheral"
-                    else ""
+                "Outcome groups: one threat scenario, collision plus one miss "
+                "side (miss_left or miss_right, 50/50 per sample from --seed) "
+                "that share frames until diverge_s, and K background variants "
+                "(trees/buildings/furniture plus a distinct time-of-day lighting "
+                "slot per bg_YY)."
+                if bool(args.groups)
+                else (
+                    "Scenario tokens are chosen here. Lighting, weather, path type, "
+                    "walk speed, FOV, body proportions, colours, and clutter are "
+                    "drawn per episode from the pipeline RNG (same --seed)."
+                    + (
+                        " Theme 'peripheral': empty sidewalk ahead; cars/people stay "
+                        "on the side until they cut in."
+                        if theme == "peripheral"
+                        else ""
+                    )
                 )
             )
         ),
@@ -719,7 +1099,8 @@ def main(argv: list[str] | None = None) -> int:
         extra_flags.append(f"ego={args.ego_mode}")
     flag_s = ("  " + " ".join(extra_flags)) if extra_flags else ""
     print(
-        f"  seed={args.seed}  n={args.n}  theme={'groups' if args.groups else theme}  "
+        f"  seed={args.seed}  n={args.n}  "
+        f"theme={'pairs' if getattr(args, 'pairs', False) else ('groups' if args.groups else theme)}  "
         f"media={args.media}{flag_s}",
         flush=True,
     )

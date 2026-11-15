@@ -93,6 +93,7 @@ These are the reasons the code looks the way it does. Almost every “why” in 
        └─ parse_args() reads only argv after the bare "--"
        └─ main() → run_episode() × N
             or run_group_plan() if plan.json has layout=groups
+            or run_pair_plan() if plan.json has layout=pairs
 ```
 
 ### 3.1 `run.sh`
@@ -350,11 +351,12 @@ Never:
 | `spatial_threat.py` | no | Intercept×TTC + moving near-pass; K×K splat |
 | `spatial_overlay.py` | no | PPM heat + ffmpeg overlay graph |
 | `outcome_groups.py` | no | Group folder names, miss laterals, `--groups` plan, prefix-cache rules |
-| `gen_dataset.py` | no | Balanced pack planner + `--groups`; launches `run.sh --plan` |
+| `pair_pack.py` | no | `--pairs` rotating layout, empty `bg_01`, parallel-person kinematics |
+| `gen_dataset.py` | no | Balanced pack planner + `--groups` / `--pairs`; launches `run.sh --plan` |
 | `remux_spatial_from_json.py` | no | Recompute overlay + spatial JSON from `preview.mp4` + annotations (no Blender) |
-| `main.py` | yes | CLI, episode loop, `run_group_plan`, annotation JSON, render, mux |
+| `main.py` | yes | CLI, episode loop, `run_group_plan`, `run_pair_plan`, annotation JSON, render, mux |
 
-`python threat_math.py`, `python spatial_threat.py`, `python spatial_overlay.py`, `python scenario_compose.py`, `python outcome_groups.py`, and `python gen_dataset.py --self-test` are the unit tests. They run on system Python.
+`python threat_math.py`, `python spatial_threat.py`, `python spatial_overlay.py`, `python scenario_compose.py`, `python outcome_groups.py`, `python pair_pack.py`, and `python gen_dataset.py --self-test` are the unit tests. They run on system Python.
 
 ---
 
@@ -993,6 +995,8 @@ Shared helpers:
 - `_inject_through_cross` — people: HFOV-edge start, wait then walk by t≤6 s toward the camera, `lat_target` the gait (`force_critical` / groups) or far edge. Vehicles: corridor-edge, `speed=0`. `behavior='through'`. Depth \(\approx (v_{\mathrm{ego}}+|v_{\mathrm{along}}|)\times\texttt{meet}\).
 - `_inject_jaywalk_turn` — corridor-edge entry, then `turn_t` blends into along-track toward or away from the camera.
 - `_inject_static_shapes` — `n=1` one cube; `n=0` draws 2–4 mixed shapes. On gait, 2.55 m apart, lead `static_shape_lead_m` (16.0 m) + static stride.
+- `_inject_static_shape_pair` — one catalog primitive, size ≥ 0.55 m, lead \(v_{\mathrm{ego}} t_{\mathrm{hit}}\) with \(t_{\mathrm{hit}}\ge 12\). Caches kind/size/heading on the generator. `apply_static_shape_pair_lateral` moves only lateral for the miss clip.
+- `_inject_crowd` — 2–5 people from `crowd_people_plan`. Compose is disabled during `_bind` so occupancy is not re-nudged. Crossers use `behavior='through'` (walking, no lat_ease statue). Heat is ordinary `person` → agent knobs.
 - `_inject_pothole` — lead from config, `dlat` 0 / 0.85 / 1.80. On-gait: pothole/crater/broken_slab. Offset may also be debris.
 - `_inject_car_lane` / `_inject_parallel_person` / `_inject_same_dir_follow` / `_inject_cyclist_same_way` / `_inject_distant_jaywalk` / `_inject_parked_car` / `_inject_sudden_stop` / `_inject_cut_in` / `_inject_weaving` / `_inject_run_off_road` / `_inject_child_dart` / `_inject_head_cube` — see §15.
 
@@ -1017,6 +1021,10 @@ CLI parse + Frenet occupancy. Injector **bodies** stay in `world_generator.py` s
 **`CLEAR_CENTER_SCENARIOS`.** `periph_empty`, `periph_car_side`, `periph_parked`, `periph_ped_side`, `periph_car_turn`, `periph_car_runoff`, `periph_ped_cut`, `periph_child_cut`. Empty sidewalk ahead; injected actors stay in a side lane or enter from a corridor edge. Not in `--scenario auto`. `gen_dataset.py --theme peripheral` is the pack.
 
 **`SAME_DIR_FOLLOW_SCENARIOS`.** `same_dir_closing`, `same_dir_hold`, `same_dir_pulling`. Person ahead on the same sidewalk walking **away** (`heading_sign=+1`, `speed>0`). Not forkable. `prepare_scenario` forces ego `walk` and zeroes background pedestrians so an oncoming extra does not steal the frame. Aliases: `follow_closing` / `follow_hold` / `follow_pulling`.
+
+**`STATIC_SHAPE_PAIR_SCENARIOS`.** `static_shape`. Pair pack, not `--groups`. Collision on the gait from t=0 (`lead = v_ego t_hit`, `t_hit ~ U(12.2, 14.5)`); miss is a sideline shift of the **same** mesh. `pair_shares_rgb_prefix` is false. Aliases: `shape_pair` / `static_pair`. Not in auto mix.
+
+**`CROWD_PACK_SCENARIOS`.** `crowd`, `crowd_path`. Pair-pack family `crowd`. Files at `crowd/sample_XXXX_<name>/` with **no** `collision/` / `miss_*` and **no** `bg_YY`. `--groups` does not include these names. `pairs_family_crowd(rng)` is the rotator hook. Aliases: `crowds` → `crowd`.
 
 **`NEAR_LANE_LOCKED`.** Cut-in / graze / swerve / weave / run-off **must** keep the near lane. Occupancy staggers `s` instead of flipping the lane.
 
@@ -1084,6 +1092,20 @@ Per-episode reservation board. Cost is \(O(n_{\mathrm{actors}}\times n_{\mathrm{
 There is **no** per-frame N-body. If you add a new motion mode to `Actor.update` (a second weave, a teleport, a speed ramp that is not `post_speed`), you must teach `FrenetCapsule.pose_at` the same thing or compounds will lie.
 
 `python scenario_compose.py` asserts aliases, extents for `threat_*`, inject priority, and a few reserve / flip cases.
+
+### 12.5 Crowd occupancy (pair pack; not `--groups`)
+
+`crowd_people_plan` places 2–5 people. Each person is a `FrenetCapsule` (person half-extents 0.55 × 0.38 plus clearance 0.22 / 0.20). `ComposeSession.try_reserve` refuses a spawn whose **predicted tube** overlaps another crowd person or the ego over the 15 s horizon. After that, a Euclidean check
+
+\[
+d_{ij}(t)=\mathrm{hypot}\bigl(s_i(t)-s_j(t),\;\mathrm{lat}_i(t)-\mathrm{lat}_j(t)\bigr)
+\]
+
+must stay \(\gtrsim 0.45\,\mathrm{m}\) (`CROWD_MIN_SEP_M = 0.50`). `pose_at` is the closed form of `Actor.update` for constant \(\mathrm{d}s/\mathrm{d}t\) plus linear `lat_target` (no wander, no `lat_ease`). `crowd_euler_min_pairwise_m` is the matching forward Euler; the self-test requires both \(\ge 0.45\) m and \(|d_{\mathrm{closed}}-d_{\mathrm{Euler}}|<0.12\) m so a `pose_at` drift cannot hide a phase-through.
+
+Roles: `junction` / `cross` / `near_miss` (through-ribbon lateral motion); `oncoming` / `intercept` from far ahead; `side` oblique; `parallel_facade` only in `crowd_path` (far +s, lat offset from gait). No +s leader on ego gait near the camera. Mixed mode is all off-axis with ≥2 heading buckets when n≥3. `crowd_path` allows ≤1 same-way facade walker. Heat spans near-miss and closer intercept kinematics.
+
+Rotator hook: `pairs_family_crowd` → `PairsCrowdClip` (`family='crowd'`, `relpath=''`, empty `outcomes` / `bg_ids`, `layout='flat'`, `injector='_inject_crowd'`).
 
 ---
 
@@ -1225,6 +1247,7 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 \*Peripheral names live in `peripheral_safe` / `peripheral_critical`, not the auto mix.
 | `oncoming_pedestrian` | safe | Opposite sidewalk (`dlat="opposite"`), 0.95–1.30 m/s, \(\tau=14.2\). CPA stays large. |
 | `parallel_pedestrian` | safe | Same way, +0.80 m toward the curb, 6 m ahead, ego speed. |
+| `parallel_person` | pair* | Pair-pack walker. Same heading and \(\|v\|\) in both clips; only lateral changes. Hit \(t\ge 12\) s, CPA 0.1–0.2 m. Miss 1.2–2.0 m sideline. Not auto mix, not `--groups`. |
 | `same_dir_hold` | safe | Same sidewalk, facing away, matched speed, ~5.2 m ahead. `--groups` no. |
 | `same_dir_pulling` | safe | Same sidewalk, facing away, faster than ego, starts ~3.6 m ahead. `--groups` no. |
 | `cyclist_same_way` | safe | Far lane, same way, bike speed, 12 m ahead. |
@@ -1256,6 +1279,9 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 | `lamp_on_path` | critical | Extra pole on the gait, lead 17.5 m. Splat / TTC use the pole. |
 | `cube_on_path` | critical | One static cube on the gait (lead 16.0 m). `--groups` yes: miss **rolls aside** after `diverge_s`. |
 | `shapes_on_path` | critical | 2–4 mixed static primitives on the gait, 2.55 m apart. Not forkable. |
+| `static_shape` | pair pack | One primitive (cube/sphere/pyramid/…). Collision on gait at \(t\ge 12\) s; miss sideline, same shape+size+heading. `--groups` no. Folders: `collision|miss_*/bg_00` files, `bg_01` empty mkdir. |
+| `crowd` | pair pack | `_inject_crowd` mixed. 2–5 people, junction/cross/head-on, no gait leader. Frenet occupancy + hypot ≥ 0.45 m / 15 s. `--groups` no. |
+| `crowd_path` | pair pack | Same injector, `mode='path'` (≤1 far facade-parallel; rest varied). `--groups` no. |
 | `cube_head_on` / `shape_head_on` | critical | Oncoming primitive, `dlat=0.12`, \(\tau=14.3\). `--groups` yes. |
 | `cube_from_left` / `_right` / `shape_from_*` | critical | Through-cross primitive, CPA 0.12 (`cross_cube_meet_s=14.25`). `--groups` yes. |
 | `cyclist_head_on` | critical | Oncoming bike on the gait, \(\tau=14.25\). `--groups` yes. |
@@ -1276,7 +1302,7 @@ Speed on the actor is **negative** (toward the camera). `heading_sign=-1`. Seate
 
 Aliases that resolve into this table are in §12.1 (`follow_closing` / `follow_hold` / `follow_pulling`). `gen_dataset.py` families (at most one member per compound) are: jaywalk, pothole, tree, lamp, car, cyclist, cube, shape, ped (includes the three `same_dir_*` names), erratic_car, crossing, sidewalk_dyn.
 
-`--groups` / `FORKABLE_SCENARIOS` (21): `jaywalker`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_toward`, `swerve_vehicle`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `car_cut_in`, `cyclist_head_on`, `car_cross_critical`, `car_runs_off_road`, `child_darting`, `crossing_car_side`, `periph_car_turn`, `periph_ped_cut`, `periph_child_cut`. `safe_walk` is **not** in this set. Static holes / lamps / `shapes_on_path` are not either. Group packs set `force_critical=True` and default ego `walk` (seated remapped to walk; `CROSS_EGO` names still force `crosswalk`).
+`--groups` / `FORKABLE_SCENARIOS` (21): `jaywalker`, `jaywalker_from_left`, `jaywalker_from_right`, `jaywalker_turn_toward`, `swerve_vehicle`, `cube_head_on`, `cube_from_left`, `cube_from_right`, `cube_on_path`, `shape_head_on`, `shape_from_left`, `shape_from_right`, `car_cut_in`, `cyclist_head_on`, `car_cross_critical`, `car_runs_off_road`, `child_darting`, `crossing_car_side`, `periph_car_turn`, `periph_ped_cut`, `periph_child_cut`. `safe_walk` is **not** in this set. Static holes / lamps / `shapes_on_path` / `static_shape` / `crowd` / `crowd_path` are not either. Group packs set `force_critical=True` and default ego `walk` (seated remapped to walk; `CROSS_EGO` names still force `crosswalk`).
 
 ### 15.3 Worked inject: `jaywalker` + `car_approaching` + `pothole`
 
@@ -1510,6 +1536,31 @@ Background variants (`full` / `sparse` / `bare`) rebuild trees, buildings, and f
 `FORKABLE_SCENARIOS` is the catalog `--groups` will cycle (list in §15.2). Static holes and lamp-on-path are not in it. `cube_on_path` is: the static cube becomes dynamic at `diverge_s` and rolls aside. `--group-scenarios` keeps only names in that set; an empty remainder falls back to the full catalog.
 
 `remux_spatial_from_json.py` recomputes heat + `spatial_overlay.mp4` from `preview.mp4` and `annotations/annotations.json` (no Blender). `--no-rgb` is compatible; `--no-annotations` is not. Pole/trunk paint uses a projected strip, not the cobra-arm AABB. JSON `threat_label` / TTC stay the point-mass solve.
+
+### 18.4 Pair pack (`--pairs`)
+
+`pair_pack.py` is pure Python. `python pair_pack.py` is the self-test. Mutually exclusive with `--groups`.
+
+`--n` is the count **per family**. Emission order is parallel → static_shape → crowd so a cancel leaves ~equal counts: `for i in 0..n-1: emit parallel sample_i; static sample_i; crowd sample_i`. Dry-run prints `rotation: P,S,C,P,S,C`. Default folder slug is `pairs15_side_static_crowd` unless `--name` is set. Ego is forced to `walk` when CLI is `auto`.
+
+`--bg-variants` is fake: only `bg_00` is rendered; `bg_01` is always `mkdir` empty. One miss side per pair (`miss_left` XOR `miss_right`, 50/50 from `--seed`). Crowd has no outcomes and no `bg_YY` wrap.
+
+```text
+parallel_person/sample_XXXX_parallel_person/{collision,miss_*}/bg_00/  # files
+                                                .../bg_01/            # empty
+static_shape/sample_XXXX_static_shape/{collision,miss_*}/bg_00|bg_01
+crowd/sample_XXXX_crowd/   # files directly here
+```
+
+**Parallel-person** (`_inject_parallel_person_pair`): same world, same ego, same heading, same `v_other`. Only lateral changes. Collision on the gait, CPA 0.1–0.2 m, along-track meet at \(t_{\mathrm{hit}}\sim U(12.2,14.5)\). Miss sideline 1.2–2.0 m matching the folder; never a hit. Heading is same-direction or oncoming; speed is slower or faster than ego. Do not speed the ego — tune spawn \(s\) and \(v_{\mathrm{other}}\).
+
+- Oncoming: \(d_0=(v_{\mathrm{ego}}+v_{\mathrm{other}})t_{\mathrm{hit}}\).
+- Same-dir + slower + ahead: catch-up, \(d_0=(v_{\mathrm{ego}}-v_{\mathrm{other}})t_{\mathrm{hit}}\).
+- Same-dir + faster: rear-end from behind a forward camera is empty-road; FOV check fails and the drawer resamples.
+
+`pair_shares_rgb_prefix("parallel_person")` is false. `run_pair_plan` builds world+ego once per sample and only shifts actor lat for the second clip. No groups prefix concat-copy.
+
+Static-shape / crowd injectors are sibling-owned (`_inject_static_shape_pair`, `_inject_crowd`). The rotator still creates their folders and calls those handlers if present.
 
 ---
 
@@ -1785,6 +1836,7 @@ Change numbers **in `config.py`**, not by scattering literals. Remaining injecto
 | Spatial matrix / overlay | `spatial_threat.py` / `spatial_overlay.py` |
 | Mixed pack | `gen_dataset.py` → `main.py --plan` |
 | Outcome groups | `outcome_groups.py`, `gen_dataset.py --groups`, `main.run_group_plan` |
+| Pair pack | `pair_pack.py`, `gen_dataset.py --pairs`, `main.run_pair_plan`, `_inject_parallel_person_pair` |
 | Overlay remux (no Blender) | `remux_spatial_from_json.py` |
 | Miss peel / wall fallback | `miss_target_lat`, `WorldGenerator.apply_outcome_fork` |
 | 2-D boxes / occlusion / threat point | `projection.py` |
@@ -1843,9 +1895,10 @@ Add energy + elevation ranges and a weight. Teach `apply_domain_randomization` c
 | `python spatial_threat.py` | Fast vs far head-on; on-gait hole mid; offset hole cold; Frenet `path_lat=0` on a curve; close jaywalker; oncoming person ~5.5 m amber / 11 m cold; on-gait tree ~4.5 m warm; far-lane miss cold; seated 2 m ~0 / overlap high; 3 m glancing crosser warns; right-side through-crosser not mirrored; splat no bleed; no NaN |
 | `python spatial_overlay.py` | PPM header, filter graph parses |
 | `python camera_kinematics.py` | Halt gain is 1→0→1 with zero derivative at the joints; only crosswalk/diagonal blend gaze with lateral |
-| `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only, same-dir follow \(d(t)\) inequalities |
+| `python scenario_compose.py` | Aliases, `threat_*` extents, inject order, reserve flip / nudge, static spawn-only, same-dir follow \(d(t)\) inequalities, static-shape pair \(t_{\mathrm{hit}}\ge 12\) and sideline CPA |
 | `python outcome_groups.py` | Folder names; collision vs miss laterals; one miss side per sample (50/50, mixed L/R); wall-side car miss goes far-lane; 15 s diverge/hit |
-| `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds; 15 s frames; group plan length (2 outcomes × K bg); lighting slots unique per bg |
+| `python pair_pack.py` | Rotating P,S,C; one miss side; empty `bg_01`; parallel-person \(d(t)\to 0\) at \(t\ge 12\); miss XY never ~0; FOV rejects same-dir+faster |
+| `python gen_dataset.py --self-test` | Same seed → same plan; one name per family in compounds; 15 s frames; group plan length (2 outcomes × K bg); lighting slots unique per bg; `--pairs --n 2` dry-run prints `P,S,C,P,S,C` |
 | `python remux_spatial_from_json.py --clip DIR` | Rewrites overlay from `preview.mp4` + annotations; not a unit test |
 | `./run.sh --episodes 1 --scenario safe_walk --no-render --output /tmp/btp` | `objects>0` if the street has people; `cleanup: purged` is large |
 | `./run.sh --episodes 1 --scenario jaywalker --no-render` | Some `CRITICAL_THREAT` in `label_histogram` for a walking ego |
@@ -1863,8 +1916,10 @@ run.sh → blender --python main.py -- <flags>
            │
            ├─ get_config() deepcopy
            ├─ pick_scenarios / mixed plan JSON → run_episode
-           └─ groups plan JSON → run_group_plan
-                (one world per bg; collision full; miss copies prefix RGB/heat/JSON)
+           ├─ groups plan JSON → run_group_plan
+           │    (one world per bg; collision full; miss copies prefix RGB/heat/JSON)
+           └─ pairs plan JSON → run_pair_plan
+                (rotate P,S,C; world once per sample; miss = lat only; no prefix cache)
                 ├─ apply_camera_fov, chaos lock, no-trees
                 ├─ prepare_biome → cfg['world'] widths / props
                 ├─ prepare_scenario → gaps / sparse

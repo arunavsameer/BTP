@@ -6,6 +6,7 @@
 # onto a discrete NVIDIA card *before* Blender creates that context.
 #
 #   BTP_GPU=auto|nvidia|amd|egl   (default auto)
+#   BTP_THREADS=N   Blender -t N (0 = AUTO). Not OMP_NUM_THREADS.
 #   egl = headless NVIDIA (DGX / no DISPLAY). nvidia = laptop PRIME offload.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")" && pwd)"
@@ -64,8 +65,9 @@ else
   echo "[gpu] using default GL device (usually the iGPU)"
 fi
 
-THREADS="${BLENDER_THREADS:-${OMP_NUM_THREADS:-}}"
-if [[ -n "$THREADS" ]]; then
+# BTP_THREADS from gen_dataset (or env). Do not use OMP_NUM_THREADS=1 — that caps Blender.
+THREADS="${BTP_THREADS:-${BLENDER_THREADS:-}}"
+if [[ -n "$THREADS" && "$THREADS" != "0" ]]; then
   exec "$BLENDER" --threads "$THREADS" --background --python "$ROOT/main.py" -- "$@"
 fi
 exec "$BLENDER" --background --python "$ROOT/main.py" -- "$@"

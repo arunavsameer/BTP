@@ -18,6 +18,7 @@ import argparse
 import copy
 import json
 import math
+import os
 import random
 import re
 import shutil
@@ -76,10 +77,13 @@ from scenario_compose import (
     SCENARIO_ALIASES,
     all_scenario_names,
     compose_display,
+    is_parallel_person_pair,
+    is_static_shape_pair,
     pick_scenarios,
     scenario_request_from_tokens,
 )
 from outcome_groups import iter_clips, link_or_copy_prefix
+from pair_pack import ensure_pair_empty_dirs, iter_pair_clips
 from world_generator import (
     SUNKEN_CLASSES,
     WIND_LABELS,
@@ -87,6 +91,52 @@ from world_generator import (
     prepare_still_render,
     release_episode,
 )
+
+
+# ---------------------------------------------------------------------------
+# CPU threads (depsgraph / prep; EEVEE shading stays on the GPU)
+# ---------------------------------------------------------------------------
+
+def _thread_count_from_env() -> int | None:
+    """Fixed worker count, or None for Blender AUTO (all logical CPUs). Env unset → LookupError."""
+    for key in ("BTP_THREADS", "BLENDER_THREADS"):
+        raw = os.environ.get(key)
+        if raw is None:
+            continue
+        raw = str(raw).strip()
+        if not raw:
+            continue
+        n = int(raw)
+        return None if n <= 0 else n
+    raise LookupError
+
+
+def resolve_render_threads(cli_threads: int | None) -> int | None:
+    """CLI ``--threads`` wins, then BTP_THREADS / BLENDER_THREADS; default AUTO (None)."""
+    if cli_threads is not None:
+        return None if int(cli_threads) <= 0 else int(cli_threads)
+    try:
+        return _thread_count_from_env()
+    except LookupError:
+        return None
+
+
+def configure_render_threads(n_fixed: int | None) -> tuple[int, str]:
+    """Apply scene.render thread settings once at process start."""
+    scene = bpy.context.scene
+    if n_fixed is None:
+        scene.render.threads_mode = "AUTO"
+    else:
+        scene.render.threads_mode = "FIXED"
+        scene.render.threads = max(1, int(n_fixed))
+    threads = int(scene.render.threads)
+    mode = str(scene.render.threads_mode)
+    logical = os.cpu_count() or threads
+    print(
+        f"[cpu] render_threads={threads} mode={mode}  host_cpus≈{logical}  "
+        f"(per-frame sim/JSON is serial Python; EEVEE is mostly GPU)"
+    )
+    return threads, mode
 
 
 # ---------------------------------------------------------------------------
@@ -275,6 +325,36 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default="",
         help="JSON plan from gen_dataset.py (per-episode scenario list). Overrides --scenario.",
+    )
+    p.add_argument(
+        "--plan-sample-idx",
+        type=int,
+        default=None,
+        metavar="I",
+        help=(
+            "With pairs/groups --plan: render only samples[I] (one Blender shard). "
+            "Set by gen_dataset.py --jobs."
+        ),
+    )
+    p.add_argument(
+        "--plan-episode-idx",
+        type=int,
+        default=None,
+        metavar="I",
+        help=(
+            "With a classic episode --plan: render only episodes[I]. "
+            "Set by gen_dataset.py --jobs."
+        ),
+    )
+    p.add_argument(
+        "--threads",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Blender CPU worker threads (depsgraph, IO). 0 = AUTO (all logical CPUs). "
+            "Overrides BTP_THREADS / BLENDER_THREADS. run.sh also accepts blender -t."
+        ),
     )
     return p.parse_args(argv if argv is not None else _argv_after_double_dash(sys.argv))
 
@@ -1580,6 +1660,23 @@ def _mux_clip_videos(
     return video_ok, video_via, overlay_ok, overlay_via, keep_frames
 
 
+def _clip_deliverables_ok(
+    *,
+    do_render: bool,
+    want_video: bool,
+    want_overlay: bool,
+    video_ok: bool,
+    overlay_ok: bool,
+) -> bool:
+    if not do_render:
+        return True
+    if want_video and not video_ok:
+        return False
+    if want_overlay and not overlay_ok:
+        return False
+    return True
+
+
 def run_group_plan(
     *,
     plan: dict,
@@ -1600,6 +1697,20 @@ def run_group_plan(
     if not clips:
         print("[groups] plan has no clips", file=sys.stderr)
         return 2
+    samples = list(plan.get("samples") or [])
+    if args.plan_sample_idx is not None:
+        si = int(args.plan_sample_idx)
+        if si < 0 or si >= len(samples):
+            print(
+                f"[groups] --plan-sample-idx {si} out of range (samples={len(samples)})",
+                file=sys.stderr,
+            )
+            return 2
+        want_dir = str(samples[si]["dir"])
+        clips = [c for c in clips if str(c["sample_dir"]) == want_dir]
+        if not clips:
+            print(f"[groups] no clips for sample index {si}", file=sys.stderr)
+            return 2
     fps = int(cfg["render"]["fps"])
     n_frames = int(frames_override) if frames_override > 0 else int(cfg["render"]["frames_per_episode"])
     grid_k = max(1, int(threat_k))
@@ -2030,7 +2141,19 @@ def run_group_plan(
                 "y": 1 if outcome == "collision" else 0,
             }
         )
-        n_ok += 1
+        if _clip_deliverables_ok(
+            do_render=do_render,
+            want_video=want_video,
+            want_overlay=want_overlay,
+            video_ok=video_ok,
+            overlay_ok=overlay_ok,
+        ):
+            n_ok += 1
+        else:
+            print(
+                f"  [groups] clip incomplete video={video_ok} overlay={overlay_ok}",
+                file=sys.stderr,
+            )
 
     _close_world()
     for leftover in rgb_dirs_to_drop:
@@ -2073,12 +2196,441 @@ def run_group_plan(
     return 0 if n_ok == len(clips) else 2
 
 
+def run_pair_plan(
+    *,
+    plan: dict,
+    cfg: dict,
+    out_root: Path,
+    args: argparse.Namespace,
+    frames_override: int,
+    media: str,
+    threat_k: int,
+) -> int:
+    """Render the rotating pair pack. No groups prefix concat-copy.
+
+    World+ego are built once per sample. The miss clip only changes actor
+    lateral (parallel_person / static_shape). Crowd files sit at the sample
+    root. ``bg_01`` is mkdir-only.
+    """
+    clips = list(iter_pair_clips(plan))
+    if not clips:
+        print("[pairs] plan has no clips", file=sys.stderr)
+        return 2
+    samples = list(plan.get("samples") or [])
+    if args.plan_sample_idx is not None:
+        si = int(args.plan_sample_idx)
+        if si < 0 or si >= len(samples):
+            print(
+                f"[pairs] --plan-sample-idx {si} out of range (samples={len(samples)})",
+                file=sys.stderr,
+            )
+            return 2
+        want_dir = str(samples[si]["dir"])
+        clips = [c for c in clips if str(c["sample_dir"]) == want_dir]
+        if not clips:
+            print(f"[pairs] no clips for sample index {si}", file=sys.stderr)
+            return 2
+    fps = int(cfg["render"]["fps"])
+    n_frames = int(frames_override) if frames_override > 0 else int(cfg["render"]["frames_per_episode"])
+    grid_k = max(1, int(threat_k))
+    do_render = not bool(args.no_render)
+    want_video = do_render and media in ("video", "both")
+    want_overlay = bool(args.spatial_overlay) and do_render
+    drop_rgb = bool(args.no_rgb)
+    write_annotations = not bool(args.no_annotations)
+    png_compression = int(cfg["render"].get("png_compression", 1))
+
+    n_ok = 0
+    index_rows: list[dict] = []
+    current_key = None
+    gen = None
+    state = None
+    cam_obj = None
+    profile = None
+    scene_cfg = None
+    rgb_dirs_to_drop: list[Path] = []
+
+    def _close_world() -> None:
+        nonlocal gen, state, cam_obj
+        if state is not None:
+            freed = release_episode(state)
+            clear_bound_caches()
+            print(f"  cleanup: purged {freed} datablock(s)")
+        gen = None
+        state = None
+        cam_obj = None
+
+    for clip in clips:
+        key = (clip["family"], clip["sample_id"])
+        sample_dir = out_root / str(clip["sample_dir"])
+        rel = str(clip.get("relpath") or "")
+        ep_dir = sample_dir if (clip.get("files_layout") == "flat" or not rel) else (sample_dir / rel)
+        outcome = str(clip["outcome"])
+        video_name = str(cfg["output"].get("video_name", "preview.mp4"))
+        video_path = ep_dir / video_name
+        overlay_path = ep_dir / "spatial_overlay.mp4"
+        already_done = video_path.is_file() and (
+            (not want_overlay) or overlay_path.is_file()
+        )
+        if already_done:
+            print(
+                f"[pair {clip['family']} {clip['sample_id']:04d}/{clip['scenario']}] "
+                f"{outcome} skip (exists)"
+            )
+            y = None if outcome == "clip" else (1 if outcome == "collision" else 0)
+            index_rows.append(
+                {
+                    "sample_id": clip["sample_id"],
+                    "family": clip["family"],
+                    "scenario": clip["scenario"],
+                    "outcome": outcome,
+                    "bg_id": clip.get("bg_id"),
+                    "path": str(ep_dir.relative_to(out_root)),
+                    "video": video_name,
+                    "y": y,
+                    "resumed": True,
+                }
+            )
+            n_ok += 1
+            continue
+
+        sample_dir.mkdir(parents=True, exist_ok=True)
+        if clip.get("files_layout") != "flat":
+            ensure_pair_empty_dirs(sample_dir, str(clip.get("miss_side") or "miss_left"))
+        ep_dir.mkdir(parents=True, exist_ok=True)
+        print(
+            f"[pair {clip['family']} {clip['sample_id']:04d}/{clip['scenario']}] "
+            f"{outcome}"
+            + (f"/{clip['bg_id']}" if clip.get("bg_id") else "")
+        )
+
+        if current_key != key:
+            _close_world()
+            for leftover in rgb_dirs_to_drop:
+                if leftover.is_dir():
+                    shutil.rmtree(leftover, ignore_errors=True)
+            rgb_dirs_to_drop = []
+            current_key = key
+            scene_cfg = copy.deepcopy(cfg)
+            scene_rng = random.Random(int(clip["scene_seed"]))
+            apply_camera_fov(
+                scene_cfg,
+                hfov_deg=args.hfov,
+                lens_mm=args.lens_mm,
+                rng=scene_rng,
+                lock=bool(args.no_random_fov),
+            )
+            if args.chaos is not None:
+                c = max(0.0, min(1.0, float(args.chaos)))
+                scene_cfg["domain_randomization"]["material_chaos"] = (c, c)
+            if args.no_trees:
+                for tree_key in (
+                    "n_trees", "n_grass_clumps", "n_street_trees",
+                    "n_median_trees", "n_path_trees",
+                ):
+                    scene_cfg["world"][tree_key] = (0, 0)
+            requested_wind = str(args.wind or "auto").strip().lower()
+            if requested_wind in WIND_LABELS:
+                scene_cfg["domain_randomization"]["wind_weights"] = {requested_wind: 1.0}
+            apply_ego_height(scene_cfg, str(getattr(args, "ego_height", "auto")))
+            names = pick_scenarios(
+                random.Random(int(clip["scene_seed"]) + 3), scene_cfg, clip["scenario"],
+            )
+            gen = WorldGenerator(scene_cfg, random.Random(int(clip["scene_seed"])))
+            gen.pair_outcome = "collision"
+            gen.pair_miss_side = str(clip.get("miss_side") or "")
+            gen.prepare_biome(str(args.biome), names=names)
+            gen.prepare_scenario(names)
+            clear_bound_caches()
+            state = gen.build()
+            cam_obj = gen.create_camera()
+            cam_rng = random.Random(int(clip["scene_seed"]) + 17)
+            ego_rng = random.Random(int(clip["scene_seed"]) + 23)
+            requested_mode = str(getattr(args, "ego_mode", "auto") or "auto").strip().lower()
+            if requested_mode in ("", "auto", "random"):
+                requested_mode = "walk"
+            if any(n in CROSS_EGO_SCENARIOS for n in names):
+                requested_mode = "crosswalk"
+            if requested_mode == "seated":
+                requested_mode = "walk"
+            profile = choose_ego_profile(
+                {**scene_cfg, "ego": {**scene_cfg["ego"], "mode_weights": {requested_mode: 1.0}}},
+                ego_rng,
+                episode_seconds=n_frames / float(fps),
+            )
+            rig = CameraRig(
+                cam_obj=cam_obj,
+                spline=state.road,
+                cfg=scene_cfg,
+                rng=cam_rng,
+                walk_speed=0.0 if profile.stationary else state.walk_speed,
+                lateral=state.sidewalk_lateral,
+                profile=profile,
+                lateral_limit=state.corridor.lateral_limit(0.30, True),
+            )
+            handlers = gen._scenario_handlers()
+            missing = [n for n in names if n not in handlers]
+            if missing:
+                print(
+                    f"  [pairs] injector {missing!r} not registered "
+                    f"(sibling hook) — empty street this sample"
+                )
+            else:
+                gen.inject_scenarios(names, rig)
+            gen.place_ego_props(rig)
+            gen.freeze()
+            gen.snapshot_actors()
+            print(
+                f"  biome={gen.biome}  ego={profile.mode}  "
+                f"eye={profile.eye_height:.2f}m  walk={state.walk_speed:.2f}m/s  "
+                f"light={state.environment.get('lighting')}/"
+                f"{state.environment.get('weather')}"
+            )
+
+        assert gen is not None and state is not None and cam_obj is not None and profile is not None
+        assert scene_cfg is not None
+        gen.restore_actors()
+        gait = float(state.sidewalk_lateral)
+        if is_parallel_person_pair(clip["scenario"]):
+            gen.pair_outcome = outcome
+            gen.apply_parallel_person_pair_lateral(outcome, gait)
+        elif is_static_shape_pair(clip["scenario"]):
+            gen.pair_outcome = outcome
+            gen.apply_static_shape_pair_lateral(outcome, gait)
+        cam_rng = random.Random(int(clip["scene_seed"]) + 17)
+        rig = CameraRig(
+            cam_obj=cam_obj,
+            spline=state.road,
+            cfg=scene_cfg,
+            rng=cam_rng,
+            walk_speed=0.0 if profile.stationary else state.walk_speed,
+            lateral=state.sidewalk_lateral,
+            profile=profile,
+            lateral_limit=state.corridor.lateral_limit(0.30, True),
+        )
+
+        scene = bpy.context.scene
+        clip_frames = min(n_frames, max(2, int(rig.max_time() * fps)))
+        dt = 1.0 / float(fps)
+        scene.frame_start = 0
+        scene.frame_end = clip_frames - 1
+        scene.render.fps = fps
+
+        rgb_dir = ep_dir / str(cfg["output"]["rgb_dirname"])
+        ann_dir = ep_dir / str(cfg["output"]["ann_dirname"])
+        spatial_dir = ep_dir / "spatial_annotations"
+        if write_annotations:
+            ann_dir.mkdir(parents=True, exist_ok=True)
+        spatial_dir.mkdir(parents=True, exist_ok=True)
+        if do_render:
+            rgb_dir.mkdir(parents=True, exist_ok=True)
+
+        label_hist: Counter[str] = Counter()
+        object_frames: list[dict] = []
+        spatial_frames: list[dict] = []
+        pose_objects = _collect_pose_objects(cam_obj, state.actors) if do_render else []
+        frame_poses: list = [None] * clip_frames if do_render else []
+        t_sim0 = time.perf_counter()
+        for i in range(clip_frames):
+            t = i * dt
+            cam_state = rig.update(t, dt)
+            gen.update(t, dt)
+            if do_render:
+                bpy.context.view_layer.update()
+                frame_poses[i] = _snapshot_poses(pose_objects)
+            else:
+                bpy.context.view_layer.update()
+            record, threat_grid = build_frame_record(
+                frame_index=i,
+                t=t,
+                cam=cam_state,
+                cam_obj=cam_obj,
+                world=gen,
+                scene=scene,
+                cfg=scene_cfg,
+                do_occlusion=not bool(args.no_occlusion),
+                threat_k=grid_k,
+            )
+            for obj in record["objects"]:
+                label_hist[obj["threat_label"]] += 1
+            object_frames.append(record)
+            spatial_frames.append(frame_spatial_entry(record["frame_id"], threat_grid))
+            if (i + 1) % 30 == 0 or i == 0 or i == clip_frames - 1:
+                print(f"  sim {i:04d}/{clip_frames - 1:04d}  t={t:5.2f}s")
+        t_sim = time.perf_counter() - t_sim0
+        if write_annotations:
+            _write_json(ann_dir / "annotations.json", {"frames": object_frames})
+        _write_json(
+            spatial_dir / "spatial_annotations.json",
+            episode_spatial_payload(grid_k, spatial_frames),
+        )
+
+        t_rnd = 0.0
+        if do_render:
+            t_r0 = time.perf_counter()
+            prepare_still_render(scene, png_compression=png_compression)
+            ok_anim = _render_animation_sequence(
+                scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
+                start_frame=0,
+            )
+            if not ok_anim:
+                print("  [render] animation batch missed files; falling back to stills")
+                _render_stills_fallback(
+                    scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
+                    start_frame=0,
+                )
+            t_rnd = time.perf_counter() - t_r0
+
+        t_heat = 0.0
+        heat_dir = spatial_dir / "_heat"
+        video_path = ep_dir / str(cfg["output"].get("video_name", "preview.mp4"))
+        overlay_path = ep_dir / "spatial_overlay.mp4"
+        t_m0 = time.perf_counter()
+        video_ok, video_via, overlay_ok, overlay_via, keep_fail = _mux_clip_videos(
+            scene=scene,
+            rgb_dir=rgb_dir,
+            n_frames=clip_frames,
+            cfg=cfg,
+            video_path=video_path,
+            overlay_path=overlay_path,
+            spatial_dir=spatial_dir,
+            spatial_frames=spatial_frames,
+            grid_k=grid_k,
+            want_video=want_video,
+            want_overlay=want_overlay,
+            prefix_len=0,
+            prefix_video=None,
+            prefix_overlay=None,
+            write_prefix_video=None,
+            write_prefix_overlay=None,
+            heat_dir=heat_dir if want_overlay else None,
+            write_heat=True,
+            keep_heat=False,
+        )
+        t_mux = time.perf_counter() - t_m0
+        print(
+            f"  timing  sim={t_sim:.2f}s  render={t_rnd:.2f}s  "
+            f"heat={t_heat:.2f}s  mux={t_mux:.2f}s"
+        )
+        keep_frames = (media in ("frames", "both") and do_render) or keep_fail
+        if drop_rgb and want_video and not keep_fail:
+            keep_frames = False
+        if do_render and not keep_frames:
+            rgb_dirs_to_drop.append(rgb_dir)
+
+        y = None if outcome == "clip" else (1 if outcome == "collision" else 0)
+        manifest = {
+            "layout": "pairs",
+            "family": clip["family"],
+            "sample_id": clip["sample_id"],
+            "sample_dir": clip["sample_dir"],
+            "outcome": outcome,
+            "bg_id": clip.get("bg_id"),
+            "scenario": clip["scenario"],
+            "dir": str(ep_dir.relative_to(out_root)),
+            "frames": clip_frames,
+            "fps": fps,
+            "walk_speed": round(0.0 if profile.stationary else state.walk_speed, 4),
+            "sidewalk_lateral": round(state.sidewalk_lateral, 4),
+            "biome": gen.biome,
+            "prefix_cached": False,
+            "pair_kinematics": dict(getattr(gen, "_parallel_person_pair_spec", None) or {})
+            if is_parallel_person_pair(clip["scenario"]) else None,
+            "static_shape_pair": dict(getattr(gen, "_static_shape_pair_spec", None) or {})
+            if is_static_shape_pair(clip["scenario"]) else None,
+            "environment": state.environment,
+            "label_histogram": dict(label_hist),
+            "render": do_render,
+            "media": media if do_render else "annotations",
+            "rgb_dir": str(cfg["output"]["rgb_dirname"]) if keep_frames else None,
+            "video": video_path.name if video_ok else None,
+            "video_encoder": video_via if video_ok else None,
+            "annotations": "annotations/annotations.json" if write_annotations else None,
+            "spatial_annotations_k": grid_k,
+            "spatial_annotations": "spatial_annotations/spatial_annotations.json",
+            "spatial_overlay": overlay_path.name if overlay_ok else None,
+        }
+        _write_json(ep_dir / str(cfg["output"]["manifest_name"]), manifest)
+        index_rows.append(
+            {
+                "sample_id": clip["sample_id"],
+                "family": clip["family"],
+                "scenario": clip["scenario"],
+                "outcome": outcome,
+                "bg_id": clip.get("bg_id"),
+                "path": str(ep_dir.relative_to(out_root)),
+                "video": "preview.mp4" if video_ok else None,
+                "spatial_overlay": "spatial_overlay.mp4" if overlay_ok else None,
+                "y": y,
+            }
+        )
+        if _clip_deliverables_ok(
+            do_render=do_render,
+            want_video=want_video,
+            want_overlay=want_overlay,
+            video_ok=video_ok,
+            overlay_ok=overlay_ok,
+        ):
+            n_ok += 1
+        else:
+            print(
+                f"  [pairs] clip incomplete video={video_ok} overlay={overlay_ok}",
+                file=sys.stderr,
+            )
+
+    _close_world()
+    for leftover in rgb_dirs_to_drop:
+        if leftover.is_dir():
+            shutil.rmtree(leftover, ignore_errors=True)
+
+    for sample in plan.get("samples") or []:
+        sdir = out_root / str(sample["dir"])
+        sdir.mkdir(parents=True, exist_ok=True)
+        if str(sample.get("files_layout") or "") != "flat":
+            ensure_pair_empty_dirs(sdir, str(sample.get("miss_side") or "miss_left"))
+        _write_json(
+            sdir / "pair.json",
+            {
+                "layout": "pairs",
+                "sample_id": sample["id"],
+                "family": sample.get("family"),
+                "scenario": sample["scenario"],
+                "scene_seed": sample["scene_seed"],
+                "outcomes": sample.get("outcomes"),
+                "miss_side": sample.get("miss_side"),
+                "backgrounds": sample.get("backgrounds"),
+                "files_layout": sample.get("files_layout"),
+                "prefix_cache": False,
+            },
+        )
+
+    _write_json(
+        out_root / "pairs_index.json",
+        {
+            "layout": "pairs",
+            "n_ok": n_ok,
+            "n_clips": len(clips),
+            "rotation": plan.get("rotation"),
+            "prefix_cache": False,
+            "train_glob": (
+                "{parallel_person,static_shape}/sample_*/"
+                "{collision,miss_left,miss_right}/bg_00/preview.mp4"
+            ),
+            "crowd_glob": "crowd/sample_*/preview.mp4",
+            "clips": index_rows,
+        },
+    )
+    print(f"[done] pairs wrote {n_ok}/{len(clips)} clip(s) → {out_root}")
+    return 0 if n_ok == len(clips) else 2
+
+
 # ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
 
 def main() -> int:
     args = parse_args()
+    configure_render_threads(resolve_render_threads(getattr(args, "threads", None)))
     cfg = get_config()
     if args.list_scenarios:
         sc = cfg["scenarios"]
@@ -2096,6 +2648,12 @@ def main() -> int:
             print(f"  {name}")
         print("peripheral_critical:")
         for name in sc.get("peripheral_critical") or ():
+            print(f"  {name}")
+        print("pair_pool (sibling --pairs; not in --scenario auto / --groups):")
+        for name in sc.get("pair_pool") or ():
+            print(f"  {name}")
+        print("crowd_pool (sibling --pairs; files at sample root):")
+        for name in sc.get("crowd_pool") or ():
             print(f"  {name}")
         print(f"total={len(all_scenario_names(cfg))}")
         print()
@@ -2152,10 +2710,40 @@ def main() -> int:
                 media=media,
                 threat_k=threat_k,
             )
+        if str(plan_doc.get("layout") or "") == "pairs":
+            out_root = Path(args.output) if args.output else (_ROOT / str(cfg["output"]["root"]))
+            out_root.mkdir(parents=True, exist_ok=True)
+            shard = (
+                f"  shard=sample[{args.plan_sample_idx}]"
+                if args.plan_sample_idx is not None
+                else ""
+            )
+            print(
+                f"[run] pair plan={plan_path}  samples={len(plan_doc.get('samples') or [])}  "
+                f"rotation={plan_doc.get('rotation')}{shard}"
+            )
+            return run_pair_plan(
+                plan=plan_doc,
+                cfg=cfg,
+                out_root=out_root,
+                args=args,
+                frames_override=int(frames_override),
+                media=media,
+                threat_k=threat_k,
+            )
         plan_eps = list(plan_doc.get("episodes") or [])
         if not plan_eps:
             print("--plan has no episodes[]", file=sys.stderr)
             return 2
+        if args.plan_episode_idx is not None:
+            ei = int(args.plan_episode_idx)
+            if ei < 0 or ei >= len(plan_eps):
+                print(
+                    f"--plan-episode-idx {ei} out of range (episodes={len(plan_eps)})",
+                    file=sys.stderr,
+                )
+                return 2
+            plan_eps = [plan_eps[ei]]
         print(f"[run] plan={plan_path}  {len(plan_eps)} episode(s)")
     n_ep = len(plan_eps) if plan_eps is not None else int(args.episodes)
     args.episodes = n_ep

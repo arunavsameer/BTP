@@ -15,6 +15,12 @@ Arch: `sudo pacman -S blender ffmpeg`
 
 Prefer `./run.sh` over raw `blender`. On hybrid AMD+NVIDIA laptops it PRIME-offloads EEVEE onto the NVIDIA GPU when `nvidia-smi` works (`BTP_GPU=auto|nvidia|amd`).
 
+**CPU threads and parallel workers:** EEVEE shading is GPU-bound; Blender still uses CPU workers for the dependency graph during `render` and for scene prep. The per-frame kinematics + annotation loop in `main.py` is intentionally **serial** Python — that phase often shows ~**one core at 100%** per Blender process even when `--threads 16` is set. Raising `--threads` helps depsgraph during `bpy.ops.render` bursts, not the Python sim loop.
+
+- **`--threads N`** on `./run.sh` / `gen_dataset.py` sets Blender `-t` via `BTP_THREADS` (`0` = AUTO). Env: `BTP_THREADS`, `BLENDER_THREADS`. `run.sh` does **not** read `OMP_NUM_THREADS` (many schedulers set it to `1`, which would cap Blender at one core). Startup log: `[cpu] render_threads=…`.
+- **`--jobs J`** on `gen_dataset.py` (env `BTP_JOBS`, default **1**) launches **J concurrent Blender processes**, each on a **different shard**: one sample for `--pairs` / `--groups`, one episode for a classic pack. Collision + miss for the **same** sample stay in one process. When all workers finish, `gen_dataset.py` merges a single `pairs_index.json` / `groups_index.json` from whatever clips exist on disk.
+- Rule of thumb: **`threads × jobs ≈ logical CPU count`** (e.g. `--threads 2 --jobs 8` on 16 cores). On **one GPU**, start with `--jobs 2–4`; more workers contend for VRAM and can make previews unreliable.
+
 Everything after the bare `--` is ours. Without `--`, Blender eats the flags.
 
 ```bash
@@ -102,6 +108,9 @@ Force time of day (QA; not a CLI flag): `BTP_LIGHTING=dusk ./run.sh …`
 | `--lens-mm MM` | | Lock focal length (ignored if `--hfov` is set) |
 | `--no-random-fov` | off | Use config `lens_mm` |
 | `--plan FILE` | | `plan.json` from `gen_dataset.py`. Overrides `--scenario`. |
+| `--threads N` | AUTO | Blender CPU workers (`0` = all logical CPUs). Env: `BTP_THREADS`. |
+| `--plan-sample-idx I` | all | With a pairs/groups `--plan`: render only `samples[I]`. Set by `gen_dataset.py --jobs`. |
+| `--plan-episode-idx I` | all | With a classic episode `--plan`: render only `episodes[I]`. Set by `gen_dataset.py --jobs`. |
 
 `--seed` + `--start-episode` is how you shard a large pack without collisions. A later `./run.sh --episodes 4 --output ./output` appends after whatever is already on disk.
 
@@ -137,7 +146,7 @@ JSON 3-D vectors are **Y-up** `(X right, Y height, Z forward)`. The sim itself i
 
 ## Scenarios
 
-`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **66** named injectors (58 in the auto mix, plus 8 empty-center / side-threat names). **21** of them are `--groups` forkable (`FORKABLE_SCENARIOS`). `--list-scenarios` is the live catalog.
+`--scenario auto` draws **40 % safe / 30 % near-miss / 30 % critical**, then one name from that pool. There are **66** named injectors in the auto + peripheral mix, plus pair-pack names (`parallel_person`, `static_shape`, `crowd` / `crowd_path`) that are **not** in `--scenario auto` and **not** `--groups` forkable. `--list-scenarios` is the live catalog.
 
 | Bucket | Names |
 | --- | --- |
@@ -176,6 +185,7 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `shape` | `shape_near_miss` |
 | `shapes` | `shapes_on_path` |
 | `sphere` / `pyramid` | `shape_head_on` |
+| `shape_pair` / `static_pair` | `static_shape` |
 | `parked` | `parked_car_opposite` |
 | `cut_in` | `car_cut_in` |
 | `weave` | `cyclist_weaving` |
@@ -202,6 +212,9 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `side_cut` | `periph_ped_cut` |
 | `side_runoff` | `periph_car_runoff` |
 | `side_child` | `periph_child_cut` |
+| `crowd` / `crowds` | `crowd` |
+| `crowd_path` | `crowd_path` |
+| `pair_person` / `parallel_pair` | `parallel_person` |
 
 **Every named injector** (what the clip shows). `--groups` is yes only for `FORKABLE_SCENARIOS` in `outcome_groups.py` — moving intercepts plus `cube_on_path` (rolls aside on a miss). `safe_walk` is mixed-pack only. `--list-scenarios` is the live catalog.
 
@@ -271,8 +284,70 @@ Occupancy is reserved once in Frenet `(s, lateral)` at inject time so actors are
 | `periph_car_runoff` | — | no | Same start, then mounts the pavement. |
 | `periph_ped_cut` | — | yes | Empty sidewalk, then a person from an HFOV edge cuts the gait. |
 | `periph_child_cut` | — | yes | Empty sidewalk, then a child dart through the gait. |
+| `parallel_person` | — | no | Pair-pack walker. Same heading and speed in both clips; only lateral changes. Collision on the gait at t≥12 s (CPA 0.1–0.2 m). Miss is a 1.2–2.0 m sideline. Not `--groups`. |
+| `static_shape` | — | no | Pair-pack primitive (cube/sphere/pyramid/…). Collision is on the gait at t≥12 s; miss is the **same** shape+size+heading on a sideline. Not a `--groups` peel. |
+| `crowd` | — | no | Pair-pack street: 2–5 walking people, occupancy-separated (no mesh phase-through). Mix of same-path and off-axis headings. Files sit **directly** in the sample folder. Not `--groups`. |
+| `crowd_path` | — | no | Same injector; rare facade-parallel + varied crossings (no gait leader). |
 
 Peripheral names (`periph_*`) are **not** in `--scenario auto`. Use `--scenario periph_ped_cut` or `gen_dataset.py --theme peripheral`. Ego is forced to `walk`; auto-biome skips park / plaza. `crossing_street` / `group_crossing` / `crossing_head_on` / `crossing_car_side` force ego `crosswalk`. `cube_*` / `shape_*` are generic primitives so the model cannot overfit to cars. Street trees in the **planting strip** (and, on an avenue, a planted grass median) are background; the **trunk** is the obstacle; rustling leaves are not. `--wind calm` almost still; `--wind windy` a real gust.
+
+## Pair pack (`gen_dataset.py --pairs`)
+
+`--pairs` is **opt-in** on `gen_dataset.py` (not a `main.py` flag). Mutually exclusive with `--groups`. `--n` is the count of **each** family. Generation rotates `parallel_person`, `static_shape`, `crowd` so a cancel leaves ~equal counts.
+
+`--bg-variants` is fake: only `bg_00` is rendered; `bg_01` is always an empty directory. One miss side per pair (`miss_left` or `miss_right`, 50/50 from `--seed`). Crowd has **no** collision/miss and **no** `bg_YY` wrap. Default pack name is `pairs15_side_static_crowd`. World+ego are cached per sample; the second clip only changes actor lateral. Pixels differ from t=0 — there is **no** groups prefix concat-copy.
+
+```bash
+./gen_dataset.py --pairs --n 2 --seed 21 --dry-run
+# prints rotation: P,S,C,P,S,C
+./gen_dataset.py --pairs --n 20 --seed 21 --name pairs15_side_static_crowd \
+  --threat-grid 5 --spatial-overlay --media video --no-rgb --ego walk \
+  --threads 2 --jobs 8
+# preview (n=1 → 3 family samples): --threads 2 --jobs 3
+```
+
+```
+datasets/pairs15_side_static_crowd_s21_n20/
+  pack.json
+  plan.json
+  pairs_index.json
+  parallel_person/sample_0000_parallel_person/{collision,miss_*}/bg_00/  # files
+                                                 .../bg_01/            # empty mkdir
+  static_shape/sample_0000_static_shape/{collision,miss_*}/bg_00|bg_01
+  crowd/sample_XXXX_crowd/   # files directly here
+```
+
+**Parallel-person kinematics.** Same heading and \(v_{\mathrm{other}}\) in both clips. Collision: on the gait, hit at t≥12 s, CPA ~0.1–0.2 m. Miss: sideline 1.2–2.0 m matching the folder; never hits. Heading is same-direction or oncoming; speed is slower or faster than ego. Do not speed the ego. Same-dir + faster would be a rear-end from behind the camera (empty road) — that draw is resampled. Injector: `_inject_parallel_person_pair`. After collision, `apply_parallel_person_pair_lateral(miss_side, gait_lat)`.
+
+## Pair pack (`static_shape`)
+
+Sibling `--pairs` rotator (not `--groups`). One miss side per sample. Collision at t≥12 s. World+ego cached; the miss clip only moves the object laterally. `pair_shares_rgb_prefix("static_shape")` is **false** (object is in a different place from t=0).
+
+```
+static_shape/sample_XXXX_static_shape/collision/bg_00/   # files
+                                     collision/bg_01/   # empty mkdir
+                                     miss_left|miss_right/bg_00/  # files
+                                     miss_left|miss_right/bg_01/  # empty mkdir
+```
+
+Injector: `_inject_static_shape_pair`. After the collision render, `WorldGenerator.apply_static_shape_pair_lateral(miss_side, gait_lat)`. Plan math: `static_shape_pair_plan` (lead = v_ego × t_hit, t_hit ~ U(12.2, 14.5), size ≥ 0.55 m).
+
+## Pair pack crowd (`crowd` / `crowd_path`)
+
+`--pairs` family `crowd` (hook: `pairs_family_crowd`). **Not** `--groups`. 15 s / 450 frames @ 30 fps. Do not speed ego.
+
+```
+crowd/sample_XXXX_crowd/
+  preview.mp4
+  spatial_overlay.mp4
+  annotations/
+  spatial_annotations/
+  episode.json
+```
+
+- Files **directly** in the sample folder. No `bg_00` wrap, no `collision/` / `miss_*`, no empty `bg_01`.
+- Injector `_inject_crowd` (mode `mixed` or `path`). Occupancy: Frenet AABB at spawn + hypot(Δs, Δlat) ≳ 0.45 m over 15 s (`crowd_people_plan`).
+- 2–5 people, walking (not statues). Junction / cross / far head-on mix — no +s leader on ego gait ahead of the camera. Heat uses `spatial_threat` agent knobs; mix of near-miss and closer intercept kinematics.
 
 ## World and ego (not injectors)
 
@@ -353,7 +428,7 @@ datasets/pack_YYYYMMDD_HHMMSS_s7_n24/
   …
 ```
 
-`gen_dataset.py` flags that pass through to Blender: `--media`, `--no-rgb`, `--frames`, `--duration`, `--threat-grid`, `--spatial-overlay`, `--biome`, `--ego-mode`, `--ego-height`, `--chaos`, `--wind`, `--no-trees`, `--no-render`, `--no-annotations`. Planner-only: `--theme`, `--groups`, `--bg-variants`, `--group-scenarios`, `--dry-run`.
+`gen_dataset.py` flags that pass through to Blender: `--media`, `--no-rgb`, `--frames`, `--duration`, `--threat-grid`, `--spatial-overlay`, `--biome`, `--ego-mode`, `--ego-height`, `--chaos`, `--wind`, `--no-trees`, `--no-render`, `--no-annotations`, `--threads`. Planner: `--theme`, `--groups`, `--pairs`, `--bg-variants`, `--group-scenarios`, `--dry-run`, `--jobs` (`BTP_JOBS`).
 
 `--theme peripheral` (aliases `side`, `clear_center`) builds only the empty-center / side-threat catalog: ~18 % empty street, ~37 % side-stay (car / parked / opposite ped), ~45 % side-cut (car turns in, person or child cuts through). Mixed packs are unchanged. `--groups` ignores `--theme`.
 
@@ -425,6 +500,7 @@ python spatial_threat.py
 python spatial_overlay.py
 python scenario_compose.py
 python outcome_groups.py
+python pair_pack.py
 python gen_dataset.py --self-test
 ```
 

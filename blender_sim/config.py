@@ -486,6 +486,17 @@ CONFIG: dict[str, Any] = {
             "periph_ped_cut",
             "periph_child_cut",
         ),
+        # Pair pack (``--pairs``). Not in ``--scenario auto`` and not
+        # ``--groups``. Collision vs one miss is a lateral shift from t=0
+        # (parallel_person / static_shape) or a multi-person street (crowd).
+        "pair_pool": (
+            "parallel_person",
+            "static_shape",
+        ),
+        "crowd_pool": (
+            "crowd",
+            "crowd_path",
+        ),
         # Timing assumes a 15 s clip. Walk / vehicle *speeds* stay in the
         # same bands; only spawn τ and meet times move later so the street
         # does not scramble. Danger occupies the gait around 14.3 s so the
@@ -514,6 +525,21 @@ CONFIG: dict[str, Any] = {
         "lamp_on_path_lead_m": 17.5,
         "lamp_near_lead_m": 16.5,
         "static_shape_lead_m": 16.0,
+        # Pair-pack static primitive. Hit at t≥12; lead = v_ego * t_hit.
+        # Size is a visible obstacle, not a pebble.
+        "static_shape_pair_hit_s": (12.2, 14.5),
+        "static_shape_pair_size_m": (0.55, 0.95),
+        "static_shape_pair_miss_clearance_m": 1.85,
+        # Pair-pack parallel walker. Same heading and |v| in both clips;
+        # only lateral changes. Hit t≥12; do not speed the ego.
+        "parallel_person_pair_hit_s": (12.2, 14.5),
+        "parallel_person_pair_cpa_m": (0.10, 0.20),
+        "parallel_person_pair_miss_m": (1.20, 2.00),
+        "parallel_person_pair_v_m_s": (0.55, 2.45),
+        "parallel_person_pair_dv_m_s": (0.22, 0.58),
+        "parallel_person_pair_spawn_m": (3.50, 32.0),
+        "crowd_n_people": (2, 5),
+        "crowd_min_sep_m": 0.50,
         # Time for a walking-speed crosser to occupy the gait. People start
         # on the camera HFOV edge (not the far kerb) and walk at this band;
         # they do not sprint to fill the extra seconds.

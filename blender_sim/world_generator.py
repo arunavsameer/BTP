@@ -20,13 +20,19 @@ from typing import Any, Optional, Sequence
 from scenario_compose import (
     CLEAR_CENTER_BIOMES,
     CLEAR_CENTER_SCENARIOS,
+    CROWD_PACK_SCENARIOS,
     CROSS_EGO_SCENARIOS,
     CROSS_GAP_SCENARIOS,
+    PARALLEL_PERSON_PAIR_SCENARIOS,
     SAME_DIR_FOLLOW_SCENARIOS,
     SPARSE_SCENARIOS,
+    STATIC_SHAPE_MISS_CLEAR_M,
+    STATIC_SHAPE_PAIR_SCENARIOS,
     ComposeSession,
+    FrenetCapsule,
     all_scenario_names,
     compose_slug,
+    crowd_people_plan,
     extents_for,
     is_noop,
     pick_scenario,
@@ -34,6 +40,8 @@ from scenario_compose import (
     resolve_scenario_name,
     same_dir_follow_plan,
     sort_for_inject,
+    static_shape_pair_miss_lat,
+    static_shape_pair_plan,
 )
 
 from camera_kinematics import Perlin1D
@@ -3820,6 +3828,9 @@ def spawn_threat_shape(
     z: Optional[float] = None,
     chaos: float = 0.0,
     lib: Optional[MeshLibrary] = None,
+    rotation_z: Optional[float] = None,
+    color: Optional[tuple[float, float, float]] = None,
+    scale: Optional[tuple[float, float, float]] = None,
 ) -> Actor:
     """Generic approaching primitive — the detector should not overfit to cars.
 
@@ -3837,26 +3848,31 @@ def spawn_threat_shape(
     instance_id = counters.next_id(class_name)
     loc = loc.copy()
     loc.z = float(size) * 0.5 if z is None else float(z)
-    color = rng.choice(
-        (
-            (0.72, 0.22, 0.12),
-            (0.18, 0.42, 0.55),
-            (0.78, 0.62, 0.12),
-            (0.22, 0.22, 0.24),
-            (0.45, 0.18, 0.48),
-            (0.12, 0.55, 0.28),
-            (0.62, 0.40, 0.18),
+    if color is None:
+        color = rng.choice(
+            (
+                (0.72, 0.22, 0.12),
+                (0.18, 0.42, 0.55),
+                (0.78, 0.62, 0.12),
+                (0.22, 0.22, 0.24),
+                (0.45, 0.18, 0.48),
+                (0.12, 0.55, 0.28),
+                (0.62, 0.40, 0.18),
+            )
         )
-    )
-    ax = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
-    ay = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
-    az = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
-    sx = size * max(0.40, ax)
-    sy = size * max(0.40, ay)
-    sz = size * max(0.40, az)
-    if kind == "capsule":
-        sx = sy = size * max(0.40, 0.55 * ax)
-        sz = size * max(0.55, az)
+    if scale is None:
+        ax = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
+        ay = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
+        az = 1.0 + 0.55 * chaos * (rng.random() * 2.0 - 1.0)
+        sx = size * max(0.40, ax)
+        sy = size * max(0.40, ay)
+        sz = size * max(0.40, az)
+        if kind == "capsule":
+            sx = sy = size * max(0.40, 0.55 * ax)
+            sz = size * max(0.55, az)
+    else:
+        sx, sy, sz = (float(scale[0]), float(scale[1]), float(scale[2]))
+    yaw = float(rotation_z) if rotation_z is not None else rng.uniform(0.0, 2.0 * math.pi)
     mat = make_chaos_surface(
         instance_id, color, rng, chaos, base_roughness=rng.uniform(0.22, 0.78),
     )
@@ -3868,7 +3884,7 @@ def spawn_threat_shape(
             collection,
             loc,
             mat=None,
-            rotation_z=rng.uniform(0.0, 2.0 * math.pi),
+            rotation_z=yaw,
             scale=(sx, sy, sz),
             smooth=kind != "cube",
         )
@@ -3878,7 +3894,7 @@ def spawn_threat_shape(
         verts = [(x * sx, y * sy, z_ * sz) for x, y, z_ in verts]
         obj = create_mesh(instance_id, verts, faces, collection, loc, mat)
         obj.rotation_mode = "XYZ"
-        obj.rotation_euler[2] = rng.uniform(0.0, 2.0 * math.pi)
+        obj.rotation_euler[2] = yaw
     _tag(obj, instance_id, class_name)
     return Actor(
         obj=obj,
@@ -4025,6 +4041,11 @@ class WorldGenerator:
         # Populated by freeze(); invalidated whenever an actor is appended.
         self._movers: Optional[list[Actor]] = None
         self._annotatable: Optional[list[Actor]] = None
+        # Pair pack: sibling sets outcome before inject / after world cache.
+        self.pair_outcome = "collision"
+        self.pair_miss_side = ""
+        self._static_shape_pair_spec: Optional[dict] = None
+        self._parallel_person_pair_spec: Optional[dict] = None
 
     # -- biome -------------------------------------------------------------
 
@@ -4138,10 +4159,19 @@ class WorldGenerator:
             self.force_ego_mode = "crosswalk"
         elif any(n == "hasty_look" for n in names):
             self.force_ego_mode = "hasty"
-        elif any(n in CLEAR_CENTER_SCENARIOS or n in SAME_DIR_FOLLOW_SCENARIOS for n in names):
+        elif any(
+            n in CLEAR_CENTER_SCENARIOS
+            or n in SAME_DIR_FOLLOW_SCENARIOS
+            or n in STATIC_SHAPE_PAIR_SCENARIOS
+            or n in CROWD_PACK_SCENARIOS
+            or n in PARALLEL_PERSON_PAIR_SCENARIOS
+            for n in names
+        ):
             # Clear-center: look down the empty sidewalk. Same-dir follow:
             # both must walk +s — a seated ego cannot catch up without
-            # turning the other person around.
+            # turning the other person around. Static-shape pair: ego must
+            # walk into the on-gait primitive (do not speed a seated camera).
+            # Crowd: walking people in FOV; a seated camera would freeze them.
             self.force_ego_mode = "walk"
         else:
             self.force_ego_mode = ""
@@ -4156,10 +4186,16 @@ class WorldGenerator:
             self.cfg["world"]["n_background_vehicles"] = (0, 0)
             self.cfg["world"]["poisson"]["n_ground_static"] = (0, 2)
             self.cfg["world"]["poisson"]["n_head_hazards"] = (0, 0)
-        if any(n in SAME_DIR_FOLLOW_SCENARIOS for n in names):
+        if any(
+            n in SAME_DIR_FOLLOW_SCENARIOS
+            or n in CROWD_PACK_SCENARIOS
+            or n in PARALLEL_PERSON_PAIR_SCENARIOS
+            for n in names
+        ):
             # Extra sidewalk people (often oncoming) steal the frame from
             # the titled walker-ahead. Cars stay; the only pedestrian is
-            # the injected same-direction person.
+            # the injected same-direction person. Crowd scenes keep the
+            # 2–5 occupancy people, not a fused background blob.
             self.cfg["world"]["n_background_pedestrians"] = (0, 0)
         if any(n in CLEAR_CENTER_SCENARIOS for n in names):
             self._prepare_clear_center()
@@ -4727,6 +4763,10 @@ class WorldGenerator:
             ),
             "car_runs_off_road": self._inject_run_off_road,
             "child_darting": self._inject_child_dart,
+            "static_shape": self._inject_static_shape_pair,
+            "crowd": lambda r: self._inject_crowd(r, mode="mixed"),
+            "crowd_path": lambda r: self._inject_crowd(r, mode="path"),
+            "parallel_person": self._inject_parallel_person_pair,
         }
 
     def inject_scenario(self, scenario: str, rig: Any) -> str:
@@ -4794,6 +4834,19 @@ class WorldGenerator:
 
         assert self.state is not None
         name = str(outcome or "collision").strip().lower()
+        has_static_pair = any(
+            str(getattr(a, "behavior", "") or "") == "static_shape_pair"
+            for a in self.state.actors
+        )
+        has_parallel_pair = any(
+            str(getattr(a, "behavior", "") or "") == "parallel_person_pair"
+            for a in self.state.actors
+        )
+        if has_static_pair:
+            # Pair pack: object is at the miss lateral from t=0, not a peel.
+            self.apply_static_shape_pair_lateral(name, float(gait_lat))
+        if has_parallel_pair:
+            self.apply_parallel_person_pair_lateral(name, float(gait_lat))
         if name in ("collision", "hit", "collide"):
             return
         lim = float(self.state.corridor.lateral_limit(0.35, True))
@@ -4803,6 +4856,10 @@ class WorldGenerator:
         lane = self._drive_lane_abs()
         for actor in self.state.actors:
             if not getattr(actor, "is_threat", False):
+                continue
+            if str(getattr(actor, "behavior", "") or "") in (
+                "static_shape_pair", "parallel_person_pair",
+            ):
                 continue
             is_car = actor.class_name in ("vehicle", "bicycle")
             pad = max(
@@ -4832,6 +4889,103 @@ class WorldGenerator:
             if abs(float(actor.speed)) < 0.20:
                 actor.fork_speed = max(0.90, 0.60 * float(self.state.walk_speed) + 0.40)
             actor._fork_applied = False
+
+    def apply_static_shape_pair_lateral(self, outcome: str, gait_lat: float) -> None:
+        """Move the cached pair primitive. Collision = gait; miss = sideline from t=0.
+
+        Same mesh / size / heading. Sibling runner: inject once, render
+        collision, then call this for the miss clip. Do not RGB-prefix-cache.
+        """
+        assert self.state is not None
+        name = str(outcome or "collision").strip().lower()
+        spec = dict(self._static_shape_pair_spec or {})
+        gait = float(spec.get("gait_lat", gait_lat))
+        pad = 0.28
+        lim = float(self.state.corridor.lateral_limit(pad, True))
+        if name in ("collision", "hit", "collide", ""):
+            lat = float(spec.get("collision_lat", gait))
+        else:
+            side = name if ("left" in name or "right" in name) else str(
+                spec.get("miss_side") or self.pair_miss_side or "miss_right"
+            )
+            clear = float(
+                self.cfg["scenarios"].get(
+                    "static_shape_pair_miss_clearance_m", STATIC_SHAPE_MISS_CLEAR_M,
+                )
+            )
+            lat = static_shape_pair_miss_lat(
+                gait, side, clearance_m=clear, corridor_lim=lim,
+            )
+            spec["miss_side"] = "miss_left" if "left" in side else "miss_right"
+            spec["miss_lat"] = float(lat)
+            self._static_shape_pair_spec = spec
+        yaw = spec.get("yaw")
+        for actor in self.state.actors:
+            if str(getattr(actor, "behavior", "") or "") != "static_shape_pair":
+                continue
+            actor.restore_spawn(self.state.corridor)
+            actor.s, actor.lateral = self.state.corridor.confine(
+                float(actor.s), float(lat), actor.corridor_pad, True,
+            )
+            loc = self.state.road.offset_point(
+                actor.s, actor.lateral,
+                actor.origin_z + self.state.corridor.ground_z(actor.lateral),
+            )
+            actor.obj.location = loc
+            if yaw is not None and hasattr(actor.obj, "rotation_euler"):
+                actor.obj.rotation_mode = "XYZ"
+                actor.obj.rotation_euler[2] = float(yaw)
+            actor.fork_t = None
+            actor.fork_lat_target = None
+            actor._fork_applied = False
+            actor.capture_spawn()
+
+    def apply_parallel_person_pair_lateral(self, outcome: str, gait_lat: float) -> None:
+        """Move the cached pair walker. Collision = gait ± CPA; miss = sideline.
+
+        Same clothes, heading, and |v|. Sibling/static injectors are untouched.
+        Do not RGB-prefix-cache: pixels differ from t=0.
+        """
+        from pair_pack import parallel_person_pair_world_lat
+
+        assert self.state is not None
+        spec = dict(self._parallel_person_pair_spec or {})
+        gait = float(spec.get("gait_lat", gait_lat))
+        name = str(outcome or "collision").strip().lower()
+        if name in ("collision", "hit", "collide", ""):
+            dlat = float(spec.get("collision_dlat", 0.12))
+        else:
+            dlat = float(spec.get("miss_dlat", 1.60))
+        lim = float(self.state.corridor.max_abs_lateral) + 1.20
+        lat = parallel_person_pair_world_lat(gait, dlat, corridor_lim=lim)
+        pad = min(0.35, float(self.state.corridor.max_abs_lateral) - abs(lat) - 0.05)
+        for actor in self.state.actors:
+            if str(getattr(actor, "behavior", "") or "") != "parallel_person_pair":
+                continue
+            actor.restore_spawn(self.state.corridor)
+            actor.corridor_pad = float(pad)
+            actor.allow_sidewalk = True
+            actor.wander_amp = 0.0
+            actor.wander_noise = None
+            actor.weave_amp = 0.0
+            actor.s, actor.lateral = self.state.corridor.confine(
+                float(actor.s), float(lat), actor.corridor_pad, True,
+            )
+            loc = self.state.road.offset_point(
+                actor.s, actor.lateral,
+                actor.origin_z + self.state.corridor.ground_z(actor.lateral),
+            )
+            actor.obj.location = loc
+            tan = self.state.road.tangent(actor.s)
+            heading = tan * float(actor.speed)
+            if heading.length < 1e-4:
+                heading = tan if float(actor.speed) >= 0.0 else -tan
+            look_along(actor.obj, heading)
+            actor._heading_yaw = float(actor.obj.rotation_euler[2])
+            actor.fork_t = None
+            actor.fork_lat_target = None
+            actor._fork_applied = False
+            actor.capture_spawn()
 
     # -- internals: scatter / background ----------------------------------
 
@@ -5395,6 +5549,9 @@ class WorldGenerator:
         cube_size: float = 0.45,
         cube_z: Optional[float] = None,
         child: bool = False,
+        color: Optional[tuple[float, float, float]] = None,
+        scale: Optional[tuple[float, float, float]] = None,
+        rotation_z: Optional[float] = None,
     ) -> Actor:
         assert self.state is not None
         col = self.state.collections["actors"]
@@ -5433,7 +5590,7 @@ class WorldGenerator:
         actor = spawn_threat_shape(
             loc, col, self.state.counters, self.rng,
             kind=shape_kind, size=cube_size, z=cube_z, chaos=self.chaos,
-            lib=self.lib,
+            lib=self.lib, rotation_z=rotation_z, color=color, scale=scale,
         )
         actor.allow_sidewalk = True
         return actor
@@ -5980,6 +6137,71 @@ class WorldGenerator:
             pad=0.35,
         )
 
+    def _inject_parallel_person_pair(self, rig: Any) -> None:
+        """Pair-pack walker: same heading and |v| in both clips; only lat changes.
+
+        Collision is on the gait (CPA 0.1–0.2 m) at t≥12 s. Miss is a sideline
+        1.2–2.0 m matching the folder. Ego speed is an input — spawn s and
+        v_other are tuned. Same-dir + faster is FOV-rejected (rear-end from
+        behind a forward camera) and resampled in ``draw_parallel_person_pair_plan``.
+        """
+        from pair_pack import (
+            draw_parallel_person_pair_plan,
+            parallel_person_kinematics,
+            parallel_person_pair_world_lat,
+        )
+
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        v_ego = float(self._ego_speed(rig))
+        spec = self._parallel_person_pair_spec
+        if not spec:
+            side = str(self.pair_miss_side or "").strip()
+            plan = draw_parallel_person_pair_plan(
+                v_ego, miss_side=side or "miss_left", rng=self.rng,
+            )
+            if side:
+                plan = parallel_person_kinematics(
+                    v_ego, plan.heading, plan.speed_rel,
+                    t_hit=plan.t_hit, v_other=plan.v_other,
+                    miss_side=side, cpa_m=plan.cpa_m,
+                    miss_clearance_m=plan.miss_clearance_m,
+                    collision_sign=1.0 if plan.collision_dlat >= 0.0 else -1.0,
+                )
+            spec = plan.as_dict()
+            spec["gait_lat"] = float(L)
+            self._parallel_person_pair_spec = spec
+            self.pair_miss_side = str(plan.miss_side)
+        outcome = str(self.pair_outcome or "collision").strip().lower()
+        if "left" in outcome or "right" in outcome:
+            dlat = float(spec["miss_dlat"])
+        else:
+            dlat = float(spec.get("collision_dlat", 0.12))
+        gait = float(spec.get("gait_lat", L))
+        lim = float(self.state.corridor.max_abs_lateral) + 1.20
+        lat = parallel_person_pair_world_lat(gait, dlat, corridor_lim=lim)
+        pad = min(0.35, float(self.state.corridor.max_abs_lateral) - abs(lat) - 0.05)
+        d0 = float(spec["d0"])
+        s = min(max(s0 + d0, 0.50), self.state.road.length - 4.0)
+        heading_sign = float(spec.get("heading_sign") or (
+            -1.0 if str(spec.get("heading")) == "oncoming" else 1.0
+        ))
+        signed_speed = float(spec["signed_speed"])
+        actor = self._spawn_kind("person", s, lat, heading_sign=heading_sign)
+        actor.wander_amp = 0.0
+        actor.wander_noise = None
+        actor.weave_amp = 0.0
+        self._bind(
+            actor, s, lat,
+            speed=signed_speed,
+            behavior="parallel_person_pair",
+            allow_sidewalk=True,
+            pad=pad,
+        )
+        spec["s"] = float(actor.s)
+        spec["gait_lat"] = gait
+        self._parallel_person_pair_spec = spec
+
     def _inject_same_dir_follow(self, rig: Any, *, mode: str) -> None:
         """Person ahead on the same sidewalk, walking away (+s).
 
@@ -6244,6 +6466,104 @@ class WorldGenerator:
                 allow_sidewalk=True,
                 pad=pad,
             )
+
+    def _inject_static_shape_pair(self, rig: Any) -> None:
+        """One visible primitive: on gait (collision) or sideline (miss).
+
+        Identity (kind, size, heading, colour, scale) is cached on the
+        generator so the miss clip of a pair only changes lateral. Hit at
+        t≥12 s with lead = v_ego * t_hit; ego is not sped up.
+        """
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        pad = self._kind_pad("shape")
+        lim = float(self.state.corridor.lateral_limit(pad, True))
+        spec = self._static_shape_pair_spec
+        if not spec:
+            v = float(self._ego_speed(rig))
+            sc = self.cfg["scenarios"]
+            hit = sc.get("static_shape_pair_hit_s", (12.2, 14.5))
+            t_hit = None
+            if isinstance(hit, (tuple, list)) and len(hit) >= 2:
+                t_hit = self.rng.uniform(float(hit[0]), float(hit[1]))
+            side = str(self.pair_miss_side or "").strip()
+            plan = static_shape_pair_plan(
+                v, L,
+                miss_side=side or None,
+                rng=self.rng,
+                corridor_lim=lim,
+                t_hit=t_hit,
+            )
+            sz = float(plan.size)
+            spec = {
+                "kind": plan.kind,
+                "size": sz,
+                "t_hit": float(plan.t_hit),
+                "lead_m": float(plan.lead_m),
+                "gait_lat": float(L),
+                "collision_lat": float(L),
+                "miss_side": plan.miss_side,
+                "miss_lat": float(plan.miss_lat),
+                "color": self.rng.choice(
+                    (
+                        (0.72, 0.22, 0.12),
+                        (0.18, 0.42, 0.55),
+                        (0.78, 0.62, 0.12),
+                        (0.22, 0.22, 0.24),
+                        (0.45, 0.18, 0.48),
+                        (0.12, 0.55, 0.28),
+                        (0.62, 0.40, 0.18),
+                    )
+                ),
+                "scale": (sz, sz, sz),
+                "yaw": self.rng.uniform(0.0, 2.0 * math.pi),
+            }
+            self._static_shape_pair_spec = spec
+            self.pair_miss_side = str(plan.miss_side)
+        outcome = str(self.pair_outcome or "collision").strip().lower()
+        if "left" in outcome or "right" in outcome:
+            lat = static_shape_pair_miss_lat(
+                float(spec["gait_lat"]), outcome,
+                clearance_m=float(
+                    self.cfg["scenarios"].get(
+                        "static_shape_pair_miss_clearance_m", STATIC_SHAPE_MISS_CLEAR_M,
+                    )
+                ),
+                corridor_lim=lim,
+            )
+        elif outcome in ("collision", "hit", "collide", ""):
+            lat = float(spec["collision_lat"])
+        else:
+            lat = float(spec.get("miss_lat", spec["collision_lat"]))
+        lead = float(spec["lead_m"])
+        s = min(s0 + lead, self.state.road.length - 4.0)
+        if self._compose is not None:
+            s = s + self._compose.take_group_offset("static")
+        kind = str(spec["kind"])
+        size = float(spec["size"])
+        actor = self._spawn_kind(
+            kind, s, lat, heading_sign=1.0,
+            cube_size=size,
+            color=spec.get("color"),
+            scale=spec.get("scale"),
+            rotation_z=spec.get("yaw"),
+        )
+        actor.category = "static"
+        self._bind(
+            actor, s, lat,
+            speed=0.0,
+            behavior="static_shape_pair",
+            allow_sidewalk=True,
+            pad=max(pad, size * 0.5 + 0.05),
+        )
+        yaw = spec.get("yaw")
+        if yaw is not None and hasattr(actor.obj, "rotation_euler"):
+            actor.obj.rotation_mode = "XYZ"
+            actor.obj.rotation_euler[2] = float(yaw)
+            actor.capture_spawn()
+        spec["s"] = float(actor.s)
+        spec["collision_lat"] = float(spec.get("collision_lat", L))
+        self._static_shape_pair_spec = spec
 
     def _inject_pothole(self, rig: Any, lead: float, dlat: float) -> None:
         assert self.state is not None
@@ -6582,3 +6902,72 @@ class WorldGenerator:
             rig, kind="cube", obj_speed=speed, tau=tau, dlat=cr,
             cube_size=0.28, cube_z=z, pad=0.20,
         )
+
+    def _inject_crowd(self, rig: Any, *, mode: str = "mixed") -> None:
+        """2–5 walking people, occupancy-separated. Not a smash folder.
+
+        No +s leader on ego gait near the camera — junction / cross / far
+        head-on variety from ``crowd_people_plan``. Occupancy is solved once
+        (Frenet AABB + hypot over 15 s). ``_bind`` runs with compose disabled.
+        Crossers and junction entries use ``behavior='through'`` (walking).
+        """
+        assert self.state is not None
+        s0, L = self._cam_sl(rig, 0.0)
+        v_ego = float(self._ego_speed(rig))
+        sc = self.cfg["scenarios"]
+        n_lo, n_hi = sc.get("crowd_n_people", (2, 5))
+        n = self.rng.randint(int(n_lo), int(n_hi))
+        min_sep = float(sc.get("crowd_min_sep_m", 0.50))
+        lim = float(self.state.corridor.lateral_limit(0.35, True))
+        frames = int(self.cfg["render"].get("frames_per_episode", 450) or 450)
+        fps = float(self.cfg["render"].get("fps", 30) or 30)
+        duration = float(frames) / max(fps, 1.0)
+        plan = crowd_people_plan(
+            v_ego, L,
+            n=n,
+            mode=mode,
+            rng=self.rng,
+            s0=float(s0),
+            corridor_lim=lim,
+            duration_s=duration,
+            min_sep_m=min_sep,
+        )
+        compose = self._compose
+        self._compose = None
+        spawned: list[Actor] = []
+        try:
+            for spec in plan.people:
+                actor = self._spawn_kind(
+                    "person", float(spec.s), float(spec.lat),
+                    heading_sign=float(spec.heading_sign),
+                )
+                behavior = "through" if spec.lat_target is not None else str(spec.role)
+                self._bind(
+                    actor, float(spec.s), float(spec.lat),
+                    speed=float(spec.ds),
+                    lat_speed=float(spec.lat_speed),
+                    lat_target=spec.lat_target,
+                    behavior=behavior,
+                    allow_sidewalk=True,
+                    pad=0.35,
+                )
+                spawned.append(actor)
+        finally:
+            self._compose = compose
+        if compose is None:
+            return
+        for actor in spawned:
+            compose.capsules.append(
+                FrenetCapsule(
+                    s=float(actor.s),
+                    lat=float(actor.lateral),
+                    half_s=0.55,
+                    half_lat=0.38,
+                    ds=float(actor.speed),
+                    lat_speed=abs(float(actor.lat_speed)),
+                    lat_target=actor.lat_target,
+                    class_name="person",
+                    behavior=str(actor.behavior or "crowd"),
+                    tag="crowd",
+                )
+            )

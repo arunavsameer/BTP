@@ -1,0 +1,2088 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Collision anticipation — two teachers and one student</title>
+<script>
+(function () {
+  var key = "architecture-explainer-theme";
+  var theme = null;
+  try { theme = localStorage.getItem(key); } catch (e) {}
+  if (theme !== "dark" && theme !== "light") {
+    theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  document.documentElement.classList.toggle("dark", theme === "dark");
+})();
+</script>
+<style>
+  :root {
+    --bg: #f4f1ea;
+    --paper: #fffcf8;
+    --ink: #1d1a16;
+    --muted: #5e574e;
+    --line: #e3dacd;
+    --line-strong: #d3c7b6;
+    --code-bg: #f3eee6;
+    --code-ink: #2c261f;
+    --four: #1e4f6e;
+    --four-soft: #e7f0f5;
+    --one: #8a4b30;
+    --one-soft: #f8efe8;
+    --stu: #1d6848;
+    --stu-soft: #e7f3ec;
+    --note: #f8f1dc;
+    --note-line: #e4d3a4;
+    --sg: #8a5a12;
+    --link: #1d4e7a;
+    --shadow: 0 1px 0 rgba(60, 40, 20, 0.04);
+    --chip: #fff;
+    --wash: #faf7f2;
+    --arrow: #8d8376;
+    --accent: #3d5c54;
+    --on-accent: #fff;
+    --nav-accent: #3d5c54;
+    --lede: #2a261f;
+    --nav-hover: rgba(255, 252, 248, 0.8);
+    --nav-sticky: rgba(244, 241, 234, 0.96);
+    --pic-bar: #1c1a17;
+    --pic-mid: #d7c4a4;
+    --pic-edge: #c4b49a;
+    --svg-cell: #fff;
+    --svg-cell-far: #d7e6f0;
+    --svg-cell-near: #c5d9e6;
+    --lb-on-dark: #f4efe6;
+    --lb-on-pic: #2a2118;
+    --lb-on-pic-sub: #5c4a32;
+  }
+
+  html.dark {
+    color-scheme: dark;
+    --bg: #1b1a18;
+    --paper: #252320;
+    --ink: #ece8e1;
+    --muted: #b4ada3;
+    --line: #3c3934;
+    --line-strong: #4e4942;
+    --code-bg: #322f2b;
+    --code-ink: #e8e0d6;
+    --four: #8bb8d0;
+    --four-soft: #243542;
+    --one: #d4a07c;
+    --one-soft: #3a2d25;
+    --stu: #86c4a4;
+    --stu-soft: #243830;
+    --note: #342f22;
+    --note-line: #5a5138;
+    --sg: #d0a45c;
+    --link: #8fb4d2;
+    --shadow: 0 1px 0 rgba(0, 0, 0, 0.28);
+    --chip: #2c2a27;
+    --wash: #2c2a26;
+    --arrow: #a89f93;
+    --accent: #3d5c54;
+    --on-accent: #fff;
+    --nav-accent: #8fb3aa;
+    --lede: #ece8e1;
+    --nav-hover: rgba(255, 252, 248, 0.06);
+    --nav-sticky: rgba(27, 26, 24, 0.96);
+    --pic-bar: #121110;
+    --pic-mid: #c4b08c;
+    --pic-edge: #6e6250;
+    --svg-cell: #2c2a27;
+    --svg-cell-far: #2a3c48;
+    --svg-cell-near: #314655;
+    --lb-on-dark: #f4efe6;
+    --lb-on-pic: #2a2118;
+    --lb-on-pic-sub: #5c4a32;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; color-scheme: light; }
+  html.dark { color-scheme: dark; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    font-size: 17px;
+    line-height: 1.55;
+  }
+
+  a { color: var(--link); }
+  a:hover { text-decoration-thickness: 2px; }
+
+  code, .mono {
+    font-family: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 0.86em;
+  }
+
+  code {
+    background: var(--code-bg);
+    padding: 0.08em 0.35em;
+    border-radius: 4px;
+    color: var(--code-ink);
+    overflow-wrap: anywhere;
+  }
+
+  code.shape {
+    display: block;
+    margin-top: 3px;
+    padding: 0;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.78rem;
+    line-height: 1.35;
+  }
+
+  .layout {
+    display: grid;
+    grid-template-columns: 196px minmax(0, 880px);
+    gap: 36px;
+    justify-content: center;
+    padding: 28px 22px 88px;
+  }
+
+  nav {
+    position: sticky;
+    top: 16px;
+    align-self: start;
+    padding-top: 8px;
+  }
+
+  nav p {
+    margin: 0 0 8px;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  nav ol { list-style: none; margin: 0; padding: 0; }
+
+  nav a {
+    display: block;
+    text-decoration: none;
+    color: var(--ink);
+    padding: 7px 10px;
+    border-radius: 8px;
+    border-left: 3px solid transparent;
+    line-height: 1.35;
+    font-size: 0.95rem;
+  }
+
+  nav a:hover { background: var(--nav-hover); }
+
+  nav a[aria-current="true"] {
+    background: var(--paper);
+    border-left-color: var(--nav-accent);
+    font-weight: 650;
+  }
+
+  .theme-switch { margin: 0 0 18px; }
+  .theme-btns { display: flex; gap: 6px; }
+  .theme-btns button {
+    appearance: none;
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+    color: var(--ink);
+    background: var(--chip);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 6px 10px;
+    flex: 1 1 0;
+  }
+  .theme-btns button:hover { background: var(--nav-hover); }
+  .theme-btns button[aria-pressed="true"] {
+    background: var(--paper);
+    border-color: var(--nav-accent);
+    font-weight: 650;
+  }
+
+  main { min-width: 0; max-width: 880px; }
+
+  h1 {
+    font-size: 2rem;
+    line-height: 1.2;
+    font-weight: 680;
+    letter-spacing: -0.02em;
+    margin: 0 0 12px;
+  }
+
+  h2 {
+    font-size: 1.45rem;
+    line-height: 1.25;
+    margin: 2.4rem 0 0.7rem;
+    letter-spacing: -0.015em;
+    scroll-margin-top: 18px;
+  }
+
+  h3 {
+    font-size: 1.12rem;
+    line-height: 1.3;
+    margin: 1.6rem 0 0.45rem;
+    scroll-margin-top: 18px;
+  }
+
+  h4 { font-size: 1rem; margin: 0; line-height: 1.35; }
+
+  p { margin: 0.65rem 0; }
+
+  .lede { font-size: 1.08rem; color: var(--lede); margin-top: 0; }
+  .kicker { margin: 0 0 8px; color: var(--muted); font-size: 0.92rem; }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 12px;
+    margin: 18px 0 8px;
+  }
+
+  .card, .loss, figure, .eq-stack {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    box-shadow: var(--shadow);
+  }
+
+  .card { padding: 12px 12px 10px; }
+  .card.four, .loss.four, .infer article.four { border-top: 4px solid var(--four); }
+  .card.one, .loss.one, .infer article.one { border-top: 4px solid var(--one); }
+  .card.stu, .loss.stu, .infer article.stu { border-top: 4px solid var(--stu); }
+  .card h3 { margin: 0 0 4px; font-size: 1rem; }
+  .card p { margin: 0.35rem 0; font-size: 0.95rem; }
+
+  .tag, .k {
+    display: block;
+    font-size: 0.72rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+
+  .note, .callout, .sg {
+    background: var(--note);
+    border: 1px solid var(--note-line);
+    border-radius: 10px;
+    padding: 12px 14px;
+    margin: 14px 0;
+  }
+
+  .sg { border-style: dashed; border-color: var(--sg); }
+  .note strong, .callout strong, .sg strong { font-weight: 680; }
+  .src { color: var(--muted); font-size: 0.88rem; overflow-wrap: anywhere; }
+
+  figure { margin: 16px 0 18px; padding: 14px; }
+  figcaption { color: var(--muted); font-size: 0.9rem; margin-top: 10px; line-height: 1.45; }
+  svg { display: block; max-width: 100%; height: auto; }
+
+  .strip, .groups, .shrink, .exrow, .timeline {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+
+  .strip li {
+    flex: 1 1 92px;
+    max-width: 120px;
+    text-align: center;
+  }
+
+  .pic {
+    display: block;
+    height: 42px;
+    border-radius: 3px;
+    background: linear-gradient(var(--pic-bar) 0 22%, var(--pic-mid) 22% 78%, var(--pic-bar) 78% 100%);
+    border: 1px solid var(--pic-edge);
+  }
+
+  .strip li.now .pic { outline: 2px solid var(--ink); outline-offset: 1px; }
+  .strip .t, .strip .i { display: block; line-height: 1.2; }
+  .strip .t { margin-top: 3px; font-size: 0.68rem; }
+  .strip .i { font-size: 0.62rem; color: var(--muted); }
+
+  .groups li, .shrink li, .exrow li, .timeline li {
+    background: var(--chip);
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 6px 8px;
+    font-size: 0.82rem;
+    line-height: 1.35;
+  }
+
+  .groups li { flex: 1 1 78px; text-align: center; }
+  .groups li strong, .shrink li strong, .exrow strong { display: block; }
+  .shrink li { flex: 1 1 148px; border-top: 3px solid var(--one); }
+  .exrow li { flex: 1 1 150px; border-top: 3px solid var(--four); }
+  .exrow b { display: block; font-size: 1.25rem; letter-spacing: -0.02em; }
+  .timeline li { flex: 1 1 140px; }
+  .timeline li.past { flex: 1.4 1 200px; border-top: 3px solid var(--ink); }
+  .timeline li.lab { border-top: 3px solid var(--four); }
+
+  .pics, .with-side, .duo, .branches, .infer {
+    display: grid;
+    gap: 12px;
+    align-items: start;
+  }
+
+  .pics { grid-template-columns: minmax(0, 240px) minmax(0, 1fr); }
+  .with-side { grid-template-columns: minmax(0, 1fr) minmax(180px, 230px); }
+  .duo, .infer { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .infer { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .branches { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  .pic-card h3, .pic-card h4 { margin: 0 0 6px; font-size: 0.95rem; }
+  .pic-card p { margin: 6px 0 0; font-size: 0.9rem; }
+
+  .spine, .vflow { display: flex; gap: 6px; }
+  .spine { flex-wrap: wrap; align-items: stretch; }
+  .vflow { flex-direction: column; align-items: stretch; }
+
+  .node, .branch, .side-card, .ghost, .infer article {
+    background: var(--chip);
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    padding: 8px 10px;
+    min-width: 0;
+  }
+
+  .spine .node { flex: 1 1 132px; }
+  .node.four, .branch.four { border-top: 3px solid var(--four); }
+  .node.one, .branch.one { border-top: 3px solid var(--one); }
+  .node.stu, .branch.stu { border-top: 3px solid var(--stu); }
+  .infer article.four { border-top: 4px solid var(--four); }
+  .infer article.one { border-top: 4px solid var(--one); }
+  .infer article.stu { border-top: 4px solid var(--stu); }
+  .node b, .ghost b, .side-card b { display: block; font-size: 0.95rem; line-height: 1.3; }
+  .hint { display: block; margin-top: 3px; color: var(--muted); font-size: 0.8rem; line-height: 1.35; }
+
+  .arrow {
+    align-self: center;
+    color: var(--arrow);
+    flex: 0 0 auto;
+    line-height: 0;
+  }
+
+  .down {
+    width: 0;
+    height: 0;
+    margin: 5px auto;
+    border-left: 6px solid transparent;
+    border-right: 6px solid transparent;
+    border-top: 8px solid var(--arrow);
+  }
+
+  .branch h4 { margin-bottom: 6px; }
+  .branch .node { margin-top: 0; box-shadow: none; }
+
+  .side-card, .ghost {
+    border-style: dashed;
+    margin-top: 8px;
+  }
+
+  .side-card { border-color: var(--one); background: var(--one-soft); }
+  .ghost { border-color: var(--stu); background: var(--stu-soft); }
+  .ghost.four { border-color: var(--four); background: var(--four-soft); }
+
+  .bridges { display: grid; gap: 8px; margin-top: 10px; }
+  .bridge {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    border: 1.5px dashed var(--stu);
+    background: var(--stu-soft);
+    border-radius: 10px;
+    padding: 8px 10px;
+  }
+  .bridge .end { flex: 1 1 180px; min-width: 0; }
+  .bridge b { display: block; }
+
+  .infer article { padding: 10px 12px; }
+  .infer h3, .infer h4 { margin: 0 0 6px; font-size: 1rem; }
+  .infer ol, .labeled { margin: 0.4rem 0 0; padding-left: 1.15rem; }
+  .infer li, .labeled li { margin: 0.28rem 0; }
+
+  ol.steps {
+    list-style: none;
+    margin: 10px 0 14px;
+    padding: 0;
+    counter-reset: step;
+  }
+
+  ol.steps > li {
+    counter-increment: step;
+    position: relative;
+    margin: 0 0 8px;
+    padding: 8px 12px 8px 46px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+  }
+
+  ol.steps > li::before {
+    content: counter(step);
+    position: absolute;
+    left: 10px;
+    top: 10px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-size: 0.78rem;
+    font-weight: 700;
+    line-height: 24px;
+    text-align: center;
+  }
+
+  ol.steps.four > li::before { background: var(--four); }
+  ol.steps.one > li::before { background: var(--one); }
+  ol.steps.stu > li::before { background: var(--stu); }
+  ol.steps .lbl { display: block; font-weight: 680; }
+
+  .eq-stack { margin: 12px 0; overflow: hidden; }
+  .eq-total {
+    margin: 0;
+    padding: 10px 12px;
+    font-weight: 700;
+    background: var(--wash);
+  }
+  .eq-row {
+    display: grid;
+    grid-template-columns: 1.5rem minmax(0, 1fr);
+    gap: 4px 8px;
+    padding: 8px 12px;
+    border-top: 1px solid var(--line);
+  }
+  .op { font-weight: 700; color: var(--muted); }
+  .term { font-weight: 680; }
+  .wnum { font-variant-numeric: tabular-nums; }
+  .eq-sub, .mean { display: block; margin-top: 2px; }
+  .eq-sub { color: var(--muted); font-size: 0.9rem; }
+  .mean { font-size: 0.95rem; }
+
+  .loss { padding: 12px 14px 10px; margin: 10px 0; }
+  .loss.four { border-left: 4px solid var(--four); }
+  .loss.one { border-left: 4px solid var(--one); }
+  .loss.stu { border-left: 4px solid var(--stu); }
+  .loss-h {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 10px;
+  }
+  .badge {
+    flex: 0 0 auto;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.82rem;
+    border-radius: 999px;
+    padding: 2px 10px;
+    background: var(--code-bg);
+  }
+  .loss.four .badge { background: var(--four-soft); color: var(--four); }
+  .loss.one .badge { background: var(--one-soft); color: var(--one); }
+  .loss.stu .badge { background: var(--stu-soft); color: var(--stu); }
+  .flines {
+    list-style: none;
+    margin: 8px 0;
+    padding: 8px 10px;
+    background: var(--code-bg);
+    border-radius: 8px;
+  }
+  .flines li { margin: 0.28rem 0; font-size: 0.94rem; line-height: 1.45; }
+  .does {
+    margin: 8px 0 0;
+    padding-top: 8px;
+    border-top: 1px solid var(--line);
+    font-size: 0.95rem;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.92rem;
+    line-height: 1.45;
+    background: var(--paper);
+  }
+  .table-wrap {
+    overflow-x: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    margin: 12px 0 18px;
+    background: var(--paper);
+  }
+  caption {
+    text-align: left;
+    caption-side: bottom;
+    padding: 8px 10px 10px;
+    color: var(--muted);
+    font-size: 0.86rem;
+  }
+  th, td {
+    text-align: left;
+    vertical-align: top;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--line);
+  }
+  th { background: var(--wash); font-weight: 650; }
+  tbody tr:last-child td, tbody tr:last-child th { border-bottom: 0; }
+
+  .spec {
+    display: grid;
+    grid-template-columns: 180px minmax(0, 1fr);
+    gap: 4px 14px;
+    margin: 10px 0 14px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 10px 12px;
+  }
+  .spec dt { margin: 0; color: var(--muted); font-size: 0.9rem; }
+  .spec dd { margin: 0; }
+
+  ul, ol { margin: 0.45rem 0 0.7rem; padding-left: 1.25rem; }
+  li { margin: 0.25rem 0; }
+  .jump { margin: 8px 0 0; font-size: 0.95rem; }
+  .jump a { margin-right: 12px; }
+
+  footer {
+    margin-top: 2.4rem;
+    padding-top: 12px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.9rem;
+  }
+
+  @media (max-width: 980px) {
+    .layout { grid-template-columns: minmax(0, 1fr); gap: 8px; padding: 12px 14px 64px; }
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+      min-width: 0;
+      background: var(--nav-sticky);
+      padding: 8px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    nav ol { display: flex; gap: 4px; min-width: 0; overflow-x: auto; }
+    nav a { white-space: nowrap; border-left: 0; border-bottom: 3px solid transparent; }
+    nav a[aria-current="true"] { border-left-color: transparent; border-bottom-color: var(--nav-accent); }
+    .theme-switch {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 8px;
+    }
+    .theme-switch p { margin: 0; }
+    .theme-btns { flex: 0 0 auto; }
+    .cards, .spec { grid-template-columns: 1fr; }
+    h1 { font-size: 1.65rem; }
+  }
+
+  @media (max-width: 800px) {
+    .spine { flex-direction: column; align-items: stretch; }
+    .spine .node { flex: 0 0 auto; }
+    .spine .arrow { transform: rotate(90deg); align-self: center; }
+    .pics, .with-side, .duo, .branches, .infer { grid-template-columns: 1fr; }
+    .bridge .arrow { transform: rotate(90deg); }
+  }
+
+  .lb-frame { fill: var(--pic-bar); }
+  html.dark .lb-frame { stroke: var(--line-strong); }
+  .lb-picture { fill: var(--pic-mid); }
+  .lb-picture-edge { fill: none; stroke: var(--one); }
+  .lb-on-dark { fill: var(--lb-on-dark); }
+  .lb-on-pic { fill: var(--lb-on-pic); }
+  .lb-on-pic-sub { fill: var(--lb-on-pic-sub); }
+  .svg-grid { stroke: var(--four); }
+  .svg-cell { fill: var(--svg-cell); }
+  .svg-cell-far { fill: var(--svg-cell-far); }
+  .svg-cell-near { fill: var(--svg-cell-near); }
+  .svg-accent { fill: var(--four); }
+  .svg-muted { fill: var(--muted); }
+  .stu-arrow { color: var(--stu); }
+
+  @media print {
+    nav { display: none; }
+    .layout { display: block; padding: 0; }
+    main { max-width: none; }
+    html, html.dark { color-scheme: light; }
+    body { background: white; color: #1d1a16; }
+    a { text-decoration: none; color: inherit; }
+  }
+</style>
+</head>
+<body>
+<div class="layout">
+  <nav aria-label="Sections">
+    <div class="theme-switch" role="group" aria-label="Color theme">
+      <p>Theme</p>
+      <div class="theme-btns">
+        <button type="button" data-theme-set="light" aria-pressed="true">Light</button>
+        <button type="button" data-theme-set="dark" aria-pressed="false">Dark</button>
+      </div>
+    </div>
+    <p>On this page</p>
+    <ol>
+      <li><a href="#overview">Overview</a></li>
+      <li><a href="#shared">Shared input</a></li>
+      <li><a href="#four-map">Four-map teacher</a></li>
+      <li><a href="#one-second">One-second teacher</a></li>
+      <li><a href="#student">Student</a></li>
+      <li><a href="#losses">Losses</a></li>
+      <li><a href="#differ">How they differ</a></li>
+    </ol>
+  </nav>
+
+  <main>
+    <p class="kicker">Wearable collision anticipation</p>
+    <h1>Two teachers, and the student that copies one of them</h1>
+    <p class="lede">All three networks look at the same kind of clip: 16 RGB frames covering the last 3 seconds, and they score danger on a 5×5 grid. They are three systems. The root notes describe a teacher that emits four maps. A separate note describes the one-second parent that the student copies. The student is a small network with no giant video encoder.</p>
+
+    <div class="cards">
+      <article class="card four">
+        <div class="tag">Root notes</div>
+        <h3>Four-map teacher</h3>
+        <p>CollisionTeacher3. Maps for now, 1 s, 1.5 s, and 2 s, read from <code>Z_t</code> <code>[B, 32, 5, 5]</code>.</p>
+        <p>Warning: peak ≥ 0.70 STOP, ≥ 0.42 CAUTION, else SAFE.</p>
+      </article>
+      <article class="card one">
+        <div class="tag">Parent the student copies</div>
+        <h3>One-second teacher</h3>
+        <p>Pair-CF parent. One map, 1 s ahead, read from <code>F_dec</code> <code>[B, 128, 16, 16]</code>.</p>
+        <p>Warning: peak &lt; 0.25 SAFE, &lt; 0.60 THREAT, else STOP.</p>
+      </article>
+      <article class="card stu">
+        <div class="tag">Small RGB model</div>
+        <h3>Student M1</h3>
+        <p>980,171 parameters. Same 1 s map, through a copy of the parent decoder. Official file is epoch 10.</p>
+        <p>Same warning cuts as the parent: 0.25 and 0.60.</p>
+      </article>
+    </div>
+
+    <section id="overview">
+      <h2>Overview</h2>
+      <p>The job is anticipation for a wearable camera. At an anchor time <em>t</em>, the network may see only the past, including the frame at <em>t</em>. It fills a 5×5 danger map whose cells run from 0 (safe) to 1 (maximum threat). It does not output a collision-versus-miss class, and it does not take a background id as an input switch.</p>
+      <p>CollisionTeacher3 is the model in <span class="src">README.md</span>, <span class="src">MODEL_DATAFLOW.txt</span>, <span class="src">FILE_GUIDE.txt</span>, and <span class="src">PREPROCESSING_PIPELINE.txt</span>. It keeps a frozen V-JEPA 2 Giant encoder, trains a small adapter and four heatmap heads, and can later add LoRA on the last six Giant blocks.</p>
+      <p>The Pair-CF parent is the model in <span class="src">docs/parent_pair_cf_model.md</span>. It also uses a frozen Giant, and it trains an adapter plus one heatmap decoder. The treatment adds a counterfactual shrink on Giant tokens. That file is the parent the student is allowed to copy. Checkpoint <span class="src">model_trial_3/checkpoints/pair_cf_treatment_s1337/teacher_phase_a_best.pt</span>, seed 1337, decoder hash <code>77f78c8714667617</code>.</p>
+      <p>Student M1 is the model in <span class="src">docs/student_m1_model.md</span>. It learns a small (2+1)D encoder so that its feature map sits near the parent’s <code>F_dec</code>, then runs the copied decoder. Seed 1001. Official checkpoint <span class="src">model_trial_3_temp/overnight6/m1_stop_floor/checkpoint_epoch_10.pt</span>.</p>
+
+      <div class="callout">
+        <strong>Where the notes use different words.</strong>
+        <ul>
+          <li><span class="src">README.md</span>, <span class="src">MODEL_DATAFLOW.txt</span>, <span class="src">FILE_GUIDE.txt</span>, and <span class="src">PREPROCESSING_PIPELINE.txt</span> say heatmap row 0 is far / top and row 4 is near / feet. <span class="src">docs/parent_pair_cf_model.md</span> says “Rows are depth (near→far)” and does not assign row 0 or row 4. Columns agree in every file: left is columns 0–1, center is column 2, right is columns 3–4.</li>
+          <li><span class="src">README.md</span>’s change list says a pre-fork history with a split future is masked. The pairing section of that same file, and <span class="src">FILE_GUIDE.txt</span>, say the live default is <code>mean_target</code>: both clips train on the cell-wise average. <span class="src">FILE_GUIDE.txt</span> says to trust that guide when it and the README disagree. <code>mask_ambiguous_pairs</code> is a different setting, and that one skips the horizon.</li>
+          <li><span class="src">FILE_GUIDE.txt</span> describes the dummy test encoder’s default crop as 64×64 (4×4 spatial tokens). <span class="src">MODEL_DATAFLOW.txt</span> says <code>build_backbone(dummy=True)</code> uses input size 256, so that factory path has 16×16 spatial tokens and shape <code>[B, 2048, 64]</code>. Hidden size 64 is in both notes. The dummy path is for tests and smoke runs.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section id="shared">
+      <h2>Shared input</h2>
+      <p>Every system’s clip is 16 frames ending at anchor <em>t</em>. The same letterbox and the same 5×5 label grid are the common contract. Which anchors get drawn is a separate schedule for each note.</p>
+
+      <h3>Sixteen frames, three seconds</h3>
+      <figure>
+        <ol class="strip" aria-label="Sixteen frames from t minus 3 seconds to t, every 200 milliseconds">
+          <li><span class="pic"></span><span class="t">t−3.0s</span><span class="i">0</span></li>
+          <li><span class="pic"></span><span class="t">t−2.8s</span><span class="i">1</span></li>
+          <li><span class="pic"></span><span class="t">t−2.6s</span><span class="i">2</span></li>
+          <li><span class="pic"></span><span class="t">t−2.4s</span><span class="i">3</span></li>
+          <li><span class="pic"></span><span class="t">t−2.2s</span><span class="i">4</span></li>
+          <li><span class="pic"></span><span class="t">t−2.0s</span><span class="i">5</span></li>
+          <li><span class="pic"></span><span class="t">t−1.8s</span><span class="i">6</span></li>
+          <li><span class="pic"></span><span class="t">t−1.6s</span><span class="i">7</span></li>
+          <li><span class="pic"></span><span class="t">t−1.4s</span><span class="i">8</span></li>
+          <li><span class="pic"></span><span class="t">t−1.2s</span><span class="i">9</span></li>
+          <li><span class="pic"></span><span class="t">t−1.0s</span><span class="i">10</span></li>
+          <li><span class="pic"></span><span class="t">t−0.8s</span><span class="i">11</span></li>
+          <li><span class="pic"></span><span class="t">t−0.6s</span><span class="i">12</span></li>
+          <li><span class="pic"></span><span class="t">t−0.4s</span><span class="i">13</span></li>
+          <li><span class="pic"></span><span class="t">t−0.2s</span><span class="i">14</span></li>
+          <li class="now"><span class="pic"></span><span class="t">t</span><span class="i">15</span></li>
+        </ol>
+        <figcaption>200 ms between taps. Index 0 is the oldest frame. Index 15 is the frame at <em>t</em>. Frame offsets are −90, −84, …, −6, 0. At 30 frames per second that span is 3.0 seconds. No RGB from after <em>t</em> is requested. <span class="src">spatial_overlay.mp4</span> is never an input.</figcaption>
+      </figure>
+
+      <h3>Letterbox and the 5×5 grid</h3>
+      <figure>
+        <div class="pics">
+          <div class="pic-card">
+            <h4>Letterbox, 256 square</h4>
+            <svg viewBox="0 0 280 300" role="img" aria-labelledby="lb-title lb-desc">
+              <title id="lb-title">Letterboxed frame</title>
+              <desc id="lb-desc">A 256 by 256 square. The top 56 pixels and the bottom 56 pixels are black. The middle 256 by 144 holds the picture. Content rows are 56 through 199.</desc>
+              <rect class="lb-frame" x="12" y="18" width="256" height="256"/>
+              <rect class="lb-picture" x="12" y="74" width="256" height="144"/>
+              <rect class="lb-picture-edge" x="12" y="74" width="256" height="144" stroke-width="3"/>
+              <text class="lb-on-dark" x="140" y="50" text-anchor="middle" font-size="14" font-family="system-ui, sans-serif">56 px black</text>
+              <text class="lb-on-pic" x="140" y="138" text-anchor="middle" font-size="15" font-family="system-ui, sans-serif">256 × 144 picture</text>
+              <text class="lb-on-pic-sub" x="140" y="158" text-anchor="middle" font-size="12" font-family="system-ui, sans-serif">rows 56–199</text>
+              <text class="lb-on-dark" x="140" y="250" text-anchor="middle" font-size="14" font-family="system-ui, sans-serif">56 px black</text>
+              <text class="svg-muted" x="140" y="292" text-anchor="middle" font-size="13" font-family="system-ui, sans-serif">256 px wide · x from 0 to 255</text>
+            </svg>
+          </div>
+          <div class="pic-card">
+            <h4>5×5 grid, root notes</h4>
+            <svg viewBox="0 0 360 268" role="img" aria-labelledby="grid-title grid-desc">
+              <title id="grid-title">Five by five grid from the root notes</title>
+              <desc id="grid-desc">Five rows and five columns. Row 0 is far and top. Row 4 is near and feet. Columns 0 and 1 are left, column 2 is center, columns 3 and 4 are right.</desc>
+              <text class="svg-muted" x="210" y="16" text-anchor="middle" font-size="12" font-family="system-ui, sans-serif">cols 0–1 left · col 2 center · cols 3–4 right</text>
+              <g class="svg-grid" stroke-width="1.4">
+                <rect class="svg-cell-far" x="100" y="28" width="40" height="36"/>
+                <rect class="svg-cell-far" x="140" y="28" width="40" height="36"/>
+                <rect class="svg-cell-far" x="180" y="28" width="40" height="36"/>
+                <rect class="svg-cell-far" x="220" y="28" width="40" height="36"/>
+                <rect class="svg-cell-far" x="260" y="28" width="40" height="36"/>
+                <rect class="svg-cell" x="100" y="64" width="40" height="36"/>
+                <rect class="svg-cell" x="140" y="64" width="40" height="36"/>
+                <rect class="svg-cell" x="180" y="64" width="40" height="36"/>
+                <rect class="svg-cell" x="220" y="64" width="40" height="36"/>
+                <rect class="svg-cell" x="260" y="64" width="40" height="36"/>
+                <rect class="svg-cell" x="100" y="100" width="40" height="36"/>
+                <rect class="svg-cell" x="140" y="100" width="40" height="36"/>
+                <rect class="svg-cell" x="180" y="100" width="40" height="36"/>
+                <rect class="svg-cell" x="220" y="100" width="40" height="36"/>
+                <rect class="svg-cell" x="260" y="100" width="40" height="36"/>
+                <rect class="svg-cell" x="100" y="136" width="40" height="36"/>
+                <rect class="svg-cell" x="140" y="136" width="40" height="36"/>
+                <rect class="svg-cell" x="180" y="136" width="40" height="36"/>
+                <rect class="svg-cell" x="220" y="136" width="40" height="36"/>
+                <rect class="svg-cell" x="260" y="136" width="40" height="36"/>
+                <rect class="svg-cell-near" x="100" y="172" width="40" height="36"/>
+                <rect class="svg-cell-near" x="140" y="172" width="40" height="36"/>
+                <rect class="svg-cell-near" x="180" y="172" width="40" height="36"/>
+                <rect class="svg-cell-near" x="220" y="172" width="40" height="36"/>
+                <rect class="svg-cell-near" x="260" y="172" width="40" height="36"/>
+              </g>
+              <g class="svg-accent" font-size="13" font-family="system-ui, sans-serif">
+                <text x="92" y="51" text-anchor="end">0 far</text>
+                <text x="92" y="195" text-anchor="end">4 near</text>
+              </g>
+              <g class="svg-muted" font-size="12" font-family="system-ui, sans-serif" text-anchor="end">
+                <text x="92" y="87">1</text>
+                <text x="92" y="123">2</text>
+                <text x="92" y="159">3</text>
+              </g>
+              <g class="svg-muted" font-size="12" font-family="system-ui, sans-serif" text-anchor="middle">
+                <text x="120" y="228">0</text>
+                <text x="160" y="228">1</text>
+                <text x="200" y="228">2</text>
+                <text x="240" y="228">3</text>
+                <text x="280" y="228">4</text>
+                <text x="140" y="250">left</text>
+                <text x="200" y="250">center</text>
+                <text x="260" y="250">right</text>
+              </g>
+            </svg>
+            <p>Root notes: row 0 is far / top, row 4 is near / feet. Near rows get higher loss weight: 0.8, 0.9, 1.0, 1.1, 1.2 from top to bottom. Those five numbers already average to 1.</p>
+          </div>
+        </div>
+        <div class="note">
+          <strong>Pair-CF row wording, as a note.</strong>
+          <span class="src">docs/parent_pair_cf_model.md</span> says rows are depth, written “near→far”, and does not assign row 0 or row 4. Its direction loss uses row weights 1, 1, 1, 1, 1. The student note does not restate row order. This page keeps a single grid, the one drawn in the root notes.
+        </div>
+        <figcaption>Letterbox for 1920×1080, from <span class="src">PREPROCESSING_PIPELINE.txt</span>. Scale is 256/1920. The left edge of the street stays at x = 0 and the right edge at x = 255. Official V-JEPA shortest-edge center crop exists as an opt-in and is not this default.</figcaption>
+      </figure>
+
+      <ol class="steps">
+        <li>
+          <span class="lbl">Pixels after the letterbox</span>
+          Float32 in the range 0 to 1. One clip is <code>[16, 3, 256, 256]</code>. A batch is <code>[B, 16, 3, 256, 256]</code>. The dataset tensor is still un-normalized. Black pad is 0 in that tensor. Heatmaps are already 5×5, one per frame, values in 0 to 1. They are not resized to 256.
+        </li>
+        <li>
+          <span class="lbl">ImageNet numbers, inside the teachers’ Giant</span>
+          <span class="src">PREPROCESSING_PIPELINE.txt</span> and <span class="src">MODEL_DATAFLOW.txt</span> print mean (0.485, 0.456, 0.406) and standard deviation (0.229, 0.224, 0.225). A black pad pixel then sits near −2.12, −2.04, −1.80 on red, green, and blue. The parent note and the student note both say ImageNet normalization and do not reprint those six numbers.
+        </li>
+        <li>
+          <span class="lbl">Geometry that stays off</span>
+          Flips, rotation, scale jitter, color jitter, and blur are off, because left and right are part of the label. Source clips in the root notes are 1920×1080, 30 fps, 450 frames (15 seconds). A legal anchor needs 3 seconds of history, so <em>t</em> starts at 90. The scenario fork is frame 365 (12.15 seconds): before that frame, collision and miss footage of the same sample still match.
+        </li>
+        <li>
+          <span class="lbl">Worked anchor, t = 330</span>
+          The 16 input frames are 240, 246, 252, 258, 264, 270, 276, 282, 288, 294, 300, 306, 312, 318, 324, 330. In the four-map notes the label times are now = 330, 1 s = 360, 1.5 s = 375, 2 s = 390. Those later times pick heatmap labels. They do not pull extra RGB.
+        </li>
+      </ol>
+      <ul class="timeline" aria-label="At anchor 330, input frames stop at 330 and later times are labels">
+        <li class="past"><strong>Input RGB</strong> frames 240 … 330</li>
+        <li class="lab"><strong>Now label</strong> frame 330</li>
+        <li class="lab"><strong>1 s label</strong> frame 360</li>
+        <li class="lab"><strong>1.5 s label</strong> frame 375</li>
+        <li class="lab"><strong>2 s label</strong> frame 390</li>
+      </ul>
+
+      <h3>What is shared, and what is scheduled differently</h3>
+      <ol class="steps">
+        <li>
+          <span class="lbl">Four-map anchors</span>
+          The loader walks <em>t</em> = 90, 105, …, 405 when partial horizons are allowed (about 22 anchors per clip, stride 15). Anchors with partial horizons allowed run <em>t</em> in the range 90 to 419, and the stride-15 list ends at 405.
+        </li>
+        <li>
+          <span class="lbl">Parent anchors</span>
+          A group-random set of 26 pre-fork and 14 post-fork timestamps, shared inside a scenario group. The student uses the parent’s 16 offsets and the group-mean 1 s labels.
+        </li>
+        <li>
+          <span class="lbl">Giant token geometry, when Giant is used</span>
+          The id is <code>facebook/vjepa2-vitg-fpc64-256</code>. The name says fpc64. <span class="src">README.md</span> says the run feeds 16 frames and checks the token geometry, and that a wrong token count is an error. Sixteen frames with tubelet 2 and patch 16 produce 8 time groups and a 16×16 spatial grid, so the token count is 8 × 16 × 16 = 2048. Giant’s channel count is 1408. Time group 0 is the oldest pair of frames. Time group 7 includes frame <em>t</em>.
+        </li>
+      </ol>
+      <ul class="groups" aria-label="Eight Giant time groups">
+        <li><strong>group 0</strong>oldest pair</li>
+        <li><strong>group 1</strong></li>
+        <li><strong>group 2</strong></li>
+        <li><strong>group 3</strong></li>
+        <li><strong>group 4</strong></li>
+        <li><strong>group 5</strong></li>
+        <li><strong>group 6</strong></li>
+        <li><strong>group 7</strong>includes t</li>
+      </ul>
+    </section>
+
+    <section id="four-map">
+      <h2>Four-map teacher</h2>
+      <p class="src">CollisionTeacher3. Sources: README.md, MODEL_DATAFLOW.txt, FILE_GUIDE.txt, PREPROCESSING_PIPELINE.txt.</p>
+      <p>This teacher answers four questions on the 5×5 grid: danger now, 1.0 s later, 1.5 s later, and 2.0 s later. It also emits <code>Z_t</code> <code>[B, 32, 5, 5]</code>, a 32-dimensional vector on each cell. The root README says there is no JEPA latent-matching loss in this teacher-only run. The student is out of scope in those root notes.</p>
+
+      <h3>Forward path</h3>
+      <figure aria-label="CollisionTeacher3 flow from RGB frames to four heatmaps">
+        <div class="spine">
+          <div class="node four">
+            <span class="k">Input</span>
+            <b>16 × 256 RGB</b>
+            <code class="shape">[B, 16, 3, 256, 256]</code>
+          </div>
+          <div class="arrow" aria-hidden="true">
+            <svg viewBox="0 0 28 16" width="28" height="16"><path d="M2 8h20M16 3l7 5-7 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="node four">
+            <span class="k">Encoder</span>
+            <b>Giant tokens</b>
+            <code class="shape">[B, 2048, 1408]</code>
+            <span class="hint">frozen, or LoRA later</span>
+          </div>
+          <div class="arrow" aria-hidden="true">
+            <svg viewBox="0 0 28 16" width="28" height="16"><path d="M2 8h20M16 3l7 5-7 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="node four">
+            <span class="k">Adapter</span>
+            <b>Project, 2 time blocks, mean and last</b>
+            <span class="hint">lands on a 5×5 code</span>
+          </div>
+          <div class="arrow" aria-hidden="true">
+            <svg viewBox="0 0 28 16" width="28" height="16"><path d="M2 8h20M16 3l7 5-7 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="node four">
+            <span class="k">Cell code</span>
+            <b>Z_t</b>
+            <code class="shape">[B, 32, 5, 5]</code>
+          </div>
+          <div class="arrow" aria-hidden="true">
+            <svg viewBox="0 0 28 16" width="28" height="16"><path d="M2 8h20M16 3l7 5-7 5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <div class="node four">
+            <span class="k">Now head, sigmoid</span>
+            <b>Hhat_now</b>
+            <code class="shape">[B, 5, 5]</code>
+            <span class="hint">range (0, 1)</span>
+          </div>
+        </div>
+
+        <div class="sg">
+          <strong>Stop-gradient on the now map, before the delta is added.</strong>
+          Each future map is the stopped now map plus that horizon’s delta, then clamped into 0 to 1. A future loss cannot edit <code>Hhat_now</code> to make the sum easier. The now map has its own loss. The three residual predictors do not share weights. Each one reads <code>Z_t</code>.
+        </div>
+
+        <div class="branches">
+          <article class="branch four">
+            <h4>1 second</h4>
+            <div class="node four"><span class="k">From Z_t</span><b>Residual predictor</b><span class="hint">Zhat_1s = Z_t + f(Z_t), shape [B, 32, 5, 5]</span></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node four"><span class="k">Own delta head</span><b>tanh delta</b><code class="shape">[B, 5, 5], range (−1, 1)</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node four"><span class="k">Plus stopped Hhat_now</span><b>Clamp to 0…1</b><span class="hint">Hhat_1s [B, 5, 5]</span></div>
+          </article>
+          <article class="branch four">
+            <h4>1.5 seconds</h4>
+            <div class="node four"><span class="k">From Z_t</span><b>Residual predictor</b><span class="hint">Zhat_1_5s, own weights, [B, 32, 5, 5]</span></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node four"><span class="k">Own delta head</span><b>tanh delta</b><code class="shape">[B, 5, 5], range (−1, 1)</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node four"><span class="k">Plus stopped Hhat_now</span><b>Clamp to 0…1</b><span class="hint">Hhat_1_5s [B, 5, 5]</span></div>
+          </article>
+          <article class="branch four">
+            <h4>2 seconds</h4>
+            <div class="node four"><span class="k">From Z_t</span><b>Residual predictor</b><span class="hint">Zhat_2s, own weights, [B, 32, 5, 5]</span></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node four"><span class="k">Own delta head</span><b>tanh delta</b><code class="shape">[B, 5, 5], range (−1, 1)</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node four"><span class="k">Plus stopped Hhat_now</span><b>Clamp to 0…1</b><span class="hint">Hhat_2s [B, 5, 5]</span></div>
+          </article>
+        </div>
+        <figcaption>CollisionTeacher3. Shapes from <span class="src">MODEL_DATAFLOW.txt</span>. The time collapse inside the adapter is the mean-and-last mix, with two temporal blocks.</figcaption>
+      </figure>
+
+      <ul class="exrow" aria-label="Illustration of one cell, row 4 column 2">
+        <li><span>Now, row 4 col 2</span><b>0.40</b></li>
+        <li><span>1 s delta +0.35</span><b>0.75</b></li>
+        <li><span>2 s delta +0.55</span><b>0.95</b></li>
+      </ul>
+      <p class="src">Illustration in MODEL_DATAFLOW.txt, not a measured clip. The 1.5 s map is not part of this walk-through. If a delta is about 0, that future map copies the now map.</p>
+
+      <h3>Backbone, adapter, heads</h3>
+      <ol class="steps four">
+        <li>
+          <span class="lbl">Giant contract</span>
+          Preferred weights are V-JEPA 2 Giant, hidden size 1408. <span class="src">README.md</span> names Large (<code>facebook/vjepa2-vitl-fpc64-256</code>) as the fallback if Giant cannot load, and says a run must not claim Giant when the fallback was used. The encoder call is <code>get_vision_features</code>, or the model forward with the V-JEPA predictor skipped. Tokens are cast to float32 and must be exactly <code>[B, 2048, 1408]</code>. The code refuses to drop or pad tokens.
+        </li>
+        <li>
+          <span class="lbl">Frozen phase, then optional LoRA</span>
+          <code>train()</code> forces the backbone to eval, so dropout and batch-norm inside Giant stay in eval while the adapter and heads train. In the frozen phase the Giant forward runs under <code>no_grad</code> and the base weights have <code>requires_grad</code> false. Full Giant weights are not stored in the project checkpoint. The Hugging Face id is recorded and loaded again.
+        </li>
+        <li>
+          <span class="lbl">Spatial projection, shared across time</span>
+          Tokens reshape to <code>[B, 8, 16, 16, 1408]</code> and move to <code>[B, 8, 1408, 16, 16]</code>. Each time group uses the same weights: a 1×1 convolution 1408 to 128, GELU, then a 3×3 convolution 128 to 128, GELU. Space stays 16×16. The projected tensor is <code>[B, 8, 128, 16, 16]</code>.
+        </li>
+        <li>
+          <span class="lbl">Two temporal residual blocks</span>
+          Kernel 3, dilation 1. One block is a depthwise time convolution, kernel (3, 1, 1), padding (1, 0, 0), groups 128, then a pointwise 1×1×1 convolution, GroupNorm with 8 groups, GELU, and a residual add. Space is still 16×16. The tensor is then <code>[B, 128, 8, 16, 16]</code>.
+        </li>
+        <li>
+          <span class="lbl">Mean and last</span>
+          Mean over the 8 groups gives <code>[B, 128, 16, 16]</code>. The last group alone gives <code>[B, 128, 16, 16]</code>. Concatenate to <code>[B, 256, 16, 16]</code>. A 1×1 and GELU return <code>[B, 128, 16, 16]</code>. The notes call this mix <code>mean_last</code>.
+        </li>
+        <li>
+          <span class="lbl">Pool down to Z_t</span>
+          Adaptive average pooling makes the grid 5×5, giving <code>[B, 128, 5, 5]</code>. A 1×1 convolution 128 to 128 with GELU, a 1×1 convolution 128 to 32, and a LayerNorm over the 32 channels of each cell produce <code>Z_t</code> <code>[B, 32, 5, 5]</code>. In these root notes, row 0 of that 5×5 is the top / far part of the letterboxed image and row 4 is the bottom / near / feet.
+        </li>
+        <li>
+          <span class="lbl">Now decoder</span>
+          <code>Hhat_now</code> = sigmoid of the decoder on <code>Z_t</code>, in the open range 0 to 1. The decoder is 32 to 48 (1×1, ReLU), 48 to 48 (3×3, ReLU), 48 to 1 (1×1).
+        </li>
+        <li>
+          <span class="lbl">Future residual, then a stopped add</span>
+          For each horizon, Zhat = <code>Z_t</code> + f(Z_t). The predictor f is 32 to 96 (3×3, ReLU), 96 to 96 (3×3, dilation 2, ReLU), 96 to 32 (1×1). The delta is tanh of g(Zhat − Z_t), in the open range −1 to 1. The delta head g is 32 to 48 (1×1, ReLU), 48 to 48 (3×3, ReLU), 48 to 1 (1×1). The future map clamps (stopped now map + delta) into 0 to 1. Horizons are named 1s, 1_5s, and 2s.
+        </li>
+      </ol>
+
+      <h3>What leaves the module</h3>
+      <div class="table-wrap">
+        <table>
+          <caption>Outputs for Giant, from MODEL_DATAFLOW.txt. Labels stay outside the forward pass.</caption>
+          <thead>
+            <tr><th scope="col">Tensor</th><th scope="col">Shape</th><th scope="col">Range</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Z_t</code></td><td><code>[B, 32, 5, 5]</code></td><td>LayerNorm over channels</td></tr>
+            <tr><td><code>Hhat_now</code></td><td><code>[B, 5, 5]</code></td><td>(0, 1) after sigmoid</td></tr>
+            <tr><td><code>Zhat_1s</code>, <code>Zhat_1_5s</code>, <code>Zhat_2s</code></td><td><code>[B, 32, 5, 5]</code></td><td><code>Z_t</code> plus that horizon’s residual</td></tr>
+            <tr><td><code>Delta_*</code></td><td><code>[B, 5, 5]</code></td><td>(−1, 1) after tanh</td></tr>
+            <tr><td><code>Hhat_1s</code>, <code>Hhat_1_5s</code>, <code>Hhat_2s</code></td><td><code>[B, 5, 5]</code></td><td>[0, 1] after clamp</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The forward ignores the label maps, the ambiguity flags, outcome and background strings, and the pairing ids. Two clips with the same RGB therefore produce almost the same maps. Outcome differences enter through the targets.</p>
+
+      <h3>Labels, fork, and masks</h3>
+      <ol class="steps four">
+        <li>
+          <span class="lbl">Which horizons must exist</span>
+          Default batch size in the root config is 1. The 1 s label must exist. A 1.5 s or 2 s label past frame 449 is masked and skipped. Requiring all three futures narrows the range to <em>t</em> in 90 to 389, last stride-15 anchor 375.
+        </li>
+        <li>
+          <span class="lbl">Live policy, mean_target</span>
+          <span class="src">FILE_GUIDE.txt</span>, and the pairing section of <span class="src">README.md</span>, train both the collision clip and the miss clip on the cell-wise average when <em>t</em> is still before the fork and a future heatmap has already split. The now-map loss is kept. At the guide’s example <em>t</em> = 330, the 1 s frame 360 is still shared, while 375 and 390 have split. A cell that is about 0.96 on the collision map and about 0 on the miss map becomes 0.48 in the rewritten target. After the rewrite those horizons are trained, and the ambiguity flag for them is cleared.
+        </li>
+        <li>
+          <span class="lbl">The other switch</span>
+          <code>mask_ambiguous_pairs</code> skips a split horizon instead. <span class="src">README.md</span>’s short change list also describes that masking behavior. <span class="src">FILE_GUIDE.txt</span> says to follow the guide when the two descriptions disagree.
+        </li>
+        <li>
+          <span class="lbl">Background pairs</span>
+          <code>bg_00</code> and <code>bg_01</code> share the threat and change clutter and lighting. When the heatmaps agree within tolerance 0.001, a cosine term pulls the two <code>Z_t</code> tensors together. The pair buffer stores one detached <code>Z_t</code> at a time (maximum 64 entries) so both Giant graphs are not held together. Outcome disagreement uses tolerance 0.02 on the maximum absolute cell difference. Splits are by sample group, 0.70 / 0.15 / 0.15, so a collision clip and its miss mate stay in the same split. Config seed is 1337.
+        </li>
+      </ol>
+
+      <h3>Training schedule</h3>
+      <dl class="spec">
+        <dt>Phase A</dt>
+        <dd>8 epochs. AdamW on the adapter, the now decoder, the three predictors, and the three delta heads. Learning rate 1e-3. Giant frozen.</dd>
+        <dt>Phase B</dt>
+        <dd>10 epochs. LoRA on every linear layer in the last 6 Giant blocks. Rank 16, alpha 16, so alpha/rank = 1. Adapter and heads at 2e-4. LoRA at 1e-4. Base Giant weights stay frozen.</dd>
+        <dt>LoRA step</dt>
+        <dd>Output = base weight times the input, plus (alpha / rank) times B applied to (A applied to the input). A is kaiming-uniform, B starts at zero, dropout 0, so the output is unchanged at the moment LoRA is turned on.</dd>
+        <dt>Schedule</dt>
+        <dd>One epoch of linear warmup, then cosine down to 1e-6. Gradient clip 1.0. Micro-batch 1. AMP bfloat16 when the GPU supports it. Patience 4 evaluations.</dd>
+        <dt>Best checkpoint</dt>
+        <dd>Weighted high-threat recall on the three futures, plus STOP F1. Eligible only if nuisance ≤ 0.20 and miss ≤ 0.25. High-threat cells use threshold 0.5. Selection is not raw MSE.</dd>
+        <dt>Files</dt>
+        <dd><span class="src">checkpoints/teacher_phase_a_last.pt</span>, <span class="src">teacher_phase_a_best.pt</span>, <span class="src">teacher_phase_b_last.pt</span>, <span class="src">teacher_phase_b_best.pt</span>.</dd>
+      </dl>
+      <p>Nuisance, in the evaluation notes, is a CAUTION-or-STOP prediction on a SAFE frame. Miss is a SAFE prediction on a STOP frame. The warning rule for this teacher is separate from the parent’s rule: after a row-weighted peak over left, center, and right, peak ≥ 0.70 is STOP, peak ≥ 0.42 is CAUTION, and anything lower is SAFE.</p>
+      <p>The loss line is below, in <a href="#loss-four">Losses</a>. There is no 1 s-only BCE and no pair-difference PCA in this teacher.</p>
+
+      <div class="note">
+        <strong>Test encoder.</strong>
+        <span class="src">FILE_GUIDE.txt</span> describes <code>DummyVJEPA2Backbone</code> with a default 64×64 crop, hidden size 64, 8 time groups, and 4×4 spatial tokens. <span class="src">MODEL_DATAFLOW.txt</span> says the factory <code>build_backbone(dummy=True)</code> uses input size 256, so the usual dummy tokens are <code>[B, 2048, 64]</code>, and a hand-built 64 crop is the 4×4 case. Tests use the dummy and do not download Giant.
+      </div>
+    </section>
+
+    <section id="one-second">
+      <h2>One-second teacher</h2>
+      <p class="src">Pair-CF parent. Source: docs/parent_pair_cf_model.md. This is the teacher the student copies.</p>
+      <p>The input contract is the same 16 letterboxed frames. The output is one map, <code>Hhat_1s</code> <code>[B, 5, 5]</code>, occupancy one second after <em>t</em> (frame <em>t</em>+30). The mode is <code>direct_h1s</code>: the decoder output is that 1 s map. There is no now head, no 1.5 s head, no 2 s head, and no copy-residual delta. Giant stays frozen for the whole treatment. The phase flag is frozen. This treatment does not turn on LoRA.</p>
+
+      <h3>Forward path</h3>
+      <figure aria-label="Pair-CF parent flow from Giant tokens to the 1 second heatmap">
+        <div class="with-side">
+          <div class="vflow">
+            <div class="node one">
+              <span class="k">Same Giant tokens</span>
+              <b>Frozen V-JEPA 2 Giant</b>
+              <code class="shape">[B, 2048, 1408]</code>
+              <span class="hint">tokens often cached, so RGB is not run every step</span>
+            </div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one">
+              <span class="k">Spatial projection</span>
+              <b>1×1, GELU, 3×3</b>
+              <span class="hint">128 channels, space stays 16×16</span>
+            </div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one">
+              <span class="k">Time mix</span>
+              <b>4 temporal blocks</b>
+              <span class="hint">dilations 1, 2, 1, 2</span>
+            </div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one">
+              <span class="k">Softmax over time</span>
+              <b>F_dec</b>
+              <code class="shape">[B, 128, 16, 16]</code>
+              <span class="hint">the heatmap is read here</span>
+            </div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one">
+              <span class="k">Decoder</span>
+              <b>16×16 logits, max-pool, sigmoid</b>
+              <span class="hint">Hhat_1s [B, 5, 5]</span>
+            </div>
+          </div>
+          <aside class="side-card">
+            <span class="k">Side branch</span>
+            <b>Z_t</b>
+            <code class="shape">[B, 32, 5, 5]</code>
+            <span class="hint">Average-pool F_dec to 5×5, then a bottleneck the note summarizes as 128 to 32, plus LayerNorm. The heatmap is not decoded from Z_t. Uses: a 1×1 close head, the background cosine, and an evidence head this run leaves off (beta_nll_weight 0).</span>
+          </aside>
+        </div>
+        <figcaption>Pair-CF parent. <code>decode_from: fine</code> means the decoder reads the 128-channel 16×16 map.</figcaption>
+      </figure>
+
+      <ol class="steps one">
+        <li>
+          <span class="lbl">Cache, eval, and the skipped predictor</span>
+          The parent note says tokens are typically cached. The backbone stays in eval during training. AMP runs in bfloat16. <code>skip_predictor</code> is true: V-JEPA’s own future-token predictor is not the training loss.
+        </li>
+        <li>
+          <span class="lbl">Four blocks, kernel left to the other note</span>
+          After the spatial projection, four temporal residual blocks use dilations 1, 2, 1, 2. The note describes each block as a depthwise time convolution, a pointwise mix, GroupNorm, and GELU. It does not restate the kernel size. The four-map dataflow, for its own two blocks, does: kernel 3 along time and GroupNorm with 8 groups.
+        </li>
+        <li>
+          <span class="lbl">Softmax pool, with a recency bias</span>
+          The parent note names the pool and does not write the expression. The implementation in <span class="src">collision_jepa3/models/spatial_adapter.py</span> is a per-location softmax over the time groups. The hidden width is the greater of 8 and the channel count divided by 4 with integer division. At 128 channels that is 32. Two 1×1×1 convolutions score each place: channels to hidden, GELU, hidden to 1. Add a learned recency value, one per time group, initialized as a line from −1 to 1 so later tubelets start higher. Softmax over time, then a weighted sum of the groups, gives <code>[B, 128, 16, 16]</code>. That map is <code>F_dec</code> (also called <code>fine</code>). The parent note does not add a last-frame gate on top of this pool.
+        </li>
+        <li>
+          <span class="lbl">Optional knobs the note mentions</span>
+          The map can optionally be resized to <code>heatmap_grid</code> 16. An optional drop of 16 channels can sit on <code>fine</code> before the decoder. The note’s wording is that this drop can sit there, and that the pair-CF path still reads that stream.
+        </li>
+        <li>
+          <span class="lbl">Decoder the student copies</span>
+          1×1, 128 to 48, ReLU. 3×3, 48 to 48, ReLU. 3×3, 48 to 48, dilation 2, ReLU. 1×1, 48 to 1 logit, still 16×16. Adaptive max-pool to 5×5. Sigmoid to <code>Hhat_1s</code>. No batch-norm. Sigmoid after the max-pool matches a max of sigmoids, so the pooled 5×5 logits are valid for BCE-with-logits. Counting those four convolutions with one bias each gives 6,192 + 20,784 + 20,784 + 49 = 47,809 parameters. Hash in the best Pair-CF checkpoint: <code>77f78c8714667617</code>.
+        </li>
+        <li>
+          <span class="lbl">Where Z_t is used</span>
+          The four-map dataflow spells its own bottleneck as 128 to 128 and then 128 to 32. The parent note summarizes its bottleneck as 128 to 32 plus LayerNorm. The diagram in the parent file also tags <code>Z_t</code> with “pair-CF”. The pair-difference shrink itself is applied to Giant tokens. The background term is the cosine on <code>Z_t</code>.
+        </li>
+        <li>
+          <span class="lbl">Warning and labels</span>
+          SAFE if the peak is below 0.25, THREAT if the peak is at least 0.25 and below 0.60, STOP if the peak is at least 0.60. These cuts are the parent’s and the student’s. They are a different rule from the four-map teacher’s 0.70 / 0.42 bands. On labels, when background-pair futures disagree, targets use the cell-wise mean of collision and miss (<code>ambiguous_policy: mean_target</code>), and ambiguous 1 s maps can be masked (<code>amb_1s</code>). The fork remains frame 365.
+        </li>
+      </ol>
+
+      <h3>Pair-difference shrink</h3>
+      <figure aria-label="Sketch of the pair-CF shrink">
+        <ol class="shrink">
+          <li><strong>Pair of clips</strong>Giant tokens, 2048 by 1408, at the same anchor</li>
+          <li><strong>Mean over tokens</strong>one 1408-d vector per clip</li>
+          <li><strong>Half the difference</strong>D = one-half of (vector A − vector B)</li>
+          <li><strong>PCA, k = 16</strong>U is 16 × 1408</li>
+          <li><strong>Scale 1 at train time</strong>subtract that piece from A, add it to B, on every token</li>
+        </ol>
+        <figcaption>Fit once, offline, on train pairs. Stored as <span class="src">reports/pair_background_counterfactual/subspace/learned_k16.npz</span>. Training loads <code>U</code> and does not refit PCA each step. Students never apply this shrink. They never see Giant tokens.</figcaption>
+      </figure>
+      <ol class="steps one">
+        <li>
+          <span class="lbl">What was fit</span>
+          Each window’s Giant tokens, T = 2048 and C = 1408, are averaged over tokens to a clip vector in a 1408-dimensional space. For a pair (a, b) at the same anchor, D is one-half of (vector a − vector b). Subtract the mean of D, then PCA. Values k = 4, 8, and 16 were fit. This treatment uses k = 16. U has shape 16 × 1408, and U times its transpose is about the 16×16 identity. The note’s intent is that these directions are mostly nuisance (lighting and background identity), and that occupancy should remain in the orthogonal complement.
+        </li>
+        <li>
+          <span class="lbl">How a training step applies it</span>
+          A paired batch is the first half clip A and the second half clip B. Token tensors are <code>[B/2, T, C]</code>. The same half-difference is formed from the token means, projected, and applied with scale = 1. The channel vector d equals (D times U transpose) times U, broadcast over tokens. Shrunk A is A − d. Shrunk B is B + d. The same d hits every token position. The shrunk tokens go through the adapter and the decoder, and <code>TeacherLoss</code> is computed again on the same labels. That copy’s background term is 0. The clean path is left as it is. The loss section lists the weights.
+        </li>
+        <li>
+          <span class="lbl">What “halves” refers to</span>
+          The same note says this halves the pair-difference inside the span of <code>U</code>. D already contains the one-half, and d is subtracted from A and added to B, so the subspace piece of the full mean difference is cancelled. The orthogonal complement is unchanged.
+        </li>
+        <li>
+          <span class="lbl">When it runs</span>
+          On a batch whose <code>bg_reg_paired</code> flag is true. The whole batch is kept or dropped together: the first byte of the SHA-256 of <code>epoch|background_pair_id[0]|pair_cf_aux</code> must be below 128. <code>pair_cf_pair_frac</code> is 0.5 in <span class="src">configs/default.yaml</span>, the launch script passes the same 0.5, and round(0.5 × 256) is 128. <code>pair_cf_ramp_strength</code> is 0 at epoch 0, 0.25 at epoch 1, 0.50 at epoch 2, 0.75 at epoch 3, and 1.0 from epoch 4 on. <span class="src">docs/parent_pair_cf_model.md</span> lists those levels and does not name the later epochs. Beta is set once at the start of epoch 1. The loss section writes that calibration.
+        </li>
+      </ol>
+
+      <h3>Training schedule</h3>
+      <dl class="spec">
+        <dt>Optimizer</dt>
+        <dd>AdamW, adapter learning rate 3e-4, cosine, 5 warmup epochs, gradient clip 1.0. AMP bfloat16.</dd>
+        <dt>What trains</dt>
+        <dd>Adapter and heatmap decoder, plus the pair-CF auxiliary path. Giant is frozen. No LoRA in this treatment.</dd>
+        <dt>Length</dt>
+        <dd>Frozen phase, maximum 28,350 steps. Early stop name <code>balanced_warning</code>: SAFE floor 0.82, STOP floor 0.55, post-fork STOP floor 0.88, patience 6 after epoch 8. Those floors are stop rules for training. They are not the 0.25 / 0.60 warning cuts.</dd>
+        <dt>Data</dt>
+        <dd>Blender groups <span class="src">groups15_n400_s67_n400</span>, plus extra samples 207–229 on train only. Anchors: 26 pre-fork + 14 post-fork, shared inside a scenario group. Seed 1337.</dd>
+        <dt>Student splits</dt>
+        <dd>The note gives 22,680 train / 5,120 selection / 5,120 test for later students. Test is never used to train the student or to pick its checkpoint.</dd>
+      </dl>
+      <p>Tensors a student may copy: <code>F_dec</code> <code>[128, 16, 16]</code>, <code>H_teacher</code> <code>[5, 5]</code> when the parent’s class agrees with the label, the decoder weights (47,809 parameters, init hash <code>77f78c8714667617</code>), and the ground-truth <code>h_1s</code>. The student does not run Giant, does not train the shrink, and does not use <code>Z_t</code> or the close head.</p>
+    </section>
+
+    <section id="student">
+      <h2>Student</h2>
+      <p class="src">Student M1, variant m1_stop_floor. Source: docs/student_m1_model.md.</p>
+      <p>M1 is the small RGB student. It does not run V-JEPA. It maps the 16 frames onto a parent-shaped feature, then uses the copied Pair-CF decoder. The predictor inside M1 exists for a masked reconstruction term. The heatmap path does not go through that predictor.</p>
+      <dl class="spec">
+        <dt>Parameters</dt>
+        <dd>980,171 total. Encoder 881,290. Predictor 34,560. 1×1 projection 16,512. Decoder 47,809. The four counts add to the total.</dd>
+        <dt>Official file</dt>
+        <dd><span class="src">checkpoint_epoch_10.pt</span>, also referred to as <span class="src">checkpoint_best.pt</span>, under <span class="src">model_trial_3_temp/overnight6/m1_stop_floor/</span>. Seed 1001. Parent decoder hash at init <code>77f78c8714667617</code>.</dd>
+        <dt>Cost</dt>
+        <dd>About 37 ms per clip on CPU in float32. An earlier audit lists about 1.79 GMAC and about 3.59 GFLOP.</dd>
+      </dl>
+
+      <h3>Student flow beside the parent</h3>
+      <figure aria-label="Parent heatmap path beside the student heatmap path">
+        <div class="duo">
+          <div class="vflow">
+            <p class="tag">Parent heatmap path</p>
+            <div class="node one"><span class="k">Tokens</span><b>Giant</b><code class="shape">[B, 2048, 1408]</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one"><span class="k">4 temporal blocks</span><b>Softmax time pool</b><span class="hint">dilations 1, 2, 1, 2</span></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one"><span class="k">Heatmap feature</span><b>F_dec</b><code class="shape">[B, 128, 16, 16]</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node one"><span class="k">Decoder</span><b>Hhat_1s</b><code class="shape">[B, 5, 5]</code><span class="hint">16×16 logits, max-pool, sigmoid</span></div>
+            <aside class="side-card"><span class="k">Off the heatmap path</span><b>Z_t side branch</b><span class="hint">[B, 32, 5, 5]. Close head and background cosine. Students do not use it.</span></aside>
+          </div>
+          <div class="vflow">
+            <p class="tag">Student M1 heatmap path</p>
+            <div class="node stu"><span class="k">Input</span><b>16 × 256 RGB</b><code class="shape">[B, 16, 3, 256, 256]</code><span class="hint">letterbox cache, no Giant</span></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node stu"><span class="k">Encoder</span><b>(2+1)D CNN</b><span class="hint">stem, inverted residuals, softmax pool, last-frame gate</span></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node stu"><span class="k">Context</span><b>F_ctx</b><code class="shape">[B, 128, 16, 16]</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node stu"><span class="k">1×1, starts as identity</span><b>F</b><code class="shape">[B, 128, 16, 16]</code></div>
+            <div class="down" aria-hidden="true"></div>
+            <div class="node stu"><span class="k">Copied decoder</span><b>Hhat_1s</b><code class="shape">[B, 5, 5]</code></div>
+            <aside class="side-card"><span class="k">Masked-grid side path</span><b>Predictor on F_ctx only</b><span class="hint">Bernoulli mask on the 16×16 cells. This branch is the masked loss. The heatmap decoder does not read it.</span></aside>
+          </div>
+        </div>
+        <div class="bridges">
+          <div class="bridge">
+            <div class="end">
+              <span class="k">Cached parent</span>
+              <b>F_dec</b>
+              <span class="hint">[128, 16, 16] in the student cache</span>
+            </div>
+            <svg class="arrow stu-arrow" viewBox="0 0 88 16" width="88" height="16" aria-hidden="true">
+              <path d="M2 8 H74" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="4 3"/>
+              <path d="M66 3 L78 8 L66 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            </svg>
+            <div class="end">
+              <span class="k">Dashed, training only</span>
+              <b>Latent loss on student F</b>
+              <span class="hint">feature, cosine, masked predictor, and spatial Gram</span>
+            </div>
+          </div>
+          <div class="bridge">
+            <div class="end">
+              <span class="k">Cached parent</span>
+              <b>H_teacher</b>
+              <span class="hint">[5, 5], kept when the parent’s class matches the label</span>
+            </div>
+            <svg class="arrow stu-arrow" viewBox="0 0 88 16" width="88" height="16" aria-hidden="true">
+              <path d="M2 8 H74" fill="none" stroke="currentColor" stroke-width="1.7" stroke-dasharray="4 3"/>
+              <path d="M66 3 L78 8 L66 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+            </svg>
+            <div class="end">
+              <span class="k">Dashed, training only</span>
+              <b>Distillation on student Hhat_1s</b>
+              <span class="hint">the warning path still decodes F, not H_teacher</span>
+            </div>
+          </div>
+        </div>
+        <figcaption>On a narrow window the student column stacks under the parent column. Dashed arrows are cached targets. They are not activations inside the student forward.</figcaption>
+      </figure>
+
+      <h3>Encoder steps</h3>
+      <ol class="steps stu">
+        <li>
+          <span class="lbl">Layout for the 3D convolutions</span>
+          ImageNet normalization, then a permute from <code>[B, 16, 3, 256, 256]</code> to <code>[B, 3, 16, 256, 256]</code>.
+        </li>
+        <li>
+          <span class="lbl">Stem</span>
+          3 to 64 channels. Kernel and stride (2, 16, 16). On 16 frames of 256×256 that makes 8 time steps and a 16×16 grid, with 64 channels.
+        </li>
+        <li>
+          <span class="lbl">Stack written in the student note</span>
+          Two inverted residuals at width 64, expand 4. A 1×1 projection to 128 channels. Six inverted residuals, expand 3, time dilations 1, 2, 1, 2, 1, 2. One extra inverted residual, expand 2. <span class="src">student_model/encoder.py</span> builds this extra block, and the two width-64 blocks, with time dilation 1. Softmax pool over the time axis, plus a learned last-frame gate, producing <code>F_ctx</code> <code>[B, 128, 16, 16]</code>.
+        </li>
+        <li>
+          <span class="lbl">One inverted residual</span>
+          Width C, expand e, time dilation d, middle width C times e. GroupNorm uses 8 groups. Apply GELU to a pointwise expand from C to C·e. Depthwise convolution, kernel (1, 3, 3). Depthwise convolution, kernel (3, 1, 1), dilation d. Pointwise project from C·e back to C. GroupNorm. Output is GELU of (input + that result). The two depthwise convolutions sit between the two GELUs with no extra nonlinearity of their own.
+        </li>
+        <li>
+          <span class="lbl">Last-frame gate, then the 1×1</span>
+          The pool module is the same softmax written for the parent. The encoder then adds a gate the parent note does not use. g is one learned scalar, initialized at 0, and the newest time step is added as g times that step: <code>F_ctx</code> = softmax pool + g × newest step. A 1×1 maps <code>F_ctx</code> to <code>F</code>, both <code>[B, 128, 16, 16]</code>. Its weight is initialized to the 128×128 identity, so early in training <code>F</code> matches <code>F_ctx</code>. <code>F</code> is what the decoder sees, and what the latent losses compare with cached parent <code>F_dec</code>. The projection has 16,512 parameters.
+        </li>
+        <li>
+          <span class="lbl">Predictor, masked cells only</span>
+          <code>JEPAPredictor</code> is a small masked CNN on <code>F_ctx</code> only. The student note describes an identity skip, a depthwise residual, and a 1×1 that starts at zero, so the predictor starts as the identity. A 2D sine-cosine position embedding is added inside the residual. A Bernoulli mask with probability 0.5 drops cells on the 16×16 grid (cells, not tubelets). The masked input is the mask times (<code>F_ctx</code> + position). The prediction is <code>F_ctx</code> plus a 1×1 of a depthwise block on that masked input. Visible cells still pass through the <code>F_ctx</code> skip. Masked cells have to be filled by the predictor. This is the student note’s own predictor. It is not V-JEPA’s predictor, and it is not the pair-CF shrink. M1 has no 3-way auxiliary classifier and no second branch on the most recent four frames. Those belong to other variants.
+        </li>
+        <li>
+          <span class="lbl">What the loss reads</span>
+          Decoder logits exist. The M1 loss uses probabilities <code>Hhat_1s</code>, not those logits. Peak class uses the parent cuts: SAFE below 0.25, THREAT below 0.60, otherwise STOP.
+        </li>
+      </ol>
+
+      <h3>Data and optimization</h3>
+      <dl class="spec">
+        <dt>Caches</dt>
+        <dd>RGB: <span class="src">model_trial_3_temp/shared_rgb_cache_256_v1/</span> (letterbox 256). Parent targets: <span class="src">parent_target_cache_v2</span> with <code>F_dec</code> and <code>H_teacher</code>.</dd>
+        <dt>Splits</dt>
+        <dd>22,680 train / 5,120 selection / 5,120 test. Test is never loaded for training or for checkpoint choice. Labels are group-mean <code>gt_1s</code>. Sampling is shuffle with batch 8. Class-balanced sampling is not used.</dd>
+        <dt>Optimizer</dt>
+        <dd>AdamW. Encoder and predictor at 3e-4. Projection at 1e-4. Weight decay 1e-4. A separate AdamW for the decoder uses 3e-4 times the multiplier below. Cosine schedule, 5 warmup epochs, minimum learning rate 1e-6 on the student. Gradient clip 1.0. AMP bfloat16 on GPU. CPU eval is float32. 30 epochs.</dd>
+      </dl>
+
+      <h3>Decoder unfreeze</h3>
+      <p>The decoder starts as the Pair-CF init and is held fixed, then released on a small multiplier. The base decoder learning rate is 3e-4 times this multiplier.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>Decoder learning-rate multiplier from the student note. Epochs are 1-based as printed there.</caption>
+          <thead>
+            <tr><th scope="col">Epochs</th><th scope="col">Multiplier</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>1–8</td><td>0 (frozen, <code>requires_grad</code> false)</td></tr>
+            <tr><td>9–10</td><td>0.001</td></tr>
+            <tr><td>11–12</td><td>0.002</td></tr>
+            <tr><td>13–14</td><td>0.005</td></tr>
+            <tr><td>15–16</td><td>0.01</td></tr>
+            <tr><td>17–20</td><td>0.02</td></tr>
+            <tr><td>21–25</td><td>0.03</td></tr>
+            <tr><td>26–30</td><td>0.05</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>The official point is epoch 10. The decoder has then been unfrozen for two epochs at multiplier 0.001, which is learning rate 3×10<sup>−7</sup>. Measured drift against the Pair-CF decoder is RMS 8.2×10<sup>−5</sup>. The init hash must be <code>77f78c8714667617</code>. The note does not say the epoch-10 hash is still that string. Training the decoder on through epoch 30 raises SAFE and the feature cosine a little and drops STOP recall to 0.52, which is why the official file is the early unfreeze point.</p>
+
+      <h3>Selection metrics at epoch 10</h3>
+      <p>Selection set only, <em>n</em> = 5120. The ranking rule is SAFE at least 0.85, then higher STOP recall, then higher STOP precision. The published recalls and precision are SAFE recall 0.868, STOP recall 0.611, STOP precision 0.537. SAFE recall 0.868 clears 0.85. STOP recall 0.611 is below both 0.60 and 0.70. The note says the joint gates “SAFE ≥ 0.82 and STOP ≥ 0.70” and “SAFE ≥ 0.85 and STOP ≥ 0.60” are not met, and that later variants M2–M9 did not beat this STOP recall at SAFE ≥ 0.85.</p>
+      <div class="table-wrap">
+        <table>
+          <caption>Confusion counts from the student note. Rows are ground truth. Columns in the same class order match the published SAFE recall, STOP recall, and STOP precision.</caption>
+          <thead>
+            <tr><th scope="col">Ground truth</th><th scope="col">Pred SAFE</th><th scope="col">Pred THREAT</th><th scope="col">Pred STOP</th></tr>
+          </thead>
+          <tbody>
+            <tr><th scope="row">SAFE</th><td>3119</td><td>153</td><td>322</td></tr>
+            <tr><th scope="row">THREAT</th><td>376</td><td>71</td><td>161</td></tr>
+            <tr><th scope="row">STOP</th><td>310</td><td>47</td><td>561</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <caption>Other selection numbers printed with the epoch-10 checkpoint.</caption>
+          <thead>
+            <tr><th scope="col">Metric</th><th scope="col">Value</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>THREAT recall</td><td>0.117</td></tr>
+            <tr><td>Balanced (SAFE + STOP) / 2</td><td>0.739</td></tr>
+            <tr><td>Pre-fork STOP</td><td>0.545</td></tr>
+            <tr><td>Post-fork STOP</td><td>0.720</td></tr>
+            <tr><td>GT-STOP peak, 10th percentile</td><td>0.012</td></tr>
+            <tr><td>Collapse (GT-STOP peak &lt; 0.25)</td><td>0.338</td></tr>
+            <tr><td><code>F</code> cosine versus parent</td><td>0.810</td></tr>
+            <tr><td>Ground-truth heatmap MSE</td><td>0.035</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>THREAT recall is the weak class: many caution maps are predicted SAFE or STOP. The note’s remaining failure modes are amplitude on true STOP (collapse 0.338, 10th percentile 0.012), pre-fork STOP at 0.545, and a weaker right side than left or center.</p>
+
+      <div class="note">
+        <strong>Street-video checkpoints named student_lat.</strong>
+        Those clips use this same architecture family: a small (2+1)D encoder and the Pair-CF decoder. Their checkpoint is epoch 37. The official M1 file is epoch 10. The two checkpoints are different weights.
+      </div>
+    </section>
+
+    <section id="losses">
+      <h2>Losses</h2>
+      <p>Each teacher has its own sum. In the parent note, <code>L_task</code> names that note’s one-second sum. In the student note, <code>L_task</code> names the student’s heatmap sum. The one-second section below is the sum <code>TeacherLoss</code> actually trains. False-positive, direction, and background terms appear in both teachers with outer weights 0.10, 0.05, and 0.02. Each formula is written under its own system.</p>
+      <p class="jump"><a href="#loss-four">Four-map loss</a><a href="#loss-one">One-second loss</a><a href="#loss-stu">Student loss</a></p>
+
+      <h3 id="loss-four">Four-map teacher</h3>
+      <p class="src">README.md and FILE_GUIDE.txt. Coefficients from the root config.</p>
+      <div class="eq-stack" aria-label="Four-map total loss">
+        <p class="eq-total">Total loss</p>
+        <div class="eq-row">
+          <span class="op">=</span>
+          <div>
+            <span class="term">future loss</span>
+            <span class="eq-sub">future loss = 0.50 × (1 second map) + 0.30 × (1.5 second map) + 0.20 × (2 second map)</span>
+            <span class="mean">Compares each future map with its label. A high value means a future map is wrong.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.25</span> × now-map loss</span>
+            <span class="mean">Compares the now map with the now label. A high value means the now map is wrong.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.20</span> × delta loss</span>
+            <span class="mean">Compares the predicted change with the gap from the stopped now map to the future label. A high value means that change is wrong.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.10</span> × false-positive loss</span>
+            <span class="mean">Looks at cells the label calls empty. A high value means the prediction painted danger above 0.10.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.05</span> × direction loss</span>
+            <span class="mean">Compares the predicted side with the labeled side when the label peak is above 0.42. A high value means the side is wrong.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.02</span> × background loss</span>
+            <span class="mean">Compares the two <code>Z_t</code> vectors on backgrounds that share a threat. A high value means those vectors point apart.</span>
+          </div>
+        </div>
+      </div>
+      <p><span class="src">FILE_GUIDE.txt</span> adds a detail the one-line form compresses. For each future horizon the map term, the delta term, the false-positive term, and the direction term are computed under that horizon’s mask, then multiplied by 0.50, 0.30, or 0.20. The now term is outside those horizon weights, and it is never dropped by the ambiguity mask. A horizon whose mask is on is skipped. Under <code>mean_target</code>, a rewritten future has its mask cleared, so it is trained on the averaged map. If a whole batch is masked, the weighted map term returns 0.</p>
+
+      <article class="loss four">
+        <header class="loss-h">
+          <h4>Map loss inside the now map and each future map</h4>
+          <span class="badge">0.25 × now</span>
+        </header>
+        <p class="src">Called L_now, L_1s, L_1.5s, and L_2s. Inside the future loss the same map rule is scaled by 0.50, 0.30, and 0.20.</p>
+        <ul class="flines">
+          <li>Weighted mean squared error of (prediction − target).</li>
+          <li>Cell weight = 0.05 + 4 × (target value)², then divided by the mean of those cell weights.</li>
+          <li>Row weights from top to bottom: 0.8, 0.9, 1.0, 1.1, 1.2, normalized so the mean is 1.</li>
+        </ul>
+        <p class="does">This compares a predicted danger value with the target value. A high value means the cell is wrong, with a harder pull where the target is already dangerous and on nearer rows. Weights come from the target map, so predicting zeros does not hide a cell.</p>
+      </article>
+
+      <article class="loss four">
+        <header class="loss-h">
+          <h4>Delta loss</h4>
+          <span class="badge">0.20 ×</span>
+        </header>
+        <p class="src">Called L_Δ. Mix coefficient delta_residual_mix = 0.5. Each future horizon’s copy is also scaled by 0.50, 0.30, or 0.20.</p>
+        <ul class="flines">
+          <li>Target change = future label minus the stopped now prediction, then clamped into −1 to 1.</li>
+          <li>Compare the predicted delta with that target using the same weighted squared error.</li>
+          <li>Mix in an extra penalty on the size of the residual. The guide names the 0.5 mix and does not expand it into a second line.</li>
+        </ul>
+        <p class="does">This compares the horizon’s delta with how the future label differs from the stopped now map. A high value means that change does not match.</p>
+      </article>
+
+      <article class="loss four">
+        <header class="loss-h">
+          <h4>False-positive loss</h4>
+          <span class="badge">0.10 ×</span>
+        </header>
+        <p class="src">Called L_FP. Each future horizon’s copy is also scaled by 0.50, 0.30, or 0.20.</p>
+        <ul class="flines">
+          <li>On cells whose target is below 0.05, square how far the prediction sits above 0.10.</li>
+          <li>A prediction at or below 0.10 adds nothing on that cell.</li>
+        </ul>
+        <p class="does">This compares an almost-empty target cell with the prediction. A high value means danger was painted on a cell the label calls empty, once the prediction rises above 0.10.</p>
+      </article>
+
+      <article class="loss four">
+        <header class="loss-h">
+          <h4>Direction loss</h4>
+          <span class="badge">0.05 ×</span>
+        </header>
+        <p class="src">Called L_dir. The root notes name a temperature and do not print its value. Same per-horizon scales as the map term.</p>
+        <ul class="flines">
+          <li>A side score is the temperature times the log-sum-exp of (row-weighted cells divided by that temperature).</li>
+          <li>Softmax over left (columns 0–1), center (column 2), and right (columns 3–4).</li>
+          <li>Cross-entropy against the ground-truth side, only when the ground-truth peak is above 0.42.</li>
+        </ul>
+        <p class="does">This compares the predicted side of the scene with the labeled side. A high value means the mass is on the wrong side, even if the exact cells are a little off. Windows whose target peak is 0.42 or below stay out.</p>
+      </article>
+
+      <article class="loss four">
+        <header class="loss-h">
+          <h4>Background loss</h4>
+          <span class="badge">0.02 ×</span>
+        </header>
+        <p class="src">Called L_bg. Zero when no mate is in the pair buffer.</p>
+        <ul class="flines">
+          <li>Over the 25 cells, average (1 − cosine of the two 32-d vectors).</li>
+        </ul>
+        <p class="does">This compares <code>Z_t</code> on two backgrounds whose heatmaps agree. A high value means the same threat landed far apart. An empty buffer contributes 0.</p>
+      </article>
+
+      <h3 id="loss-one">One-second teacher</h3>
+      <p class="src">Pair-CF treatment, seed 1337, heads.mode direct_h1s. Sum: TeacherLoss.__call__ in collision_jepa3/losses/composite.py. Counterfactual add and buffer cosine: PhaseTrainer._forward_loss in collision_jepa3/training/trainer.py. scripts/04_train_teacher.py loads configs/default.yaml, then submit_pair_cf_treatment_s1337.sh writes the overrides named below.</p>
+      <p>The map term is BCE-with-logits on the pooled 5×5 logits <code>Hhat_1s_logits</code>. <code>HeatmapDecoder.forward_with_logits</code> max-pools the 16×16 decoder logits to 5×5 because <code>adapter.heatmap_pool</code> is max. Hinges, false positives, direction, and the close head use probabilities <code>Hhat_1s</code> or <code>Hhat_close</code>. The sample mask is true where <code>amb_1s</code> is false. That mask enters the cell weights, the blob keep-mask, both hinges, the false-positive cells, the direction samples, and the close head.</p>
+      <p>Taken from the yaml, with no launch override: blob weight 0.35 (<code>loss.blob_bce_weight</code>), false-positive weight 0.10, direction weight 0.05, background weight 0.02, appear multiplier 8, occupied-cell weight 2 when the label is above 0.1, disappear multiplier 1.0 (skipped by the code), shrink scale <code>pair_cf_lambda</code> 1.0, <code>pair_cf_pair_frac</code> 0.5, and <code>pair_cf_grad_scale</code> 0.10. The launch script sets STOP hinge weight 1.0, SAFE hinge weight 0.5, close weight 1.0, and the small-blob multiplier 2.0. The yaml defaults of those four are 0, 0, 0, and 1. A small-blob multiplier of 1 makes <code>_small_blob_w</code> add no extra factor. The launch script also passes pair fraction 0.5 and grad scale 0.10, the same numbers as the yaml.</p>
+      <div class="eq-stack" aria-label="One-second training loss">
+        <p class="eq-total">Training total</p>
+        <div class="eq-row">
+          <span class="op">=</span>
+          <div>
+            <span class="term"><span class="wnum">1</span> × cell BCE</span>
+            <span class="mean">Compares each pooled 5×5 logit with the 1 second label <code>h_1s</code>. A high value means a cell logit is wrong, with extra pull on appear cells and on a small STOP blob.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.35</span> × blob loss</span>
+            <span class="mean">Compares a 3×3 max of those logits with a 3×3 max of the label, on neighborhoods whose pooled label is at least 0.5. A high value means the true cell and its neighbors stayed low.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">1.0</span> × STOP hinge</span>
+            <span class="mean">On unmasked windows whose label peak is at least 0.60, penalizes how far the predicted peak sits below 0.65. A high value means that peak stayed below 0.65.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.5</span> × SAFE hinge</span>
+            <span class="mean">On unmasked windows whose label peak is below 0.25, penalizes how far the predicted peak sits above 0.25. A high value means a safe window was scored too hot.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">1.0</span> × close loss</span>
+            <span class="mean">Compares the sigmoid of a 1×1 on <code>Z_t</code> with the approaching map at the anchor plus 30 frames. A high value means that side head missed on an occupied auxiliary cell.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.10</span> × false-positive loss</span>
+            <span class="mean">On label cells below 0.05, squares how far the probability sits above 0.10. A high value means an empty cell was too hot.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.05</span> × direction loss</span>
+            <span class="mean">Compares soft left, center, and right scores of the probability map with the label, when the label’s largest side score is at least 0.25. A high value means the side profile disagrees.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.02</span> × background loss</span>
+            <span class="mean">Compares <code>Z_t</code> with a detached earlier mate on the clean forward. A high value means those 32-d cell directions differ. The term is 0 when the buffer has no mate, and the shrunk-token copy does not add it.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term">beta × ramp × the same TeacherLoss sum on shrunk tokens</span>
+            <span class="eq-sub">That copy is the cell, blob, STOP, SAFE, close, false-positive, and direction terms after <code>apply_pair_counterfactual_shrink</code> with scale 1.0. Its own background term is 0. Ramp is 0, 0.25, 0.50, 0.75, 1.0 at epochs 0, 1, 2, 3, and 4 onward. At full ramp, beta is set so this extra gradient is about 10% of the clean adapter-and-decoder gradient.</span>
+            <span class="mean">Repeats the occupancy sum after the loaded pair-difference subspace is shrunk out of the Giant tokens. A high value means the 1 second map is hard to explain from the remaining channels.</span>
+          </div>
+        </div>
+      </div>
+      <div class="note">
+        <p><code>TeacherLoss</code> stores the hinges as <code>L_stop_hinge</code> and <code>L_safe_hinge</code>, from <code>stop_peak_hinge</code> and <code>safe_peak_hinge</code>, because <code>loss.logit_hinges</code> stays false. <span class="src">docs/parent_pair_cf_model.md</span> calls them <code>L_stop</code> and <code>L_safe</code>.</p>
+        <p><code>soft_bce_logits</code> divides by the weight sum after lifting that sum to at least 1e-6, and returns 0 when the sample mask is empty. The note writes the denominator as the weight sum plus epsilon.</p>
+        <p>The note places the background cosine inside <code>L_task</code> and copies that whole sum onto the shrunk tokens. <code>TeacherLoss.__call__</code> sets <code>L_bg</code> to 0 because <code>z_bg_pair</code> is not passed, and <code>_forward_loss</code> never passes it. <code>_bg_pair_tensor</code> adds the buffer cosine on the clean forward after the counterfactual term.</p>
+        <p>The note says the mate is used when the 1 second maps agree. <code>background_pair_valid</code> in <span class="src">collision_jepa3/data/pairing.py</span> requires every in-range horizon map (1 s, 1.5 s, and 2 s) to have maximum cell absolute difference at most <code>sampling.background_target_tolerance</code>, which is 0.001 in the yaml, and the two clips must share outcome, scenario group, and background pair id.</p>
+        <p>The note lists the ramp as off, then 0.25, 0.50, 0.75, then 1.0, and leaves the later epochs unnamed. <code>pair_cf_ramp_strength</code> in <span class="src">collision_jepa3/training/bg_regularization.py</span> sets epoch 0 to 0, epoch 1 to 0.25, epoch 2 to 0.50, epoch 3 to 0.75, and epoch 4 onward to 1.0.</p>
+        <p>The note writes beta as 0.10 divided by the median of the counterfactual gradient size over the clean gradient size. <code>calibrate_beta_pair_counterfactual</code> divides <code>pair_cf_grad_scale</code> 0.10 by the median of g_cf / (g_clean + 1e-8). Each g is the L2 norm of adapter and heatmap-decoder gradients from <code>adapter_trainable_grad_norm</code>. Batches with g_clean at or below 1e-8 are skipped. With no ratios left, beta is 0.10.</p>
+      </div>
+      <p>Weights left at 0 in the yaml, so those terms add 0: <code>beta_nll_weight</code>, <code>evidential_weight</code>, <code>prob_stop_weight</code>, <code>prob_safe_weight</code>, and <code>var_weight</code>. <code>direct_h1s</code> builds the 1 s map, the close head, and the evidence head. The launch command leaves clean-anchor dropout, targeted dropout, random dropout, and pair-consistency off, so there is no <code>L_drop</code> and no <code>L_bg_pair</code>. <code>TeacherLoss</code> has no VICReg term.</p>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>Cell BCE</h4>
+          <span class="badge">1 ×</span>
+        </header>
+        <p class="src">Called L_1s. Function soft_bce_logits. Weight 1 is hardcoded in TeacherLoss.</p>
+        <ul class="flines">
+          <li>BCE-with-logits between <code>Hhat_1s_logits</code> <code>[B, 5, 5]</code> and <code>h_1s</code>, clamped into 0 to 1.</li>
+          <li>Cell weight = (2 if <code>h_1s</code> is above 0.1, else 1) × appear weight × small-blob weight × sample mask. The 2 and the 0.1 are yaml <code>bce_pos_weight</code> and <code>bce_pos_threshold</code>.</li>
+          <li>Appear weight, from <code>appear_cell_weight</code>, is 8 when the now label <code>h_now</code> is below 0.1 and <code>h_1s</code> is at least 0.5, else 1. The 8 is yaml <code>bce_appear_weight</code>. The batch always carries <code>h_now</code>.</li>
+          <li>Small-blob weight, from <code>small_blob_cell_weight</code>, is 2 on cells with <code>h_1s</code> at least 0.5 when the peak of <code>h_1s</code> is at least 0.60 and the count of those cells is 1, 2, 3, or 4. The 2.0 is the launch flag <code>--small-blob-weight</code>. Other cells stay at 1. <code>small_blob_max_cells</code> is 4 in the yaml.</li>
+          <li>The term is the sum of (weight × BCE), divided by the weight sum after that sum is lifted to at least 1e-6. An empty sample mask returns 0.</li>
+          <li>Yaml <code>bce_disappear_weight</code> is 1.0, so <code>_disappear_w</code> adds no extra factor. The sample mask is true when <code>amb_1s</code> is false.</li>
+        </ul>
+        <p class="does">This compares each pooled logit with the 1 second label. A high value means the logit is wrong, with extra pull where the now label is below 0.1 and the future label is at least 0.5, and on a small STOP blob.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>Blob loss</h4>
+          <span class="badge">0.35 ×</span>
+        </header>
+        <p class="src">Called L_blob. Function blob_bce_logits. The 0.35 is yaml loss.blob_bce_weight.</p>
+        <ul class="flines">
+          <li>3×3 max-pool, stride 1, pad 1 (<code>maxpool3x3</code>), on <code>Hhat_1s_logits</code> and on <code>h_1s</code>.</li>
+          <li>Keep neighborhoods whose pooled label is at least 0.5 (<code>blob_occupied_threshold</code>) and whose sample mask is true.</li>
+          <li>Mean BCE-with-logits on those kept cells. An empty keep-mask returns 0.</li>
+        </ul>
+        <p class="does">This compares a neighborhood of the pooled logits with the neighborhood of the label. A high value means neither the true cell nor a neighbor scored high. Empty neighborhoods stay out of the mean.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>STOP hinge</h4>
+          <span class="badge">1.0 ×</span>
+        </header>
+        <p class="src">Stored as L_stop_hinge. Function stop_peak_hinge, called from TeacherLoss._stop_hinge. The 1.0 is the launch flag --stop-hinge-weight. The yaml default 0 would make _stop_hinge return 0.</p>
+        <ul class="flines">
+          <li>Peaks are the max of <code>Hhat_1s</code> and the max of <code>h_1s</code> over the 5×5.</li>
+          <li>Keep windows whose label peak is at least 0.60 (<code>loss.stop_hinge_threshold</code>) and whose sample mask is true.</li>
+          <li>The target peak is 0.65. <code>stop_hinge_target</code> is null in the yaml, so the code uses threshold 0.60 plus <code>stop_hinge_margin</code> 0.05.</li>
+          <li>The term is the mean of relu(0.65 − predicted peak) on those windows. An empty set returns 0.</li>
+        </ul>
+        <p class="does">This compares the predicted probability peak with 0.65 on unmasked STOP windows. A high value means that peak stayed below 0.65. Windows whose label peak is below 0.60 stay out.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>SAFE hinge</h4>
+          <span class="badge">0.5 ×</span>
+        </header>
+        <p class="src">Stored as L_safe_hinge. Function safe_peak_hinge, called from TeacherLoss._safe_hinge. The 0.5 is the launch flag --safe-hinge-weight. The yaml default 0 would make _safe_hinge return 0.</p>
+        <ul class="flines">
+          <li>Keep windows whose label peak is below 0.25 (<code>loss.safe_hinge_threshold</code>) and whose sample mask is true.</li>
+          <li><code>safe_hinge_margin</code> is 0 in the yaml, so the cap is 0.25.</li>
+          <li>The term is the mean of relu(predicted peak − 0.25) on those windows. An empty set returns 0.</li>
+        </ul>
+        <p class="does">This compares the predicted probability peak with 0.25 on unmasked SAFE windows. A high value means that peak climbed to 0.25 or above. Windows whose label peak is 0.25 or higher stay out.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>Close-head loss</h4>
+          <span class="badge">1.0 ×</span>
+        </header>
+        <p class="src">Called L_close. Function TeacherLoss._close, which calls soft_bce on probabilities. The 1.0 is the launch flag --close-weight. The yaml default 0 skips the term and skips loading the closing maps.</p>
+        <ul class="flines">
+          <li><code>Hhat_close</code> is the sigmoid of a 1×1 convolution on <code>Z_t</code>, shape <code>[B, 5, 5]</code>.</li>
+          <li>The target <code>h_close</code> and the multiplier <code>close_mask</code> are the approaching map and the occupancy map at the anchor plus 30 frames, the first entry of <code>horizons_frames</code>.</li>
+          <li>Inside <code>_close</code>, the positive threshold is 0.5 and the positive weight is 2.0, both hardcoded. A cell with <code>h_close</code> above 0.5 gets ×2, then the weight is multiplied by <code>close_mask</code> and by the sample mask.</li>
+          <li>The term is the same weighted mean as <code>soft_bce</code>. Cells with <code>close_mask</code> 0 drop out of the sum.</li>
+        </ul>
+        <p class="does">This compares the side head on <code>Z_t</code> with the auxiliary approaching map. A high value means that head missed, with extra weight where the approaching target is above 0.5. Students do not use this head.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>False-positive loss</h4>
+          <span class="badge">0.10 ×</span>
+        </header>
+        <p class="src">Called L_FP. Function false_positive_penalty. The 0.10 weight is yaml loss.false_positive_weight.</p>
+        <ul class="flines">
+          <li>Keep cells whose <code>h_1s</code> is below 0.05 (<code>loss.safe_cell_threshold</code>) and whose sample mask is true.</li>
+          <li>Mean of relu(<code>Hhat_1s</code> − 0.10) squared. The 0.10 margin is yaml <code>loss.false_positive_margin</code>.</li>
+          <li>An empty keep-mask returns 0.</li>
+        </ul>
+        <p class="does">This compares an empty cell with a free margin of 0.10 on the probability map. A high value means the probability rose above that margin.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>Direction loss</h4>
+          <span class="badge">0.05 ×</span>
+        </header>
+        <p class="src">Called L_dir. Function direction_alignment_loss. The 0.05 is yaml loss.direction_weight. Temperature 0.08 is yaml loss.direction_temperature.</p>
+        <ul class="flines">
+          <li>Row weights are yaml <code>adapter.row_weights</code> 1, 1, 1, 1, 1. The code divides by their mean, which leaves them at 1, then multiplies the probability map by those weights.</li>
+          <li>Left score = 0.08 × the log of the sum of exp(row-weighted cell / 0.08) over columns 0 and 1. Those columns are yaml <code>evaluation.left_cols</code>.</li>
+          <li>Center uses column 2 (<code>evaluation.center_cols</code>). Right uses columns 3 and 4 (<code>evaluation.right_cols</code>).</li>
+          <li>Smooth-L1 between the prediction’s three scores and the label’s three scores.</li>
+          <li>Only samples whose largest label side score is at least 0.25 (<code>loss.direction_threat_threshold</code>) and whose sample mask is true. An empty set returns 0.</li>
+        </ul>
+        <p class="does">This compares the left, center, and right soft scores of <code>Hhat_1s</code> with the same scores of <code>h_1s</code>. A high value means the side profile disagrees. The gate is the side-score max, at this teacher’s 0.25 line.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>Background loss</h4>
+          <span class="badge">0.02 ×</span>
+        </header>
+        <p class="src">Called L_bg. Inside TeacherLoss the value is 0. The cosine that is trained is background_consistency_loss, added by PhaseTrainer._bg_pair_tensor. The 0.02 is yaml loss.background_consistency_weight. This cosine is separate from the pair-difference shrink.</p>
+        <ul class="flines">
+          <li><code>Z_t</code> is <code>[B, 32, 5, 5]</code>. The term is the mean of (1 − cosine) of the 32-d vectors, over the 5×5 cells of pairs that found a mate.</li>
+          <li>The mate is a detached earlier <code>Z_t</code> in <code>PairBuffer</code>, keyed by background pair id and anchor, and it must be a different clip.</li>
+          <li>The lookup runs only where <code>bg_pair_valid</code> is true. That flag is <code>background_pair_valid</code>: different clip, same outcome, same scenario group, same background pair id, at least one horizon in range, and every in-range horizon heatmap agrees with maximum cell absolute difference at most 0.001.</li>
+          <li>The trainer adds 0.02 times this cosine on the clean forward, after the counterfactual term. No mate in the buffer leaves the term at 0. The shrunk-token forward does not call <code>_bg_pair_tensor</code>.</li>
+        </ul>
+        <p class="does">This compares the current <code>Z_t</code> with a detached mate from an earlier step. A high value means those cell directions differ.</p>
+      </article>
+
+      <article class="loss one">
+        <header class="loss-h">
+          <h4>Pair-CF copy of the TeacherLoss sum</h4>
+          <span class="badge">beta × ramp</span>
+        </header>
+        <p class="src">Added in PhaseTrainer._forward_loss. Shrink function apply_pair_counterfactual_shrink. Beta function calibrate_beta_pair_counterfactual. The subspace file is reports/pair_background_counterfactual/subspace/learned_k16.npz, the yaml default and the path the launch script passes. pair_cf_lambda is 1.0 in the yaml.</p>
+        <ul class="flines">
+          <li>The add runs when background regularization is on, the pair-counterfactual flag is on, <code>U</code> is loaded, the ramp is above 0, beta is above 0, and <code>_pair_cf_pair_pick</code> is true.</li>
+          <li>The pick requires <code>bg_reg_paired</code>, a non-empty <code>background_pair_id</code>, and a first SHA-256 byte below 128 for the string <code>epoch|background_pair_id[0]|pair_cf_aux</code>. One decision covers the batch.</li>
+          <li>Ramp, from <code>pair_cf_ramp_strength</code>: epoch 0 is 0, epoch 1 is 0.25, epoch 2 is 0.50, epoch 3 is 0.75, and epoch 4 onward is 1.0.</li>
+          <li>Shrunk tokens replace <code>batch["tokens"]</code>. Labels, including <code>h_1s</code> and <code>amb_1s</code>, stay as they are. The copied value is <code>TeacherLoss.total</code> on that batch, so it includes the cell, blob, STOP, SAFE, close, false-positive, and direction terms, and its <code>L_bg</code> is 0.</li>
+          <li>The weight is beta × ramp. When beta is still unset, epoch 1 (<code>pair_cf_calibrate_epoch</code>) sets it from up to 100 hash-accepted pair batches (<code>pair_cf_calibrate_batches</code>). The value is 0.10 / median(g_cf / (g_clean + 1e-8)). At ramp 1 that targets about 10% of the clean adapter-and-decoder gradient. A resumed checkpoint keeps a stored beta. While beta is unset, this add stays off.</li>
+        </ul>
+        <p class="does">This repeats the occupancy sum after the pair-difference subspace is shrunk in the Giant tokens. A high value means the 1 second map is hard to explain from the channels that remain.</p>
+      </article>
+
+      <h3 id="loss-stu">Student M1</h3>
+      <p class="src">docs/student_m1_model.md. M1 does not use the parent’s BCE, the ×8 appear weight, the blob term, the STOP and SAFE hinges, or the PCA shrink. Decoder logits are unused. Spatial weights are built and then set uniformly to 1 in this run, because the energy, appear, and stop boosts are all 0.</p>
+      <div class="eq-stack" aria-label="Student total loss">
+        <p class="eq-total">Total = latent loss + task loss + 0.01 × decoder-anchor loss</p>
+        <div class="eq-row">
+          <span class="op">=</span>
+          <div>
+            <span class="term"><span class="wnum">1</span> × feature loss</span>
+            <span class="eq-sub">Latent loss = 1 × feature loss + 0.2 × cosine loss + 0.5 × masked-predictor loss + 0.2 × spatial-Gram loss</span>
+            <span class="mean">Compares whitened student F with detached whitened parent F_dec. A high value means the amplitudes disagree.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.2</span> × cosine loss</span>
+            <span class="mean">Compares each cell’s 128-direction with the parent’s direction. A high value means a cell points away. Scale is ignored.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.5</span> × masked-predictor loss</span>
+            <span class="mean">Compares a fill-in of half-masked F_ctx with the whitened parent map. A high value means the hidden cells were not recovered.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.2</span> × spatial-Gram loss</span>
+            <span class="mean">Compares which of the 256 cells light up together. A high value means that pattern differs from the parent.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.8</span> × heatmap loss</span>
+            <span class="eq-sub">Task loss = 0.8 × heatmap loss + 0.6 × STOP-floor loss + 0.4 × distillation loss</span>
+            <span class="mean">Compares Hhat_1s with the 1 second label using Smooth-L1. A high value means the heatmap is wrong, especially on occupied cells.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.6</span> × STOP-floor loss</span>
+            <span class="mean">If the ground truth says STOP, penalize how far the peak sits below 0.70. A high value means a true STOP window stayed too low.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.4</span> × distillation loss</span>
+            <span class="mean">Compares the student map with H_teacher when the parent’s class already matches the label. A high value means those maps differ.</span>
+          </div>
+        </div>
+        <div class="eq-row">
+          <span class="op">+</span>
+          <div>
+            <span class="term"><span class="wnum">0.01</span> × decoder-anchor loss</span>
+            <span class="mean">Compares decoder weights with the Pair-CF initialization. A high value means those weights walked away.</span>
+          </div>
+        </div>
+      </div>
+      <p>Whitening, shared by the feature term and the masked term, uses the cached per-channel mean and scale of parent <code>F_dec</code>, shaped <code>[128, 1, 1]</code>. Whitened value = (feature − mean) / (scale + 10<sup>−6</sup>).</p>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Feature loss, whitened absolute error</h4>
+          <span class="badge">1 ×</span>
+        </header>
+        <p class="src">Called L_feat. Coefficient 1 inside the latent loss. Parent features are detached.</p>
+        <ul class="flines">
+          <li>At each cell, average the absolute difference over the 128 whitened channels.</li>
+          <li>Then average over space. In this run the spatial weight is 1.</li>
+        </ul>
+        <p class="does">This compares the whitened student map with the whitened parent map. A high value means the amplitudes disagree, without letting a few high-variance channels dominate.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Cosine loss, per cell</h4>
+          <span class="badge">0.2 ×</span>
+        </header>
+        <p class="src">Called L_cos. Unwhitened features.</p>
+        <ul class="flines">
+          <li>At each spatial site, normalize the student’s 128-vector and the parent’s 128-vector to unit length.</li>
+          <li>Cell cost = 1 − their dot product.</li>
+          <li>The term is the weighted mean of those costs.</li>
+        </ul>
+        <p class="does">This compares the direction of each 128-vector with the parent’s direction. A high value means a cell points away from the parent. Scale is ignored.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Masked-predictor loss</h4>
+          <span class="badge">0.5 ×</span>
+        </header>
+        <p class="src">Called L_mgd.</p>
+        <ul class="flines">
+          <li>Mask each of the 16×16 cells with probability 0.5.</li>
+          <li>Predict a completed map from the masked F_ctx.</li>
+          <li>Same whitened weighted absolute error as the feature loss. The target is the whitened parent map.</li>
+        </ul>
+        <p class="does">This compares the predictor’s fill-in with the parent map. A high value means a half-hidden <code>F_ctx</code> was not completed. The heatmap decoder does not use this predictor.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Spatial-Gram loss</h4>
+          <span class="badge">0.2 ×</span>
+        </header>
+        <p class="src">Called L_rel. The student note says this Gram is not the parent’s pair-difference PCA.</p>
+        <ul class="flines">
+          <li>Flatten 16×16 into 256 locations.</li>
+          <li>L2-normalize each location across the 128 channels.</li>
+          <li>Form the 256×256 Gram of pairwise dots between locations. The note writes that matrix as P transpose times P.</li>
+          <li>Mean squared error between the student Gram and the parent Gram.</li>
+        </ul>
+        <p class="does">This compares which cells light up together. A high value means that co-activation pattern differs from the parent.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Heatmap loss, occupied Smooth-L1</h4>
+          <span class="badge">0.8 ×</span>
+        </header>
+        <p class="src">Called L_h. Inside the task loss. Smooth-L1 beta = 0.05. Occupied means the label is at least 0.25.</p>
+        <ul class="flines">
+          <li>Let o be 1 on occupied cells and 0 otherwise.</li>
+          <li>Cell weight = 0.12 × (1 − o) + 4 × o × (0.5 + the label clipped into 0 to 1).</li>
+          <li>The term is the mean of cell weight × Smooth-L1 between the prediction and the label.</li>
+        </ul>
+        <p class="does">This compares <code>Hhat_1s</code> with the 1 second label. A high value means the heatmap is wrong. Empty cells get a small pull. Occupied cells, especially high STOP values, get a much larger pull. It is Smooth-L1, not BCE.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>STOP-floor loss</h4>
+          <span class="badge">0.6 ×</span>
+        </header>
+        <p class="src">Called L_floor. Only samples whose label peak is at least 0.60. If the batch has no STOP sample, the term is 0.</p>
+        <ul class="flines">
+          <li>If the ground truth says STOP, penalize how far the predicted peak sits below 0.70.</li>
+          <li>Average that penalty over the ground-truth STOP samples.</li>
+        </ul>
+        <p class="does">A high value means a true STOP window stayed under 0.70. There is no matching SAFE hinge. The parent’s STOP hinge used 0.65. This floor uses 0.70.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Distillation loss</h4>
+          <span class="badge">0.4 ×</span>
+        </header>
+        <p class="src">Called L_kd. Selective parent heatmap.</p>
+        <ul class="flines">
+          <li>Keep a sample only when the parent’s warning class equals the label’s class.</li>
+          <li>Sum of (sample weight × L1 distance between the student map and H_teacher), divided by (the sum of sample weights × 25).</li>
+        </ul>
+        <p class="does">This compares the student heatmap with <code>H_teacher</code> on windows where the parent’s class is already the right class. A high value means those maps differ. A parent false STOP is left out.</p>
+      </article>
+
+      <article class="loss stu">
+        <header class="loss-h">
+          <h4>Decoder-anchor loss</h4>
+          <span class="badge">0.01 ×</span>
+        </header>
+        <p class="src">Called L_dec_reg. The anchor is the Pair-CF decoder initialization.</p>
+        <ul class="flines">
+          <li>For each parameter tensor, take the mean of (current value − initial value) squared.</li>
+          <li>Then take the mean of those tensor means.</li>
+        </ul>
+        <p class="does">This compares decoder weights with the copied initialization. A high value means the weights walked away. The tiny steps at epochs 9 and 10 still fit under it. The note says this is a per-tensor mean, not one global root-mean-square.</p>
+      </article>
+
+      <p>At official epoch 10 the note’s training means are about feature 0.462, cosine 0.173, masked predictor 0.463, spatial Gram 0.053, heatmap 0.030, STOP floor 0.016, distillation 0.028, and decoder anchor about 10<sup>−8</sup>. The note describes the weighted latent sum as about 0.75 and the total as about 0.78, with the task terms a small add-on. There is no EMA mix and no pair-CF PCA in this loss.</p>
+    </section>
+
+    <section id="differ">
+      <h2>How they differ</h2>
+      <p>Read each column as its own system. A shared camera setup does not make the weights, the heads, or the warning cuts interchangeable.</p>
+
+      <h3>What runs at inference</h3>
+      <figure>
+        <div class="infer">
+          <article class="four">
+            <h4>Four-map teacher</h4>
+            <ol>
+              <li>16 letterboxed RGB frames.</li>
+              <li>V-JEPA 2 Giant. Phase-B checkpoints also carry LoRA on the last 6 blocks. Base Giant weights stay frozen.</li>
+              <li>Adapter to <code>Z_t</code> <code>[B, 32, 5, 5]</code>.</li>
+              <li>Now decoder, plus three residual delta heads.</li>
+              <li>Four maps, each <code>[B, 5, 5]</code>: now, 1 s, 1.5 s, 2 s.</li>
+              <li>Warning from the row-weighted peak: ≥ 0.70 STOP, ≥ 0.42 CAUTION, otherwise SAFE.</li>
+            </ol>
+          </article>
+          <article class="one">
+            <h4>One-second teacher</h4>
+            <ol>
+              <li>16 letterboxed RGB frames, or cached Giant tokens.</li>
+              <li>Frozen Giant when the tokens are not cached. No LoRA in this treatment.</li>
+              <li>Spatial projection, 4 temporal blocks, softmax pool, <code>F_dec</code> <code>[B, 128, 16, 16]</code>.</li>
+              <li>Decoder to one map, <code>Hhat_1s</code> <code>[B, 5, 5]</code>.</li>
+              <li>Warning from the peak: below 0.25 SAFE, below 0.60 THREAT, otherwise STOP.</li>
+              <li><code>Z_t</code> stays a side branch. The pair-CF shrink is a training auxiliary on paired batches. The warning is the peak of <code>Hhat_1s</code>.</li>
+            </ol>
+          </article>
+          <article class="stu">
+            <h4>Student M1</h4>
+            <ol>
+              <li>16 letterboxed RGB frames. No Giant.</li>
+              <li>(2+1)D CNN to <code>F_ctx</code> <code>[B, 128, 16, 16]</code>.</li>
+              <li>1×1 to <code>F</code>, then the copied decoder.</li>
+              <li>One map, <code>Hhat_1s</code> <code>[B, 5, 5]</code>.</li>
+              <li>Same warning cuts as the parent: 0.25 and 0.60.</li>
+              <li>The masked predictor, the latent loss, and distillation are training paths. The warning does not go through the predictor.</li>
+            </ol>
+          </article>
+        </div>
+        <figcaption>The forward pass ignores labels. Outcome differences enter through the targets used in training, not through an input switch.</figcaption>
+      </figure>
+
+      <div class="table-wrap">
+        <table>
+          <caption>Three systems documented in this folder.</caption>
+          <thead>
+            <tr>
+              <th scope="col"></th>
+              <th scope="col">Four-map teacher</th>
+              <th scope="col">One-second teacher</th>
+              <th scope="col">Student M1</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">Name in the notes</th>
+              <td>CollisionTeacher3</td>
+              <td>Pair-CF parent, treatment s1337</td>
+              <td>M1, <code>m1_stop_floor</code></td>
+            </tr>
+            <tr>
+              <th scope="row">Source</th>
+              <td>README, MODEL_DATAFLOW, FILE_GUIDE, PREPROCESSING_PIPELINE</td>
+              <td>docs/parent_pair_cf_model.md</td>
+              <td>docs/student_m1_model.md</td>
+            </tr>
+            <tr>
+              <th scope="row">Predicts</th>
+              <td>Now, 1 s, 1.5 s, 2 s</td>
+              <td>1 s only (<code>direct_h1s</code>)</td>
+              <td>1 s only</td>
+            </tr>
+            <tr>
+              <th scope="row">Encoder</th>
+              <td>V-JEPA 2 Giant, C = 1408, tokens <code>[B, 2048, 1408]</code>. Large is the documented fallback.</td>
+              <td>Same Giant id, frozen, tokens often cached. No LoRA.</td>
+              <td>Small (2+1)D CNN. No Giant.</td>
+            </tr>
+            <tr>
+              <th scope="row">Time mix</th>
+              <td>2 blocks, dilation 1, mean concatenated with last</td>
+              <td>4 blocks, dilations 1, 2, 1, 2, softmax pool</td>
+              <td>Softmax pool plus a last-frame gate</td>
+            </tr>
+            <tr>
+              <th scope="row">Heatmap reads</th>
+              <td><code>Z_t</code> <code>[B, 32, 5, 5]</code></td>
+              <td><code>F_dec</code> <code>[B, 128, 16, 16]</code></td>
+              <td><code>F</code> <code>[B, 128, 16, 16]</code>, after an identity 1×1</td>
+            </tr>
+            <tr>
+              <th scope="row">Future head</th>
+              <td>Copy of stopped <code>Hhat_now</code> plus a tanh delta</td>
+              <td>Decoder output is <code>Hhat_1s</code></td>
+              <td>Copied parent decoder</td>
+            </tr>
+            <tr>
+              <th scope="row">Decoder</th>
+              <td>32 to 48 to 48 to 1 on the 5×5 grid, sigmoid. A separate tanh head makes each delta.</td>
+              <td>128 to 48 to 48 to 48 to 1 on 16×16, dilation 2, max-pool to 5×5, sigmoid. 47,809 parameters. Hash <code>77f78c8714667617</code>.</td>
+              <td>That same decoder. Init hash must match. Epoch-10 RMS drift 8.2×10<sup>−5</sup>.</td>
+            </tr>
+            <tr>
+              <th scope="row">Extra path</th>
+              <td>Three residual predictors on <code>Z_t</code></td>
+              <td>Close head on <code>Z_t</code>. Evidence head off. PCA shrink on Giant tokens, k = 16.</td>
+              <td>Masked predictor on <code>F_ctx</code> only</td>
+            </tr>
+            <tr>
+              <th scope="row">Parameters trained</th>
+              <td>Adapter, decoder, predictors, delta heads. Then LoRA A and B.</td>
+              <td>Adapter, decoder, and the auxiliary shrink path. Giant frozen.</td>
+              <td>980,171 total, with the decoder frozen for epochs 1–8</td>
+            </tr>
+            <tr>
+              <th scope="row">Optimizer</th>
+              <td>AdamW. Phase A 1e-3 for 8 epochs. Phase B: heads 2e-4, LoRA 1e-4, for 10 epochs. Warmup 1 epoch, cosine to 1e-6.</td>
+              <td>AdamW 3e-4, cosine, 5 warmup epochs, clip 1.0, max 28,350 steps.</td>
+              <td>AdamW 3e-4 on encoder and predictor, 1e-4 on the 1×1, weight decay 1e-4. Decoder multiplier schedule. 30 epochs, batch 8. Official epoch is 10.</td>
+            </tr>
+            <tr>
+              <th scope="row">Loss family</th>
+              <td>Weighted squared error on four maps, plus delta, false positive, direction, background.</td>
+              <td>BCE and neighborhood BCE, STOP and SAFE hinges, close, false positive, direction, background, plus a second task sum on shrunk tokens.</td>
+              <td>Whitened absolute error, cosine, masked predictor, spatial Gram, Smooth-L1, STOP floor, selective heatmap L1, decoder anchor.</td>
+            </tr>
+            <tr>
+              <th scope="row">Warning from peak</th>
+              <td>≥ 0.70 STOP, ≥ 0.42 CAUTION, else SAFE</td>
+              <td>&lt; 0.25 SAFE, &lt; 0.60 THREAT, else STOP</td>
+              <td>Same 0.25 / 0.60 cuts as the parent</td>
+            </tr>
+            <tr>
+              <th scope="row">Row wording</th>
+              <td>Row 0 far/top, row 4 near/feet</td>
+              <td>“near→far”, index not stated</td>
+              <td>Not restated</td>
+            </tr>
+            <tr>
+              <th scope="row">Checkpoint named</th>
+              <td><span class="src">teacher_phase_a_last.pt</span>, <span class="src">teacher_phase_a_best.pt</span>, <span class="src">teacher_phase_b_last.pt</span>, <span class="src">teacher_phase_b_best.pt</span></td>
+              <td><span class="src">pair_cf_treatment_s1337/teacher_phase_a_best.pt</span></td>
+              <td><span class="src">checkpoint_epoch_10.pt</span></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>What the student is built to match</h3>
+      <p>The student is trained against the one-second parent. Cached targets are that parent’s <code>F_dec</code> and <code>H_teacher</code>, plus the group-mean 1 s label. The decoder weights start as that parent’s decoder. The latent loss is most of the training signal at epoch 10. The STOP floor, the Smooth-L1, and the selective heatmap term are the smaller task add-on.</p>
+      <p>CollisionTeacher3 remains the four-horizon model in the root notes, with its own mean-and-last adapter, its own copy-residual heads, its own weighted squared-error loss, and its own 0.70 / 0.42 warning rule. Its phase-B LoRA run is part of that teacher. It is not the parent checkpoint the student copies.</p>
+      <p>Street-video files under the student_lat name are the same architecture family and a different weight file: epoch 37, not <span class="src">checkpoint_epoch_10.pt</span>.</p>
+    </section>
+
+    <footer>
+      <p>Sources for this page: <span class="src">README.md</span>, <span class="src">MODEL_DATAFLOW.txt</span>, <span class="src">FILE_GUIDE.txt</span>, <span class="src">PREPROCESSING_PIPELINE.txt</span>, <span class="src">docs/parent_pair_cf_model.md</span>, <span class="src">docs/student_m1_model.md</span>. The softmax pool is written from <span class="src">collision_jepa3/models/spatial_adapter.py</span>. The inverted residual and the student’s last-frame gate are written from <span class="src">student_model/encoder.py</span>. The one-second loss is written from <code>TeacherLoss</code> in <span class="src">collision_jepa3/losses/composite.py</span> and from <code>PhaseTrainer._forward_loss</code> in <span class="src">collision_jepa3/training/trainer.py</span>.</p>
+    </footer>
+  </main>
+</div>
+<script>
+(function () {
+  var KEY = "architecture-explainer-theme";
+  var root = document.documentElement;
+  var lightBtn = document.querySelector('[data-theme-set="light"]');
+  var darkBtn = document.querySelector('[data-theme-set="dark"]');
+
+  function savedTheme() {
+    try {
+      var stored = localStorage.getItem(KEY);
+      if (stored === "dark" || stored === "light") return stored;
+    } catch (e) {}
+    return null;
+  }
+
+  function systemTheme() {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+
+  function applyTheme(theme, persist) {
+    root.classList.toggle("dark", theme === "dark");
+    if (lightBtn) lightBtn.setAttribute("aria-pressed", theme === "light" ? "true" : "false");
+    if (darkBtn) darkBtn.setAttribute("aria-pressed", theme === "dark" ? "true" : "false");
+    if (persist) {
+      try { localStorage.setItem(KEY, theme); } catch (e) {}
+    }
+  }
+
+  applyTheme(savedTheme() || systemTheme(), false);
+  if (lightBtn) lightBtn.addEventListener("click", function () { applyTheme("light", true); });
+  if (darkBtn) darkBtn.addEventListener("click", function () { applyTheme("dark", true); });
+
+  var media = window.matchMedia("(prefers-color-scheme: dark)");
+  function onSystemChange() {
+    if (!savedTheme()) applyTheme(systemTheme(), false);
+  }
+  if (media.addEventListener) media.addEventListener("change", onSystemChange);
+  else if (media.addListener) media.addListener(onSystemChange);
+})();
+
+(function () {
+  var links = Array.prototype.slice.call(document.querySelectorAll('nav a[href^="#"]'));
+  var sections = links.map(function (link) {
+    return { link: link, el: document.getElementById(link.getAttribute("href").slice(1)) };
+  }).filter(function (item) { return item.el; });
+
+  function mark() {
+    var y = window.scrollY + 96;
+    var current = sections[0];
+    sections.forEach(function (item) {
+      if (item.el.offsetTop <= y) current = item;
+    });
+    sections.forEach(function (item) { item.link.removeAttribute("aria-current"); });
+    if (current) current.link.setAttribute("aria-current", "true");
+  }
+
+  document.addEventListener("scroll", mark, { passive: true });
+  window.addEventListener("resize", mark);
+  mark();
+})();
+</script>
+</body>
+</html>
