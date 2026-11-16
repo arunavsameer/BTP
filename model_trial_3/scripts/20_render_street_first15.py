@@ -202,6 +202,7 @@ def main() -> None:
     parser.add_argument("--start", type=float, default=0.0)
     parser.add_argument("--duration", type=float, default=DURATION_SEC)
     parser.add_argument("--max-frames", type=int, default=0, help="debug: stop after N decoded frames")
+    parser.add_argument("--tag", default="", help="overlay label tag (default: checkpoint stem)")
     args = parser.parse_args()
 
     cfg = load_cfg(args)
@@ -209,7 +210,9 @@ def main() -> None:
     if str(device).startswith("cuda") and not torch.cuda.is_available():
         device = "cpu"
         print("cuda unavailable; using cpu", flush=True)
-    model = load_teacher(cfg, Path(args.checkpoint), device, args.hf_cache)
+    ckpt_path = Path(args.checkpoint)
+    model = load_teacher(cfg, ckpt_path, device, args.hf_cache)
+    tag = args.tag or ckpt_path.stem
     size = int(cfg.get("preprocessing.input_size", 256))
     out_path = Path(args.out)
     if not out_path.is_absolute():
@@ -238,7 +241,7 @@ def main() -> None:
             peak = float(hm.max())
             peak_all = max(peak_all, peak)
             n_pred += 1
-            label = f"first15min  t={idx}  teacher ep08 H+1s  peak {peak:.2f}"
+            label = f"first15min  t={idx}  {tag} H+1s  peak {peak:.2f}  STOP>=0.60 red"
             canvas = compose_binary(rgb, hm, size, label)
             writer.stdin.write(np.ascontiguousarray(canvas, dtype=np.uint8).tobytes())
         pending_clips.clear()
