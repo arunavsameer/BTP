@@ -62,6 +62,7 @@ impl3_FOMO/cache/
 *.npy
 *.npz
 **/checkpoints/
+**/ckpts/
 **/cache/
 **/hf_cache/
 **/*_cache/
