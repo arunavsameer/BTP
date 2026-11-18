@@ -83,7 +83,14 @@ from scenario_compose import (
     scenario_request_from_tokens,
 )
 from outcome_groups import iter_clips, link_or_copy_prefix
-from pair_pack import ensure_pair_empty_dirs, iter_pair_clips
+from pair_pack import (
+    ensure_pair_empty_dirs,
+    iter_pair_clips,
+    load_pair_freeze,
+    migrate_pair_pack_crowd,
+    pairs_index_globs,
+    upgrade_pair_plan,
+)
 from world_generator import (
     SUNKEN_CLASSES,
     WIND_LABELS,
@@ -2208,10 +2215,19 @@ def run_pair_plan(
 ) -> int:
     """Render the rotating pair pack. No groups prefix concat-copy.
 
-    World+ego are built once per sample. The miss clip only changes actor
-    lateral (parallel_person / static_shape). Crowd files sit at the sample
-    root. ``bg_01`` is mkdir-only.
+    World+ego are built once per (sample, background). The miss clip only
+    changes actor lateral (parallel_person / static_shape). Crowd clips
+    live under ``bg_YY/``. Finished clips (preview + overlay) are skipped.
     """
+    upgrade_pair_plan(plan, n_bg=int(plan.get("n_bg") or 2))
+    n_moved = migrate_pair_pack_crowd(out_root)
+    if n_moved:
+        print(f"[pairs] moved {n_moved} crowd sample(s) into bg_00/")
+    plan_out = out_root / "plan.json"
+    try:
+        plan_out.write_text(json.dumps(plan, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    except OSError:
+        pass
     clips = list(iter_pair_clips(plan))
     if not clips:
         print("[pairs] plan has no clips", file=sys.stderr)
@@ -2261,10 +2277,10 @@ def run_pair_plan(
         cam_obj = None
 
     for clip in clips:
-        key = (clip["family"], clip["sample_id"])
+        key = (clip["family"], clip["sample_id"], str(clip.get("bg_id") or "bg_00"))
         sample_dir = out_root / str(clip["sample_dir"])
         rel = str(clip.get("relpath") or "")
-        ep_dir = sample_dir if (clip.get("files_layout") == "flat" or not rel) else (sample_dir / rel)
+        ep_dir = sample_dir if not rel else (sample_dir / rel)
         outcome = str(clip["outcome"])
         video_name = str(cfg["output"].get("video_name", "preview.mp4"))
         video_path = ep_dir / video_name
@@ -2295,7 +2311,7 @@ def run_pair_plan(
             continue
 
         sample_dir.mkdir(parents=True, exist_ok=True)
-        if clip.get("files_layout") != "flat":
+        if str(clip.get("files_layout") or "") not in ("flat", "bg_only"):
             ensure_pair_empty_dirs(sample_dir, str(clip.get("miss_side") or "miss_left"))
         ep_dir.mkdir(parents=True, exist_ok=True)
         print(
@@ -2311,6 +2327,7 @@ def run_pair_plan(
                     shutil.rmtree(leftover, ignore_errors=True)
             rgb_dirs_to_drop = []
             current_key = key
+            freeze = load_pair_freeze(sample_dir, clip)
             scene_cfg = copy.deepcopy(cfg)
             scene_rng = random.Random(int(clip["scene_seed"]))
             apply_camera_fov(
@@ -2336,54 +2353,95 @@ def run_pair_plan(
             names = pick_scenarios(
                 random.Random(int(clip["scene_seed"]) + 3), scene_cfg, clip["scenario"],
             )
-            gen = WorldGenerator(scene_cfg, random.Random(int(clip["scene_seed"])))
-            gen.pair_outcome = "collision"
-            gen.pair_miss_side = str(clip.get("miss_side") or "")
-            gen.prepare_biome(str(args.biome), names=names)
-            gen.prepare_scenario(names)
-            clear_bound_caches()
-            state = gen.build()
-            cam_obj = gen.create_camera()
-            cam_rng = random.Random(int(clip["scene_seed"]) + 17)
-            ego_rng = random.Random(int(clip["scene_seed"]) + 23)
-            requested_mode = str(getattr(args, "ego_mode", "auto") or "auto").strip().lower()
-            if requested_mode in ("", "auto", "random"):
-                requested_mode = "walk"
-            if any(n in CROSS_EGO_SCENARIOS for n in names):
-                requested_mode = "crosswalk"
-            if requested_mode == "seated":
-                requested_mode = "walk"
-            profile = choose_ego_profile(
-                {**scene_cfg, "ego": {**scene_cfg["ego"], "mode_weights": {requested_mode: 1.0}}},
-                ego_rng,
-                episode_seconds=n_frames / float(fps),
-            )
-            rig = CameraRig(
-                cam_obj=cam_obj,
-                spline=state.road,
-                cfg=scene_cfg,
-                rng=cam_rng,
-                walk_speed=0.0 if profile.stationary else state.walk_speed,
-                lateral=state.sidewalk_lateral,
-                profile=profile,
-                lateral_limit=state.corridor.lateral_limit(0.30, True),
-            )
-            handlers = gen._scenario_handlers()
-            missing = [n for n in names if n not in handlers]
-            if missing:
-                print(
-                    f"  [pairs] injector {missing!r} not registered "
-                    f"(sibling hook) — empty street this sample"
+
+            def _pair_world(*, pair_visuals: bool, pin: dict):
+                if pair_visuals:
+                    bg_seed = int(clip.get("bg_seed") or clip["scene_seed"])
+                    world = WorldGenerator(
+                        scene_cfg, random.Random(int(clip["scene_seed"])),
+                        bg_rng=random.Random(bg_seed),
+                    )
+                    world.pair_mode = True
+                    world.bg_lighting = str(clip.get("bg_lighting") or "")
+                    if pin.get("walk_speed") is not None:
+                        world.pinned_walk_speed = float(pin["walk_speed"])
+                else:
+                    world = WorldGenerator(scene_cfg, random.Random(int(clip["scene_seed"])))
+                world.pair_outcome = "collision"
+                world.pair_miss_side = str(clip.get("miss_side") or "")
+                kin = pin.get("pair_kinematics")
+                if isinstance(kin, dict) and kin:
+                    world._parallel_person_pair_spec = dict(kin)
+                shp = pin.get("static_shape_pair")
+                if isinstance(shp, dict) and shp:
+                    world._static_shape_pair_spec = dict(shp)
+                crowd_spec = pin.get("crowd_people")
+                if isinstance(crowd_spec, list) and crowd_spec:
+                    world._crowd_pair_spec = list(crowd_spec)
+                world.prepare_biome(str(args.biome), names=names)
+                world.prepare_scenario(names)
+                clear_bound_caches()
+                st = world.build()
+                cam = world.create_camera()
+                cam_rng = random.Random(int(clip["scene_seed"]) + 17)
+                ego_rng = random.Random(int(clip["scene_seed"]) + 23)
+                requested_mode = str(getattr(args, "ego_mode", "auto") or "auto").strip().lower()
+                if requested_mode in ("", "auto", "random"):
+                    requested_mode = "walk"
+                if any(n in CROSS_EGO_SCENARIOS for n in names):
+                    requested_mode = "crosswalk"
+                if requested_mode == "seated":
+                    requested_mode = "walk"
+                prof = choose_ego_profile(
+                    {**scene_cfg, "ego": {**scene_cfg["ego"], "mode_weights": {requested_mode: 1.0}}},
+                    ego_rng,
+                    episode_seconds=n_frames / float(fps),
                 )
-            else:
-                gen.inject_scenarios(names, rig)
-            gen.place_ego_props(rig)
-            gen.freeze()
-            gen.snapshot_actors()
+                rig = CameraRig(
+                    cam_obj=cam,
+                    spline=st.road,
+                    cfg=scene_cfg,
+                    rng=cam_rng,
+                    walk_speed=0.0 if prof.stationary else st.walk_speed,
+                    lateral=st.sidewalk_lateral,
+                    profile=prof,
+                    lateral_limit=st.corridor.lateral_limit(0.30, True),
+                )
+                handlers = world._scenario_handlers()
+                missing = [n for n in names if n not in handlers]
+                if missing:
+                    print(
+                        f"  [pairs] injector {missing!r} not registered "
+                        f"(sibling hook) — empty street this sample"
+                    )
+                else:
+                    world.inject_scenarios(names, rig)
+                world.place_ego_props(rig)
+                world.freeze()
+                world.snapshot_actors()
+                return world, st, cam, prof
+
+            crowd_need = (
+                str(clip.get("files_layout") or "") in ("flat", "bg_only")
+                and not (freeze.get("crowd_people") or [])
+            )
+            if crowd_need:
+                print("  [pairs] harvesting crowd trajectories from scene_seed world")
+                h_gen, h_state, h_cam, h_prof = _pair_world(pair_visuals=False, pin={})
+                freeze = dict(freeze)
+                freeze["crowd_people"] = list(h_gen._crowd_pair_spec or [])
+                freeze["walk_speed"] = float(h_state.walk_speed)
+                if h_state is not None:
+                    freed = release_episode(h_state)
+                    clear_bound_caches()
+                    print(f"  harvest cleanup: purged {freed} datablock(s)")
+                h_gen = h_state = h_cam = h_prof = None
+
+            gen, state, cam_obj, profile = _pair_world(pair_visuals=True, pin=freeze)
             print(
                 f"  biome={gen.biome}  ego={profile.mode}  "
                 f"eye={profile.eye_height:.2f}m  walk={state.walk_speed:.2f}m/s  "
-                f"light={state.environment.get('lighting')}/"
+                f"bg={clip.get('bg_id')} light={state.environment.get('lighting')}/"
                 f"{state.environment.get('weather')}"
             )
 
@@ -2538,6 +2596,8 @@ def run_pair_plan(
             if is_parallel_person_pair(clip["scenario"]) else None,
             "static_shape_pair": dict(getattr(gen, "_static_shape_pair_spec", None) or {})
             if is_static_shape_pair(clip["scenario"]) else None,
+            "crowd_people": list(getattr(gen, "_crowd_pair_spec", None) or [])
+            if str(clip.get("files_layout") or "") in ("flat", "bg_only") else None,
             "environment": state.environment,
             "label_histogram": dict(label_hist),
             "render": do_render,
@@ -2586,7 +2646,7 @@ def run_pair_plan(
     for sample in plan.get("samples") or []:
         sdir = out_root / str(sample["dir"])
         sdir.mkdir(parents=True, exist_ok=True)
-        if str(sample.get("files_layout") or "") != "flat":
+        if str(sample.get("files_layout") or "") not in ("flat", "bg_only"):
             ensure_pair_empty_dirs(sdir, str(sample.get("miss_side") or "miss_left"))
         _write_json(
             sdir / "pair.json",
@@ -2612,11 +2672,8 @@ def run_pair_plan(
             "n_clips": len(clips),
             "rotation": plan.get("rotation"),
             "prefix_cache": False,
-            "train_glob": (
-                "{parallel_person,static_shape}/sample_*/"
-                "{collision,miss_left,miss_right}/bg_00/preview.mp4"
-            ),
-            "crowd_glob": "crowd/sample_*/preview.mp4",
+            "train_glob": pairs_index_globs()["train_glob"],
+            "crowd_glob": pairs_index_globs()["crowd_glob"],
             "clips": index_rows,
         },
     )
@@ -2652,7 +2709,7 @@ def main() -> int:
         print("pair_pool (sibling --pairs; not in --scenario auto / --groups):")
         for name in sc.get("pair_pool") or ():
             print(f"  {name}")
-        print("crowd_pool (sibling --pairs; files at sample root):")
+        print("crowd_pool (sibling --pairs; files under sample/bg_YY):")
         for name in sc.get("crowd_pool") or ():
             print(f"  {name}")
         print(f"total={len(all_scenario_names(cfg))}")

@@ -1111,16 +1111,16 @@ def pair_shares_rgb_prefix(name: str) -> bool:
 
 
 def pair_clip_relpath(scenario: str, outcome: str, bg_id: str) -> str:
-    """Clip path under ``sample_XXXX_<name>/``. Crowd files sit at that root."""
-    if is_crowd_pack_scenario(scenario):
-        return ""
-    out = str(outcome or "collision").strip() or "collision"
+    """Clip path under ``sample_XXXX_<name>/``. Crowd is ``bg_YY/`` only."""
     bg = str(bg_id or PAIR_RENDER_BG_ID).strip() or PAIR_RENDER_BG_ID
+    if is_crowd_pack_scenario(scenario):
+        return bg
+    out = str(outcome or "collision").strip() or "collision"
     return f"{out}/{bg}"
 
 
 def crowd_pack_relpath() -> str:
-    """Crowd files live in the sample folder: no ``collision/``, no ``bg_YY``."""
+    """Crowd sample folder; clips live in ``bg_YY/`` underneath."""
     return ""
 
 
@@ -1130,13 +1130,9 @@ class PairsCrowdClip:
 
     Layout (user-confirmed)::
 
-        crowd/sample_XXXX_<scenario>/preview.mp4
-        …/spatial_overlay.mp4
-        …/annotations/
-        …/spatial_annotations/
-        …/episode.json
-
-    No ``bg_00`` wrap, no ``collision/`` / ``miss_*``, no empty ``bg_01``.
+        crowd/sample_XXXX_<scenario>/bg_00/preview.mp4
+        …/bg_01/preview.mp4
+        (no collision/miss folders)
     """
 
     family: str
@@ -1148,7 +1144,7 @@ class PairsCrowdClip:
     frames: int
     fps: int
     injector: str
-    layout: str = "flat"
+    layout: str = "bg_only"
 
     def sample_dir(self, sample_id: int) -> str:
         slug = "".join(
@@ -1208,12 +1204,12 @@ def pairs_family_crowd(
         scenario=name,
         relpath=crowd_pack_relpath(),
         outcomes=(),
-        bg_ids=(),
+        bg_ids=(PAIR_RENDER_BG_ID, PAIR_EMPTY_BG_ID),
         duration_s=span,
         frames=frames,
         fps=fps_i,
         injector="_inject_crowd",
-        layout="flat",
+        layout="bg_only",
     )
 
 
@@ -1232,7 +1228,7 @@ def pairs_crowd_clip(
 
 
 def static_shape_pair_relpaths(miss_side: str) -> dict[str, str | tuple[str, ...]]:
-    """Confirmed pair-pack folders. Files only in ``bg_00``; ``bg_01`` is empty mkdir."""
+    """Pair-pack folders. ``empty`` is the second-bg mkdir set (now rendered)."""
     miss = "miss_left" if "left" in str(miss_side or "") else "miss_right"
     return {
         "collision_files": f"collision/{PAIR_RENDER_BG_ID}",
@@ -2111,8 +2107,8 @@ def _self_test_crowd(live: dict, auto_mix: set[str]) -> None:
     assert "crowd" not in FORKABLE_SCENARIOS
     assert "crowd_path" not in FORKABLE_SCENARIOS
     assert "crowd" not in auto_mix and "crowd_path" not in auto_mix
-    assert pair_clip_relpath("crowd", "collision", "bg_00") == ""
-    assert pair_clip_relpath("crowd_path", "miss_left", "bg_01") == ""
+    assert pair_clip_relpath("crowd", "collision", "bg_00") == "bg_00"
+    assert pair_clip_relpath("crowd_path", "miss_left", "bg_01") == "bg_01"
     assert crowd_pack_relpath() == ""
     assert pair_shares_rgb_prefix("crowd") is False
     clip = pairs_family_crowd(random.Random(3), index=4)
@@ -2120,8 +2116,8 @@ def _self_test_crowd(live: dict, auto_mix: set[str]) -> None:
     assert clip.scenario in CROWD_PACK_SCENARIOS
     assert clip.relpath == ""
     assert clip.outcomes == ()
-    assert clip.bg_ids == ()
-    assert clip.layout == "flat"
+    assert clip.bg_ids == (PAIR_RENDER_BG_ID, PAIR_EMPTY_BG_ID)
+    assert clip.layout == "bg_only"
     assert clip.frames == 450 and clip.fps == 30
     assert clip.duration_s == 15.0
     assert clip.injector == "_inject_crowd"

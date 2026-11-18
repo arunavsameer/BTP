@@ -3,30 +3,35 @@
 A *sample index* ``i`` emits three family folders in that order so a cancel
 leaves roughly equal counts:
 
-    parallel_person/sample_XXXX_parallel_person/{collision,miss_*}/bg_00/  # files
-                                                    .../bg_01/            # empty mkdir
-    static_shape/sample_XXXX_static_shape/{collision,miss_*}/bg_00|bg_01
-    crowd/sample_XXXX_crowd/   # files here; no bg wrap, no collision/miss
+    parallel_person/sample_XXXX_parallel_person/{collision,miss_*}/bg_00|bg_01/
+    static_shape/sample_XXXX_static_shape/{collision,miss_*}/bg_00|bg_01/
+    crowd/sample_XXXX_crowd/bg_00|bg_01/   # no collision/miss
 
-``--n`` is per family. ``--bg-variants`` is fake: only ``bg_00`` is rendered;
-``bg_01`` is always created empty. One miss side per pair (50/50 left/right).
+``--n`` is per family. ``--bg-variants`` (default 2) renders K worlds.
+Motion (path, ego, primary injector) is frozen on ``scene_seed`` / stored
+``episode.json``; ``bg_YY`` reseeds atmosphere, scatter, road/tree colour,
+and clothing. One miss side per pair (50/50 left/right).
 
 Parallel-person clips share world, ego, heading, and ``v_other``. Only
 lateral changes. Pixels differ from t=0 — do **not** concat-copy a groups
-prefix. Static-shape / crowd injectors belong to the sibling workstream.
+prefix.
 
 Pure Python, no ``bpy``. ``python pair_pack.py`` runs the self-test.
 """
 
 from __future__ import annotations
 
+import json
 import math
 import random
+import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Optional, Sequence
 
 from outcome_groups import (
+    LIGHTING_SLOTS,
     MISS_SIDES,
     bg_id_for,
     pick_miss_side,
@@ -80,13 +85,138 @@ def pair_empty_bg_relpaths(miss_side: str) -> tuple[str, ...]:
 
 
 def ensure_pair_empty_dirs(sample_dir: Path, miss_side: str) -> list[Path]:
-    """mkdir the fake ``bg_01`` folders. No files."""
+    """mkdir collision/miss ``bg_YY`` folders (filled later by the renderer)."""
     made: list[Path] = []
     for rel in pair_empty_bg_relpaths(miss_side):
         path = Path(sample_dir) / str(rel)
         path.mkdir(parents=True, exist_ok=True)
         made.append(path)
     return made
+
+
+def pair_bg_seed(scene_seed: int, bg_index: int) -> int:
+    """Deterministic visual seed. Does **not** consume the plan RNG."""
+    n = (int(scene_seed) * 1_000_003 + int(bg_index) * 97_331 + 17) % (2**31 - 1)
+    return n or 1
+
+
+def _pair_backgrounds(scene_seed: int, n_bg: int = 2) -> list[dict[str, Any]]:
+    """K rendered worlds. Lighting slots cycle so adjacent bgs differ."""
+    n_bg = max(1, min(8, int(n_bg)))
+    light0 = int(scene_seed) % len(LIGHTING_SLOTS)
+    rows: list[dict[str, Any]] = []
+    for b in range(n_bg):
+        rows.append(
+            {
+                "id": bg_id_for(b),
+                "seed": pair_bg_seed(int(scene_seed), b),
+                "style": "full",
+                "lighting": LIGHTING_SLOTS[(light0 + b) % len(LIGHTING_SLOTS)],
+                "real": True,
+            }
+        )
+    return rows
+
+
+_CROWD_ROOT_KEEP = frozenset({"pair.json", "bg_00", "bg_01", "bg_02", "bg_03"})
+
+
+def migrate_crowd_sample_to_bg(sample_dir: Path) -> bool:
+    """Move flat crowd files into ``bg_00/``; mkdir ``bg_01/``. Idempotent.
+
+    Returns True if anything was moved.
+    """
+    sample_dir = Path(sample_dir)
+    if not sample_dir.is_dir():
+        return False
+    dest = sample_dir / PAIR_RENDER_BG_ID
+    dest.mkdir(parents=True, exist_ok=True)
+    (sample_dir / PAIR_EMPTY_BG_ID).mkdir(parents=True, exist_ok=True)
+    moved = False
+    for child in list(sample_dir.iterdir()):
+        if child.name in _CROWD_ROOT_KEEP:
+            continue
+        target = dest / child.name
+        if target.exists():
+            continue
+        shutil.move(str(child), str(target))
+        moved = True
+    return moved
+
+
+def migrate_pair_pack_crowd(pack_dir: Path) -> int:
+    """Restructure every ``crowd/sample_*`` that still has files at the root."""
+    root = Path(pack_dir) / "crowd"
+    if not root.is_dir():
+        return 0
+    n = 0
+    for sample_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        if migrate_crowd_sample_to_bg(sample_dir):
+            n += 1
+    return n
+
+
+def upgrade_pair_plan(plan: dict, *, n_bg: int = 2) -> dict:
+    """In-place: real ``bg_YY`` for every family. Scene seeds are unchanged."""
+    n_bg = max(1, min(8, int(n_bg)))
+    plan["n_bg"] = n_bg
+    plan["bg_real"] = PAIR_RENDER_BG_ID
+    plan.pop("bg_empty", None)
+    for sample in plan.get("samples") or []:
+        scene_seed = int(sample.get("scene_seed") or 1)
+        sample["backgrounds"] = _pair_backgrounds(scene_seed, n_bg)
+        sample["bg_real"] = PAIR_RENDER_BG_ID
+        family = str(sample.get("family") or sample.get("scenario") or "")
+        scenario = str(sample.get("scenario") or family)
+        if family == "crowd" or is_crowd_pack_scenario(scenario):
+            sample["files_layout"] = "bg_only"
+            sample["outcomes"] = ["clip"]
+            sample["miss_side"] = ""
+        else:
+            sample["files_layout"] = "outcome_bg"
+    return plan
+
+
+def upgrade_pair_plan_file(plan_path: Path, *, n_bg: int = 2) -> dict:
+    path = Path(plan_path)
+    plan = json.loads(path.read_text(encoding="utf-8"))
+    upgrade_pair_plan(plan, n_bg=n_bg)
+    path.write_text(json.dumps(plan, indent=2, ensure_ascii=True) + "\n", encoding="utf-8")
+    return plan
+
+
+def load_pair_freeze(sample_dir: Path, clip: dict) -> dict[str, Any]:
+    """Read ``episode.json`` from the sibling ``bg_00`` clip (kinematics freeze)."""
+    sample_dir = Path(sample_dir)
+    layout = str(clip.get("files_layout") or "outcome_bg")
+    candidates: list[Path] = []
+    if layout in ("flat", "bg_only") or is_crowd_pack_scenario(str(clip.get("scenario") or "")):
+        candidates.append(sample_dir / PAIR_RENDER_BG_ID / "episode.json")
+        candidates.append(sample_dir / "episode.json")
+    else:
+        candidates.append(sample_dir / "collision" / PAIR_RENDER_BG_ID / "episode.json")
+        miss = str(clip.get("miss_side") or "miss_left")
+        candidates.append(sample_dir / miss / PAIR_RENDER_BG_ID / "episode.json")
+    for path in candidates:
+        if not path.is_file():
+            continue
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return {}
+
+
+def pairs_index_globs() -> dict[str, str]:
+    return {
+        "train_glob": (
+            "{parallel_person,static_shape}/sample_*/"
+            "{collision,miss_left,miss_right}/bg_*/preview.mp4"
+        ),
+        "crowd_glob": "crowd/sample_*/bg_*/preview.mp4",
+    }
 
 
 def is_pair_family(name: str) -> bool:
@@ -447,42 +577,25 @@ def parallel_person_pair_table(
 # ---------------------------------------------------------------------------
 
 
-def _pair_backgrounds() -> list[dict[str, Any]]:
-    """Fake K=2: bg_00 is the only rendered world; bg_01 is an empty dir."""
-    return [
-        {
-            "id": PAIR_RENDER_BG_ID,
-            "seed": 0,
-            "style": "full",
-            "lighting": "",
-            "real": True,
-        },
-        {
-            "id": PAIR_EMPTY_BG_ID,
-            "seed": 0,
-            "style": "full",
-            "lighting": "",
-            "real": False,
-        },
-    ]
-
-
 def build_pair_plan(
     n: int,
     seed: int,
     cfg: dict | None = None,
     *,
     families: Sequence[str] | None = None,
+    n_bg: int = 2,
 ) -> dict:
     """Deterministic rotating recipe. Same ``(n, seed)`` ⇒ same samples.
 
     ``n`` is the count **per family**. Emission order is
     parallel, static, crowd, parallel, … so a cancel leaves ~equal counts.
+    Background seeds are derived from ``scene_seed`` (no extra plan RNG).
     """
     from config import get_config
 
     cfg = cfg or get_config()
     n = max(1, int(n))
+    n_bg = max(1, min(8, int(n_bg)))
     fams = [str(f).strip().lower() for f in (families or PAIR_FAMILIES)]
     fams = [f for f in fams if f in FAMILY_SCENARIO] or list(PAIR_FAMILIES)
     rng = random.Random(int(seed))
@@ -495,14 +608,14 @@ def build_pair_plan(
             scenario = FAMILY_SCENARIO[family]
             scene_seed = rng.randrange(1, 2**31)
             sample_rel = f"{family}/{sample_dir_name(i, scenario)}"
-            flat = family == "crowd" or is_crowd_pack_scenario(scenario)
+            crowd = family == "crowd" or is_crowd_pack_scenario(scenario)
             if family == "crowd":
                 crowd_clip = pairs_family_crowd(rng, index=i)
                 scenario = str(crowd_clip.scenario)
                 sample_rel = crowd_clip.pack_relpath(i)
-                flat = True
-            miss_side = pick_miss_side(rng) if not flat else ""
-            if not flat:
+                crowd = True
+            miss_side = pick_miss_side(rng) if not crowd else ""
+            if not crowd:
                 rng.uniform(*_MISS)
                 rng.uniform(*_CPA)
             samples.append(
@@ -512,11 +625,11 @@ def build_pair_plan(
                     "scenario": scenario,
                     "dir": sample_rel,
                     "scene_seed": scene_seed,
-                    "files_layout": "flat" if flat else "outcome_bg",
-                    "outcomes": ["clip"] if flat else ["collision", miss_side],
+                    "files_layout": "bg_only" if crowd else "outcome_bg",
+                    "outcomes": ["clip"] if crowd else ["collision", miss_side],
                     "miss_side": miss_side,
-                    "backgrounds": [] if flat else _pair_backgrounds(),
-                    "bg_real": None if flat else PAIR_RENDER_BG_ID,
+                    "backgrounds": _pair_backgrounds(scene_seed, n_bg),
+                    "bg_real": PAIR_RENDER_BG_ID,
                 }
             )
             rotation.append(family)
@@ -524,9 +637,8 @@ def build_pair_plan(
         "layout": "pairs",
         "seed": int(seed),
         "n": n,
-        "n_bg": 2,
+        "n_bg": n_bg,
         "bg_real": PAIR_RENDER_BG_ID,
-        "bg_empty": PAIR_EMPTY_BG_ID,
         "frames": frames,
         "fps": fps,
         "families": list(fams),
@@ -539,49 +651,64 @@ def build_pair_plan(
 def iter_pair_clips(plan: dict) -> Iterable[dict]:
     """Flatten the rotating sample list into renderable clips.
 
-    Empty ``bg_01`` is **not** yielded (mkdir only). Crowd is one clip at
-    the sample root. Pair families: collision/bg_00 then the one miss/bg_00.
+    Pair families: for each ``bg_YY``, collision then the one miss.
+    Crowd: one clip per ``bg_YY`` under the sample folder.
     """
+    n_bg = max(1, int(plan.get("n_bg") or 2))
     for sample in plan.get("samples") or []:
         family = str(sample.get("family") or sample.get("scenario") or "")
         scenario = str(sample.get("scenario") or family)
         layout = str(sample.get("files_layout") or "outcome_bg")
-        if layout == "flat" or is_crowd_pack_scenario(scenario):
-            yield {
-                "sample_id": int(sample["id"]),
-                "family": family,
-                "sample_dir": str(sample["dir"]),
-                "scenario": scenario,
-                "scene_seed": int(sample["scene_seed"]),
-                "files_layout": "flat",
-                "outcome": "clip",
-                "bg_id": None,
-                "bg_real": False,
-                "miss_side": "",
-                "relpath": "",
-                "prefix_relpath": None,
-            }
+        crowd = layout in ("flat", "bg_only") or is_crowd_pack_scenario(scenario)
+        bgs = list(sample.get("backgrounds") or [])
+        if not bgs:
+            bgs = _pair_backgrounds(int(sample.get("scene_seed") or 1), n_bg)
+        if crowd:
+            for bg in bgs:
+                bg_id = str(bg.get("id") or PAIR_RENDER_BG_ID)
+                yield {
+                    "sample_id": int(sample["id"]),
+                    "family": family,
+                    "sample_dir": str(sample["dir"]),
+                    "scenario": scenario,
+                    "scene_seed": int(sample["scene_seed"]),
+                    "files_layout": "bg_only",
+                    "outcome": "clip",
+                    "bg_id": bg_id,
+                    "bg_seed": int(bg.get("seed") or pair_bg_seed(int(sample["scene_seed"]), 0)),
+                    "bg_style": str(bg.get("style") or "full"),
+                    "bg_lighting": str(bg.get("lighting") or ""),
+                    "bg_real": True,
+                    "miss_side": "",
+                    "relpath": pair_clip_relpath(scenario, "clip", bg_id),
+                    "prefix_relpath": None,
+                }
             continue
         outcomes = [o for o in (sample.get("outcomes") or []) if o != "clip"]
         if not outcomes:
             outcomes = ["collision", str(sample.get("miss_side") or "miss_left")]
         ordered = ["collision"] + [o for o in outcomes if o != "collision"]
-        for outcome in ordered:
-            rel = pair_clip_relpath(scenario, str(outcome), PAIR_RENDER_BG_ID)
-            yield {
-                "sample_id": int(sample["id"]),
-                "family": family,
-                "sample_dir": str(sample["dir"]),
-                "scenario": scenario,
-                "scene_seed": int(sample["scene_seed"]),
-                "files_layout": "outcome_bg",
-                "outcome": str(outcome),
-                "bg_id": PAIR_RENDER_BG_ID,
-                "bg_real": True,
-                "miss_side": str(sample.get("miss_side") or ""),
-                "relpath": rel,
-                "prefix_relpath": None,
-            }
+        for bg in bgs:
+            bg_id = str(bg.get("id") or PAIR_RENDER_BG_ID)
+            for outcome in ordered:
+                rel = pair_clip_relpath(scenario, str(outcome), bg_id)
+                yield {
+                    "sample_id": int(sample["id"]),
+                    "family": family,
+                    "sample_dir": str(sample["dir"]),
+                    "scenario": scenario,
+                    "scene_seed": int(sample["scene_seed"]),
+                    "files_layout": "outcome_bg",
+                    "outcome": str(outcome),
+                    "bg_id": bg_id,
+                    "bg_seed": int(bg.get("seed") or pair_bg_seed(int(sample["scene_seed"]), 0)),
+                    "bg_style": str(bg.get("style") or "full"),
+                    "bg_lighting": str(bg.get("lighting") or ""),
+                    "bg_real": True,
+                    "miss_side": str(sample.get("miss_side") or ""),
+                    "relpath": rel,
+                    "prefix_relpath": None,
+                }
 
 
 def _self_test() -> None:
@@ -592,6 +719,8 @@ def _self_test() -> None:
     a = build_pair_plan(2, 21, cfg)
     b = build_pair_plan(2, 21, cfg)
     assert a["samples"] == b["samples"]
+    a4 = build_pair_plan(2, 21, cfg, n_bg=4)
+    assert [s["scene_seed"] for s in a["samples"]] == [s["scene_seed"] for s in a4["samples"]]
     assert a["layout"] == "pairs"
     assert a["n"] == 2
     assert a["rotation"] == "P,S,C,P,S,C", a["rotation"]
@@ -606,28 +735,34 @@ def _self_test() -> None:
 
     for sample in a["samples"]:
         if sample["family"] == "crowd":
-            assert sample["files_layout"] == "flat"
+            assert sample["files_layout"] == "bg_only"
             assert sample["dir"].startswith("crowd/sample_")
             assert sample["scenario"] in ("crowd", "crowd_path")
             assert sample["outcomes"] == ["clip"]
-            assert sample["backgrounds"] == []
+            assert [x["id"] for x in sample["backgrounds"]] == [
+                PAIR_RENDER_BG_ID, PAIR_EMPTY_BG_ID,
+            ]
             continue
         outs = list(sample["outcomes"])
         assert outs[0] == "collision" and len(outs) == 2, outs
         assert outs[1] in MISS_SIDES
         bgs = sample["backgrounds"]
         assert [x["id"] for x in bgs] == [PAIR_RENDER_BG_ID, PAIR_EMPTY_BG_ID]
-        assert bgs[0]["real"] is True and bgs[1]["real"] is False
+        assert bgs[0]["real"] is True and bgs[1]["real"] is True
+        assert bgs[0]["seed"] != bgs[1]["seed"]
         assert sample["dir"].startswith(sample["family"] + "/sample_")
 
     clips = list(iter_pair_clips(a))
-    assert len(clips) == 10, len(clips)
+    assert len(clips) == 20, len(clips)
     assert all(cl.get("prefix_relpath") is None for cl in clips)
     seq = [(cl["family"], cl["outcome"], cl.get("bg_id")) for cl in clips]
     assert seq[0][0] == "parallel_person" and seq[0][1] == "collision"
+    assert seq[0][2] == PAIR_RENDER_BG_ID
     assert seq[1][0] == "parallel_person" and seq[1][1] in MISS_SIDES
-    assert seq[2][0] == "static_shape"
-    assert seq[4][0] == "crowd" and seq[4][1] == "clip" and seq[4][2] is None
+    assert seq[1][2] == PAIR_RENDER_BG_ID
+    assert seq[2][0] == "parallel_person" and seq[2][1] == "collision"
+    assert seq[2][2] == PAIR_EMPTY_BG_ID
+    assert any(cl["family"] == "crowd" and cl.get("bg_id") == PAIR_EMPTY_BG_ID for cl in clips)
     fam_stream = [cl["family"] for cl in clips]
     compact: list[str] = []
     for f in fam_stream:
@@ -646,6 +781,19 @@ def _self_test() -> None:
     empty = pair_empty_bg_relpaths("miss_left")
     assert f"collision/{PAIR_EMPTY_BG_ID}" in empty
     assert f"miss_left/{PAIR_EMPTY_BG_ID}" in empty
+
+    tmp = Path(tempfile.mkdtemp(prefix="btp_crowd_mig_"))
+    sample = tmp / "crowd" / "sample_0000_crowd"
+    sample.mkdir(parents=True)
+    (sample / "preview.mp4").write_text("v", encoding="utf-8")
+    (sample / "episode.json").write_text("{}", encoding="utf-8")
+    (sample / "pair.json").write_text("{}", encoding="utf-8")
+    assert migrate_pair_pack_crowd(tmp) == 1
+    assert (sample / "bg_00" / "preview.mp4").is_file()
+    assert (sample / "bg_01").is_dir()
+    assert not (sample / "preview.mp4").exists()
+    assert (sample / "pair.json").is_file()
+    assert migrate_pair_pack_crowd(tmp) == 0
 
     print("parallel-person pair d(t)  [along-track gap, metres]")
     times = (0.0, 6.0, 12.0, 13.0, 15.0)

@@ -4023,6 +4023,8 @@ class WorldGenerator:
         self.rng = rng
         self.bg_rng = bg_rng if bg_rng is not None else rng
         self.group_mode = False
+        self.pair_mode = False
+        self.pinned_walk_speed: Optional[float] = None
         self.force_critical = False
         self.bg_style = "full"
         self.bg_lighting = ""
@@ -4046,6 +4048,7 @@ class WorldGenerator:
         self.pair_miss_side = ""
         self._static_shape_pair_spec: Optional[dict] = None
         self._parallel_person_pair_spec: Optional[dict] = None
+        self._crowd_pair_spec: Optional[list[dict]] = None
 
     # -- biome -------------------------------------------------------------
 
@@ -4130,8 +4133,16 @@ class WorldGenerator:
                 max(0, int(round(hi * k))),
             )
 
+    def _vis_rng(self) -> random.Random:
+        """Scatter / materials / clothes. Pair ``bg_YY`` uses ``bg_rng``."""
+        if self.pair_mode:
+            return self.bg_rng
+        return self.rng
+
     def _draw_walk_speed(self) -> float:
         """Stroll / walk / hurry. Seated still pins the rig to 0 downstream."""
+        if self.pinned_walk_speed is not None:
+            return float(self.pinned_walk_speed)
         g = self.cfg.get("gait") or {}
         weights = dict(g.get("pace_weights") or {})
         bands = dict(g.get("pace_speed") or {})
@@ -4229,7 +4240,8 @@ class WorldGenerator:
         wcfg = self.cfg["world"]
         dr = self.cfg["domain_randomization"]
         rng = self.rng
-        prop_rng = self.bg_rng
+        vis = self._vis_rng()
+        prop_rng = vis if self.pair_mode else self.bg_rng
         if self.group_mode:
             from outcome_groups import apply_bg_style
             apply_bg_style(self.cfg, self.bg_style)
@@ -4271,7 +4283,7 @@ class WorldGenerator:
             chaos_albedo, make_asphalt, make_concrete_tiles, make_grass, make_simple,
         )
 
-        if self.group_mode:
+        if self.group_mode or self.pair_mode:
             env_choice = choose_environment(
                 self.cfg,
                 rng,
@@ -4294,44 +4306,44 @@ class WorldGenerator:
             direction=math.radians(float(env_choice.get("wind_dir_deg", 0.0))),
             label=str(env_choice.get("wind", "breeze")),
         )
-        roughness_sw = rng.uniform(*dr["roughness"])
+        roughness_sw = vis.uniform(*dr["roughness"]) if self.pair_mode else rng.uniform(*dr["roughness"])
 
         curb_h = float(wcfg["curb_height"])
         verge_w = float(wcfg.get("verge_width", 4.5))
 
         cobble = (
             ground_kind != "grass"
-            and rng.random() < float(wcfg.get("cobble_prob", 0.0) or 0.0)
+            and vis.random() < float(wcfg.get("cobble_prob", 0.0) or 0.0)
         )
         if ground_kind == "grass":
             # Park: a gravel/dirt path on open ground, no asphalt.
             mat_road = make_concrete_tiles(
-                "path", chaos_albedo(rng, (0.42, 0.37, 0.30), chaos * 0.5, "matte"),
-                tile_m=rng.uniform(0.22, 0.55),
+                "path", chaos_albedo(vis, (0.42, 0.37, 0.30), chaos * 0.5, "matte"),
+                tile_m=vis.uniform(0.22, 0.55),
             )
         elif cobble:
             cobble_box = dr.get("cobble_color", ((0.28, 0.22, 0.18), (0.52, 0.42, 0.32)))
             mat_road = make_concrete_tiles(
                 "road_cobble",
-                chaos_albedo(rng, _rand_color(rng, cobble_box), chaos * 0.45, "matte"),
-                tile_m=rng.uniform(0.16, 0.34),
+                chaos_albedo(vis, _rand_color(vis, cobble_box), chaos * 0.45, "matte"),
+                tile_m=vis.uniform(0.16, 0.34),
             )
         else:
             mat_road = make_asphalt(
                 "road",
-                chaos_albedo(rng, _rand_color(rng, dr["road_color"]), chaos * 0.45, "matte"),
-                seed=rng.random(),
+                chaos_albedo(vis, _rand_color(vis, dr["road_color"]), chaos * 0.45, "matte"),
+                seed=vis.random(),
             )
         mat_sw = make_concrete_tiles(
             "sidewalk",
-            chaos_albedo(rng, _rand_color(rng, dr["sidewalk_color"]), chaos * 0.45, "matte"),
-            tile_m=rng.uniform(0.28, 0.85),
+            chaos_albedo(vis, _rand_color(vis, dr["sidewalk_color"]), chaos * 0.45, "matte"),
+            tile_m=vis.uniform(0.28, 0.85),
         )
-        mat_curb = make_simple("curb", chaos_albedo(rng, (0.42, 0.42, 0.40), chaos * 0.4), 0.7)
+        mat_curb = make_simple("curb", chaos_albedo(vis, (0.42, 0.42, 0.40), chaos * 0.4), 0.7)
         mat_grass = make_grass("verge", (
-            rng.uniform(0.10, 0.18),
-            rng.uniform(0.18, 0.30),
-            rng.uniform(0.06, 0.12),
+            vis.uniform(0.10, 0.18),
+            vis.uniform(0.18, 0.30),
+            vis.uniform(0.06, 0.12),
         ))
 
         _ribbon_mesh("road_surface", road, -road_half, road_half, 0.0, col_world, mat_road)
@@ -4355,7 +4367,7 @@ class WorldGenerator:
                 a, b = (inner, outer) if inner < outer else (outer, inner)
                 _ribbon_mesh(
                     f"sidewalk_{'R' if sign > 0 else 'L'}", road, a, b, curb_h,
-                    col_world, mat_sw, z_amp=slab_amp, rng=rng,
+                    col_world, mat_sw, z_amp=slab_amp, rng=vis,
                 )
                 if curb_h > 0.01:
                     _ribbon_mesh(
@@ -4426,7 +4438,7 @@ class WorldGenerator:
         if bool(env_choice.get("dappled", False)):
             self._spawn_canopy_gobo(road, road_half + sw + verge_w, col_world)
 
-        env = apply_domain_randomization(scene, self.cfg, rng, col_lights, lamp_objects, env=env_choice)
+        env = apply_domain_randomization(scene, self.cfg, vis, col_lights, lamp_objects, env=env_choice)
         env = dict(env)
         env["biome"] = self.biome
         env["chaos"] = round(chaos, 4)
@@ -5363,7 +5375,8 @@ class WorldGenerator:
         wcfg = self.cfg["world"]
         dr = self.cfg["domain_randomization"]
         n_lo, n_hi = wcfg["n_background_vehicles"]
-        n = self.rng.randint(int(n_lo), int(n_hi))
+        pop = self._vis_rng()
+        n = pop.randint(int(n_lo), int(n_hi))
         actors: list[Actor] = []
         used_s: list[float] = []
         # Opposite / far lane so D_cpa stays > 1.5 m versus the sidewalk walker.
@@ -5376,21 +5389,21 @@ class WorldGenerator:
             lane_abs = min(lane_abs, max(1.15, road_half - 1.15))
         lane = -math.copysign(lane_abs, sidewalk_lateral)
         for _ in range(n):
-            s = self.rng.uniform(4.0, max(5.0, road.length - 15.0))
+            s = pop.uniform(4.0, max(5.0, road.length - 15.0))
             if any(abs(s - u) < 8.0 for u in used_s):
                 continue
             if not self._carriage_free(s, lane, 3.4, 1.35, road_half):
                 continue
             used_s.append(s)
-            speed = self.rng.uniform(*wcfg["vehicle_speed"])
+            speed = pop.uniform(*wcfg["vehicle_speed"])
             # Half the cars travel against the path parameter (oncoming).
-            direction = self.rng.choice((-1.0, 1.0))
+            direction = pop.choice((-1.0, 1.0))
             loc = road.offset_point(s, lane, z=0.0)
             heading = heading_from_tangent(road.tangent(s) * direction)
-            color = self.rng.choice(list(dr["vehicle_palette"]))
+            color = pop.choice(list(dr["vehicle_palette"]))
             actor = spawn_vehicle(
-                loc, heading, collection, color, self.rng.uniform(*dr["roughness"]),
-                counters, self.rng, self.chaos,
+                loc, heading, collection, color, pop.uniform(*dr["roughness"]),
+                counters, pop, self.chaos,
             )
             actor.follow_spline = road
             actor.s = s
@@ -5414,25 +5427,26 @@ class WorldGenerator:
         wcfg = self.cfg["world"]
         dr = self.cfg["domain_randomization"]
         n_lo, n_hi = wcfg["n_background_pedestrians"]
-        n = self.rng.randint(int(n_lo), int(n_hi))
+        pop = self._vis_rng()
+        n = pop.randint(int(n_lo), int(n_hi))
         actors: list[Actor] = []
         for _ in range(n):
             # Opposite sidewalk, or same sidewalk but far ahead / behind.
-            if self.rng.random() < 0.55:
+            if pop.random() < 0.55:
                 lat = -sidewalk_lateral
             else:
-                lat = sidewalk_lateral + self.rng.choice((-0.55, 0.55))
-            s = self.rng.uniform(10.0, max(12.0, road.length - 8.0))
+                lat = sidewalk_lateral + pop.choice((-0.55, 0.55))
+            s = pop.uniform(10.0, max(12.0, road.length - 8.0))
             if not self._site_free(s, lat, 1.6):
                 continue
-            direction = self.rng.choice((-1.0, 1.0))
-            speed = self.rng.uniform(*wcfg["pedestrian_speed"])
+            direction = pop.choice((-1.0, 1.0))
+            speed = pop.uniform(*wcfg["pedestrian_speed"])
             loc = road.offset_point(s, lat, z=0.0)
             heading = heading_from_tangent(road.tangent(s) * direction)
-            color = self.rng.choice(list(dr["pedestrian_palette"]))
+            color = pop.choice(list(dr["pedestrian_palette"]))
             actor = spawn_pedestrian(
-                loc, heading, collection, color, self.rng.uniform(*dr["roughness"]),
-                counters, self.rng, self.chaos,
+                loc, heading, collection, color, pop.uniform(*dr["roughness"]),
+                counters, pop, self.chaos,
             )
             actor.follow_spline = road
             actor.s = s
@@ -5480,10 +5494,10 @@ class WorldGenerator:
         return actor
 
     def _palette_ped(self) -> tuple[float, float, float]:
-        return self.rng.choice(list(self.cfg["domain_randomization"]["pedestrian_palette"]))
+        return self._vis_rng().choice(list(self.cfg["domain_randomization"]["pedestrian_palette"]))
 
     def _palette_car(self) -> tuple[float, float, float]:
-        return self.rng.choice(list(self.cfg["domain_randomization"]["vehicle_palette"]))
+        return self._vis_rng().choice(list(self.cfg["domain_randomization"]["vehicle_palette"]))
 
     def _cam_sl(self, rig: Any, t: float) -> tuple[float, float]:
         """Ego (s, lateral) at time `t`, following the rig's own schedule.
@@ -5557,11 +5571,12 @@ class WorldGenerator:
         col = self.state.collections["actors"]
         loc = self.state.road.offset_point(s, lat, z=0.0)
         heading = heading_from_tangent(self.state.road.tangent(s) * heading_sign)
-        rough = self.rng.uniform(*self.cfg["domain_randomization"]["roughness"])
+        appear = self._vis_rng()
+        rough = appear.uniform(*self.cfg["domain_randomization"]["roughness"])
         if kind == "person":
             actor = spawn_pedestrian(
                 loc, heading, col, self._palette_ped(), rough,
-                self.state.counters, self.rng, self.chaos, child=child,
+                self.state.counters, appear, self.chaos, child=child,
             )
             actor.corridor_pad = 0.24 if child else 0.35
             actor.allow_sidewalk = True
@@ -5569,7 +5584,7 @@ class WorldGenerator:
         if kind == "vehicle":
             actor = spawn_vehicle(
                 loc, heading, col, self._palette_car(), 0.45,
-                self.state.counters, self.rng, self.chaos,
+                self.state.counters, appear, self.chaos,
             )
             actor.corridor_pad = 1.05
             actor.allow_sidewalk = True
@@ -5577,7 +5592,7 @@ class WorldGenerator:
         if kind == "bicycle":
             actor = spawn_bicycle(
                 loc, heading, col, self._palette_car(), rough,
-                self.state.counters, self.rng, self.chaos,
+                self.state.counters, appear, self.chaos,
             )
             actor.corridor_pad = 0.40
             actor.allow_sidewalk = True
@@ -5588,7 +5603,7 @@ class WorldGenerator:
         elif kind in ("shape", "random"):
             shape_kind = "random"
         actor = spawn_threat_shape(
-            loc, col, self.state.counters, self.rng,
+            loc, col, self.state.counters, appear,
             kind=shape_kind, size=cube_size, z=cube_z, chaos=self.chaos,
             lib=self.lib, rotation_z=rotation_z, color=color, scale=scale,
         )
@@ -6916,22 +6931,57 @@ class WorldGenerator:
         v_ego = float(self._ego_speed(rig))
         sc = self.cfg["scenarios"]
         n_lo, n_hi = sc.get("crowd_n_people", (2, 5))
-        n = self.rng.randint(int(n_lo), int(n_hi))
         min_sep = float(sc.get("crowd_min_sep_m", 0.50))
         lim = float(self.state.corridor.lateral_limit(0.35, True))
         frames = int(self.cfg["render"].get("frames_per_episode", 450) or 450)
         fps = float(self.cfg["render"].get("fps", 30) or 30)
         duration = float(frames) / max(fps, 1.0)
-        plan = crowd_people_plan(
-            v_ego, L,
-            n=n,
-            mode=mode,
-            rng=self.rng,
-            s0=float(s0),
-            corridor_lim=lim,
-            duration_s=duration,
-            min_sep_m=min_sep,
-        )
+        cached = list(self._crowd_pair_spec or [])
+        if cached:
+            from scenario_compose import CrowdPersonSpec
+
+            people = []
+            for row in cached:
+                people.append(
+                    CrowdPersonSpec(
+                        s=float(row["s"]),
+                        lat=float(row["lat"]),
+                        ds=float(row["ds"]),
+                        lat_speed=float(row.get("lat_speed") or 0.0),
+                        lat_target=row.get("lat_target"),
+                        role=str(row.get("role") or "through"),
+                        heading_sign=float(row.get("heading_sign") or 1.0),
+                    )
+                )
+
+            class _Plan:
+                people = tuple(people)
+
+            plan = _Plan()
+        else:
+            n = self.rng.randint(int(n_lo), int(n_hi))
+            plan = crowd_people_plan(
+                v_ego, L,
+                n=n,
+                mode=mode,
+                rng=self.rng,
+                s0=float(s0),
+                corridor_lim=lim,
+                duration_s=duration,
+                min_sep_m=min_sep,
+            )
+            self._crowd_pair_spec = [
+                {
+                    "s": float(p.s),
+                    "lat": float(p.lat),
+                    "ds": float(p.ds),
+                    "lat_speed": float(p.lat_speed),
+                    "lat_target": p.lat_target,
+                    "role": str(p.role),
+                    "heading_sign": float(p.heading_sign),
+                }
+                for p in plan.people
+            ]
         compose = self._compose
         self._compose = None
         spawned: list[Actor] = []

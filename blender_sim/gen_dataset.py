@@ -447,9 +447,10 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "Pair pack: --n of EACH family (parallel_person, static_shape, crowd) "
             "in rotating order P,S,C,P,S,C so a cancel leaves ~equal counts. "
-            "Pair families write collision plus one miss side under bg_00; bg_01 "
-            "is always an empty mkdir. Crowd files sit at the sample root. "
-            "Not the old 3-outcome groups pack; pixels are not prefix-cached."
+            "Pair families write collision plus one miss side under bg_00/bg_01. "
+            "Crowd writes the same clip under sample/bg_YY (no collision/miss). "
+            "Not the old 3-outcome groups pack; pixels are not prefix-cached. "
+            "Resume skips clips that already have preview+overlay."
         ),
     )
     p.add_argument(
@@ -459,9 +460,9 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         dest="bg_variants",
         metavar="K",
         help=(
-            "Background variants per sample when --groups. Default: 2. "
-            "Each variant gets a distinct time-of-day slot plus full/sparse/bare scatter. "
-            "With --pairs this flag is ignored: only bg_00 is rendered; bg_01 is empty."
+            "Background variants per sample for --groups and --pairs. Default: 2. "
+            "Each variant reseeds atmosphere/scatter/clothes; motion stays on scene_seed. "
+            "Pairs also pin injector kinematics from existing bg_00 episode.json on resume."
         ),
     )
     p.add_argument(
@@ -493,6 +494,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     p.add_argument("--dry-run", action="store_true",
                    help="Write pack.json + plan.json and print the mix; do not launch Blender.")
+    p.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Reuse datasets/<name>_s<seed>_n<N> if it already exists instead of "
+            "allocating a new folder. Finished clips are skipped."
+        ),
+    )
     p.add_argument("--self-test", action="store_true", help="Run the planner unit test and exit.")
     return p.parse_args(argv)
 
@@ -513,13 +522,17 @@ def _print_mix(plan: dict) -> None:
             letter = FAMILY_LETTER.get(str(sample.get("family") or ""), "?")
             outs = ",".join(sample.get("outcomes") or [])
             layout = sample.get("files_layout") or "outcome_bg"
-            if layout == "flat":
-                print(f"    {letter}  {sample['dir']}  flat  scenario={sample['scenario']}")
+            if layout in ("flat", "bg_only"):
+                print(
+                    f"    {letter}  {sample['dir']}  crowd  "
+                    f"scenario={sample['scenario']}  "
+                    f"bg={len(sample.get('backgrounds') or [])}"
+                )
             else:
                 miss = sample.get("miss_side") or "?"
                 print(
                     f"    {letter}  {sample['dir']}  outcomes=[{outs}]  "
-                    f"bg_00=real bg_01=empty  miss={miss}"
+                    f"bg={len(sample.get('backgrounds') or [])}  miss={miss}"
                 )
         return
     if str(plan.get("layout") or "") == "groups":
@@ -655,7 +668,7 @@ def _clip_done(
     if layout == "pairs":
         sample_dir = pack_dir / str(clip["sample_dir"])
         rel = str(clip.get("relpath") or "")
-        ep_dir = sample_dir if (clip.get("files_layout") == "flat" or not rel) else (sample_dir / rel)
+        ep_dir = (sample_dir / rel) if rel else sample_dir
     else:
         ep_dir = pack_dir / str(clip["sample_dir"]) / str(clip["relpath"])
     video_path = ep_dir / video_name
@@ -743,11 +756,7 @@ def finalize_pack_index(pack_dir: Path, plan: dict, args: argparse.Namespace) ->
             y = None if outcome == "clip" else (1 if outcome == "collision" else 0)
             sample_dir = pack_dir / str(clip["sample_dir"])
             rel = str(clip.get("relpath") or "")
-            ep_dir = (
-                sample_dir
-                if (clip.get("files_layout") == "flat" or not rel)
-                else (sample_dir / rel)
-            )
+            ep_dir = (sample_dir / rel) if rel else sample_dir
             index_rows.append(
                 {
                     "sample_id": clip["sample_id"],
@@ -769,9 +778,9 @@ def finalize_pack_index(pack_dir: Path, plan: dict, args: argparse.Namespace) ->
             "prefix_cache": False,
             "train_glob": (
                 "{parallel_person,static_shape}/sample_*/"
-                "{collision,miss_left,miss_right}/bg_00/preview.mp4"
+                "{collision,miss_left,miss_right}/bg_*/preview.mp4"
             ),
-            "crowd_glob": "crowd/sample_*/preview.mp4",
+            "crowd_glob": "crowd/sample_*/bg_*/preview.mp4",
             "clips": index_rows,
         }
         (pack_dir / "pairs_index.json").write_text(
@@ -958,7 +967,7 @@ def _self_test() -> None:
     pp = build_pair_plan(2, 21, cfg)
     assert pp["layout"] == "pairs"
     assert pp["rotation"] == "P,S,C,P,S,C"
-    assert len(list(iter_pair(pp))) == 10
+    assert len(list(iter_pair(pp))) == 20
     assert pp["prefix_cache"] is False
 
     parent = Path(tempfile.mkdtemp(prefix="btp_ds_"))
@@ -1028,7 +1037,10 @@ def main(argv: list[str] | None = None) -> int:
             args.ego_mode = "walk"
     elif bool(getattr(args, "pairs", False)):
         from pair_pack import build_pair_plan
-        plan = build_pair_plan(int(args.n), int(args.seed), cfg)
+        plan = build_pair_plan(
+            int(args.n), int(args.seed), cfg,
+            n_bg=max(1, min(8, int(args.bg_variants))),
+        )
         if str(getattr(args, "ego_mode", "auto")) in ("", "auto"):
             args.ego_mode = "walk"
     else:
@@ -1061,10 +1073,11 @@ def main(argv: list[str] | None = None) -> int:
         "note": (
             "Pair pack: --n of each family in rotating order "
             "parallel, static_shape, crowd. Collision plus one miss side "
-            "(miss_left or miss_right, 50/50 from --seed). Only bg_00 is "
-            "rendered; bg_01 is an empty mkdir. Crowd files sit at the "
-            "sample root. World+ego cached per sample; second clip only "
-            "changes actor lateral. Do not concat-copy a groups prefix."
+            "(miss_left or miss_right, 50/50 from --seed). K background "
+            "variants (bg_00, bg_01, …): same path/ego/injector kinematics, "
+            "new atmosphere/scatter/clothes. Crowd clips under sample/bg_YY. "
+            "World+ego cached per (sample, bg); miss clip only changes "
+            "actor lateral. Do not concat-copy a groups prefix."
             if bool(getattr(args, "pairs", False))
             else (
                 "Outcome groups: one threat scenario, collision plus one miss "
@@ -1087,7 +1100,21 @@ def main(argv: list[str] | None = None) -> int:
             )
         ),
     }
-    would_dir = unique_pack_dir(parent, dirname)
+    if bool(getattr(args, "resume", False)):
+        would_dir = parent / dirname
+        existing_plan = would_dir / "plan.json"
+        if existing_plan.is_file() and bool(getattr(args, "pairs", False)):
+            try:
+                disk = json.loads(existing_plan.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                disk = {}
+            if str(disk.get("layout") or "") == "pairs" and disk.get("samples"):
+                from pair_pack import upgrade_pair_plan
+
+                upgrade_pair_plan(disk, n_bg=max(1, min(8, int(args.bg_variants))))
+                plan = disk
+    else:
+        would_dir = unique_pack_dir(parent, dirname)
     extra_flags = []
     if args.no_rgb:
         extra_flags.append("no-rgb")
@@ -1116,6 +1143,12 @@ def main(argv: list[str] | None = None) -> int:
         print("[gen_dataset] dry-run; Blender not launched")
         return 0
     pack_dir = would_dir
+    if bool(getattr(args, "resume", False)) and bool(getattr(args, "pairs", False)):
+        from pair_pack import migrate_pair_pack_crowd
+
+        n_moved = migrate_pair_pack_crowd(pack_dir)
+        if n_moved:
+            print(f"[gen_dataset] moved {n_moved} crowd sample(s) into bg_00/")
     plan_path = write_pack(pack_dir, plan, extra)
     print(f"[gen_dataset] pack → {pack_dir}", flush=True)
     rc = launch_blender(plan_path, pack_dir, args)
