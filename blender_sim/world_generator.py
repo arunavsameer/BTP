@@ -6954,10 +6954,7 @@ class WorldGenerator:
                     )
                 )
 
-            class _Plan:
-                people = tuple(people)
-
-            plan = _Plan()
+            plan = type("_Plan", (), {"people": tuple(people)})()
         else:
             n = self.rng.randint(int(n_lo), int(n_hi))
             plan = crowd_people_plan(

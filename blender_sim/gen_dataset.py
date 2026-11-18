@@ -28,6 +28,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import threading
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
@@ -488,8 +489,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=None,
         metavar="J",
         help=(
-            "Concurrent Blender processes (clip shards). Pairs/groups: one sample per job; "
-            "classic plan: one episode per job. Env: BTP_JOBS. Default 1 (one GPU-safe process)."
+            "With --pipeline (default when J>1): --gpu-jobs EEVEE workers + "
+            "(J - gpu-jobs) CPU sim workers. Default gpu-jobs=1 so J=2 is "
+            "1 EEVEE + 1 CPU sim-ahead. --no-pipeline restores J full CPU+GPU "
+            "processes (EEVEE may contend). Env: BTP_JOBS. Default 1."
+        ),
+    )
+    p.add_argument(
+        "--pipeline",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "True clip pipeline: CPU sim workers bake upcoming clips while GPU "
+            "workers EEVEE finished bakes. GPU concurrency is --gpu-jobs (default 1). "
+            "Default: on when --jobs>1. --no-pipeline = old N concurrent full Blenders."
+        ),
+    )
+    p.add_argument(
+        "--gpu-jobs",
+        type=int,
+        default=None,
+        metavar="G",
+        help=(
+            "Concurrent EEVEE workers in --pipeline mode. Default 1 (safe). "
+            "Example: --jobs 4 --gpu-jobs 2 → 2 EEVEE + 2 CPU sim. "
+            "Two EEVEEs on one 8 GB GPU can OOM or run slower. Env: BTP_GPU_JOBS."
         ),
     )
     p.add_argument("--dry-run", action="store_true",
@@ -581,6 +605,25 @@ def resolve_jobs(args: argparse.Namespace) -> int:
     return max(1, int(raw))
 
 
+def resolve_pipeline(args: argparse.Namespace, jobs: int) -> bool:
+    flag = getattr(args, "pipeline", None)
+    if flag is None:
+        return jobs > 1
+    return bool(flag) and jobs > 1
+
+
+def resolve_gpu_jobs(args: argparse.Namespace, jobs: int) -> int:
+    raw = getattr(args, "gpu_jobs", None)
+    if raw is None:
+        env = os.environ.get("BTP_GPU_JOBS", "").strip()
+        raw = int(env) if env else 1
+    n_gpu = max(1, int(raw))
+    # Keep at least one sim worker when more than one job is requested.
+    if jobs > 1:
+        n_gpu = min(n_gpu, jobs - 1)
+    return max(1, n_gpu)
+
+
 def _blender_child_env(args: argparse.Namespace) -> dict[str, str]:
     env = os.environ.copy()
     if os.environ.get("OMP_NUM_THREADS", "").strip() == "1":
@@ -600,6 +643,8 @@ def build_blender_cmd(
     *,
     plan_sample_idx: str = "",
     plan_episode_idx: str = "",
+    plan_clip_idx: str = "",
+    pipeline_stage: str = "",
 ) -> list[str]:
     run = _ROOT / "run.sh"
     cmd = [
@@ -616,6 +661,10 @@ def build_blender_cmd(
         cmd += ["--plan-sample-idx", plan_sample_idx]
     if plan_episode_idx:
         cmd += ["--plan-episode-idx", plan_episode_idx]
+    if plan_clip_idx:
+        cmd += ["--plan-clip-idx", str(plan_clip_idx)]
+    if pipeline_stage:
+        cmd += ["--pipeline-stage", str(pipeline_stage)]
     if args.frames > 0:
         cmd += ["--frames", str(int(args.frames))]
     elif float(getattr(args, "duration", 0.0) or 0.0) > 0.0:
@@ -850,41 +899,319 @@ def launch_blender(plan_path: Path, pack_dir: Path, args: argparse.Namespace) ->
                 rc = pack_rc
         return rc
 
-    print(
-        f"[gen_dataset] parallel jobs={jobs}  shards={len(shards)}  "
-        f"(one Blender per sample/episode; collision+miss stay serial per shard)",
-        flush=True,
-    )
-
-    def _run_shard(shard: tuple[str, str]) -> int:
-        sample_idx, ep_idx = shard
-        cmd = build_blender_cmd(
-            plan_path,
-            pack_dir,
-            args,
-            plan_sample_idx=sample_idx,
-            plan_episode_idx=ep_idx,
+    use_pipe = resolve_pipeline(args, jobs)
+    if use_pipe:
+        n_gpu = resolve_gpu_jobs(args, jobs)
+        n_sim = max(1, jobs - n_gpu)
+        print(
+            f"[gen_dataset] pipeline jobs={jobs}  "
+            f"({n_gpu} GPU EEVEE + {n_sim} CPU sim worker(s); "
+            f"sim stays ahead of render)",
+            flush=True,
         )
-        tag = sample_idx or ep_idx or "all"
-        print(f"[gen_dataset] shard {tag}: {' '.join(cmd)}", flush=True)
-        return int(subprocess.call(cmd, cwd=str(_ROOT), env=env))
+        lock_path = pack_dir / ".btp_gpu.lock"
+        env = dict(env)
+        env["BTP_GPU_LOCK"] = str(lock_path)
+        env["BTP_GPU_SLOTS"] = str(n_gpu)
+        rc = _launch_pipeline(shards, jobs, plan_path, pack_dir, args, env)
+    else:
+        print(
+            f"[gen_dataset] parallel jobs={jobs}  shards={len(shards)}  "
+            f"(one Blender per sample/episode; collision+miss stay serial per shard; "
+            f"EEVEE may contend)",
+            flush=True,
+        )
 
-    rc = 0
-    workers = min(jobs, len(shards))
-    with ThreadPoolExecutor(max_workers=workers) as pool:
-        futures = {pool.submit(_run_shard, shard): shard for shard in shards}
-        for fut in as_completed(futures):
-            sample_idx, ep_idx = futures[fut]
-            shard_rc = int(fut.result())
+        def _run_shard(shard: tuple[str, str]) -> int:
+            sample_idx, ep_idx = shard
+            cmd = build_blender_cmd(
+                plan_path,
+                pack_dir,
+                args,
+                plan_sample_idx=sample_idx,
+                plan_episode_idx=ep_idx,
+            )
             tag = sample_idx or ep_idx or "all"
-            print(f"[gen_dataset] shard {tag} exited {shard_rc}", flush=True)
-            if shard_rc != 0:
-                rc = shard_rc
+            print(f"[gen_dataset] shard {tag}: {' '.join(cmd)}", flush=True)
+            return int(subprocess.call(cmd, cwd=str(_ROOT), env=env))
+
+        rc = 0
+        workers = min(jobs, len(shards))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_run_shard, shard): shard for shard in shards}
+            for fut in as_completed(futures):
+                sample_idx, ep_idx = futures[fut]
+                shard_rc = int(fut.result())
+                tag = sample_idx or ep_idx or "all"
+                print(f"[gen_dataset] shard {tag} exited {shard_rc}", flush=True)
+                if shard_rc != 0:
+                    rc = shard_rc
     if plan_doc:
         finalize_pack_index(pack_dir, plan_doc, args)
         pack_rc = verify_pack_complete(pack_dir, plan_doc, args)
         if pack_rc != 0:
             rc = pack_rc if rc == 0 else rc
+    return rc
+
+
+def _pipeline_clip_dir(pack_dir: Path, plan: dict, clip: dict) -> Path:
+    layout = str(plan.get("layout") or "")
+    sample_dir = pack_dir / str(clip["sample_dir"])
+    rel = str(clip.get("relpath") or "")
+    if layout == "pairs":
+        return (sample_dir / rel) if rel else sample_dir
+    return sample_dir / rel
+
+
+def pipeline_work_units(
+    plan: dict, pack_dir: Path, args: argparse.Namespace
+) -> list[dict]:
+    """Clip-level sim→GPU units. Finished videos are omitted (--resume)."""
+    layout = str(plan.get("layout") or "")
+    want_overlay = bool(args.spatial_overlay) and not bool(args.no_render)
+    units: list[dict] = []
+    if layout == "pairs":
+        from pair_pack import iter_pair_clips
+
+        clips = list(iter_pair_clips(plan))
+        for i, clip in enumerate(clips):
+            ep_dir = _pipeline_clip_dir(pack_dir, plan, clip)
+            done = _clip_done(pack_dir, clip, layout=layout, want_overlay=want_overlay)
+            bake = (
+                (ep_dir / "_baked.blend").is_file()
+                and (ep_dir / "_pose_cache.json").is_file()
+                and (ep_dir / "_bake_meta.json").is_file()
+            )
+            units.append(
+                {
+                    "idx": i,
+                    "kind": "clip",
+                    "tag": f"{clip.get('sample_dir')}/{clip.get('relpath') or clip.get('outcome')}",
+                    "ep_dir": ep_dir,
+                    "done": done,
+                    "bake": bake,
+                    "sample_idx": "",
+                    "episode_idx": "",
+                }
+            )
+        return units
+    if layout == "groups":
+        from outcome_groups import iter_clips
+
+        clips = list(iter_clips(plan))
+        for i, clip in enumerate(clips):
+            ep_dir = _pipeline_clip_dir(pack_dir, plan, clip)
+            done = _clip_done(pack_dir, clip, layout=layout, want_overlay=want_overlay)
+            bake = (
+                (ep_dir / "_baked.blend").is_file()
+                and (ep_dir / "_pose_cache.json").is_file()
+                and (ep_dir / "_bake_meta.json").is_file()
+            )
+            units.append(
+                {
+                    "idx": i,
+                    "kind": "clip",
+                    "tag": f"{clip.get('sample_dir')}/{clip.get('relpath')}",
+                    "ep_dir": ep_dir,
+                    "done": done,
+                    "bake": bake,
+                    "sample_idx": "",
+                    "episode_idx": "",
+                }
+            )
+        return units
+    episodes = list(plan.get("episodes") or [])
+    for i, ep in enumerate(episodes):
+        marker = pack_dir / f"_pipe_{i}.json"
+        ep_dir = None
+        if marker.is_file():
+            try:
+                info = json.loads(marker.read_text(encoding="utf-8"))
+                rel = str(info.get("dir") or "")
+                if rel:
+                    ep_dir = pack_dir / rel
+            except json.JSONDecodeError:
+                ep_dir = None
+        bake = bool(
+            ep_dir is not None
+            and (ep_dir / "_baked.blend").is_file()
+            and (ep_dir / "_pose_cache.json").is_file()
+        )
+        video_ok = bool(ep_dir is not None and (ep_dir / "preview.mp4").is_file())
+        if want_overlay:
+            video_ok = video_ok and bool(ep_dir is not None and (ep_dir / "spatial_overlay.mp4").is_file())
+        units.append(
+            {
+                "idx": i,
+                "kind": "episode",
+                "tag": f"episode[{i}]/{ep.get('scenario')}",
+                "ep_dir": ep_dir,
+                "done": video_ok,
+                "bake": bake,
+                "sample_idx": "",
+                "episode_idx": str(i),
+            }
+        )
+    return units
+
+
+def _launch_pipeline(
+    shards: list[tuple[str, str]],
+    jobs: int,
+    plan_path: Path,
+    pack_dir: Path,
+    args: argparse.Namespace,
+    env: dict[str, str],
+) -> int:
+    """CPU sim workers stay ahead; one GPU process EEVEEs finished bakes."""
+    plan_doc: dict = {}
+    if plan_path.is_file():
+        try:
+            plan_doc = json.loads(plan_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            plan_doc = {}
+    units = pipeline_work_units(plan_doc, pack_dir, args)
+    todo = [u for u in units if not u["done"]]
+    if not todo:
+        print("[gen_dataset] pipeline: all clips already on disk", flush=True)
+        return 0
+
+    n_gpu = resolve_gpu_jobs(args, jobs)
+    n_sim = max(1, int(jobs) - n_gpu)
+    cond = threading.Condition()
+    sim_pending = [u for u in todo if not u["bake"]]
+    gpu_ready: list[dict] = [u for u in todo if u["bake"]]
+    gpu_pending_ids = {u["idx"] for u in todo}
+    inflight_sim: dict[threading.Thread, dict] = {}
+    inflight_gpu: dict[threading.Thread, dict] = {}
+    results: dict[tuple[str, int], int] = {}
+
+    def _sim_env() -> dict[str, str]:
+        e = dict(env)
+        e.pop("BTP_GPU_LOCK", None)
+        e["BTP_GPU"] = os.environ.get("BTP_SIM_GPU", "amd")
+        e["CUDA_VISIBLE_DEVICES"] = ""
+        e.pop("BTP_BLEND_FILE", None)
+        return e
+
+    def _pump(kind: str, unit: dict, cmd: list[str], child_env: dict[str, str]) -> None:
+        tag = unit["tag"]
+        print(f"[gen_dataset] {kind} {tag}: {' '.join(cmd)}", flush=True)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(_ROOT),
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            sys.stdout.write(f"[{kind} {unit['idx']}] {line}")
+            sys.stdout.flush()
+        rc = int(proc.wait())
+        with cond:
+            results[(kind, int(unit["idx"]))] = rc
+            cond.notify_all()
+
+    def _start_sim(unit: dict) -> None:
+        kwargs = {
+            "plan_clip_idx": str(unit["idx"]),
+            "pipeline_stage": "sim",
+        }
+        if unit["kind"] == "episode":
+            kwargs["plan_episode_idx"] = str(unit["episode_idx"])
+        cmd = build_blender_cmd(plan_path, pack_dir, args, **kwargs)
+        thread = threading.Thread(
+            target=_pump, args=("sim", unit, cmd, _sim_env()), daemon=True,
+        )
+        inflight_sim[thread] = unit
+        thread.start()
+
+    def _start_gpu(unit: dict) -> None:
+        child = dict(env)
+        ep_dir = unit.get("ep_dir")
+        if ep_dir is None:
+            marker = pack_dir / f"_pipe_{int(unit['idx'])}.json"
+            if marker.is_file():
+                try:
+                    info = json.loads(marker.read_text(encoding="utf-8"))
+                    rel = str(info.get("dir") or "")
+                    if rel:
+                        ep_dir = pack_dir / rel
+                        unit["ep_dir"] = ep_dir
+                except json.JSONDecodeError:
+                    ep_dir = None
+        if ep_dir is not None:
+            child["BTP_BLEND_FILE"] = str(Path(ep_dir) / "_baked.blend")
+        kwargs = {
+            "plan_clip_idx": str(unit["idx"]),
+            "pipeline_stage": "render",
+        }
+        if unit["kind"] == "episode":
+            kwargs["plan_episode_idx"] = str(unit["episode_idx"])
+        cmd = build_blender_cmd(plan_path, pack_dir, args, **kwargs)
+        thread = threading.Thread(
+            target=_pump, args=("gpu", unit, cmd, child), daemon=True,
+        )
+        inflight_gpu[thread] = unit
+        thread.start()
+
+    with cond:
+        while sim_pending or gpu_ready or inflight_sim or inflight_gpu or gpu_pending_ids:
+            while sim_pending and len(inflight_sim) < n_sim:
+                _start_sim(sim_pending.pop(0))
+            while gpu_ready and len(inflight_gpu) < n_gpu:
+                _start_gpu(gpu_ready.pop(0))
+
+            done_sim = [t for t in list(inflight_sim) if not t.is_alive()]
+            for thread in done_sim:
+                unit = inflight_sim.pop(thread)
+                thread.join()
+                rc = int(results.get(("sim", int(unit["idx"])), 1))
+                print(f"[gen_dataset] sim {unit['tag']} exited {rc}", flush=True)
+                if rc == 0 and int(unit["idx"]) in gpu_pending_ids:
+                    gpu_ready.append(unit)
+                elif rc != 0:
+                    gpu_pending_ids.discard(int(unit["idx"]))
+
+            done_gpu = [t for t in list(inflight_gpu) if not t.is_alive()]
+            for thread in done_gpu:
+                unit = inflight_gpu.pop(thread)
+                thread.join()
+                rc = int(results.get(("gpu", int(unit["idx"])), 1))
+                print(f"[gen_dataset] gpu {unit['tag']} exited {rc}", flush=True)
+                gpu_pending_ids.discard(int(unit["idx"]))
+
+            while sim_pending and len(inflight_sim) < n_sim:
+                _start_sim(sim_pending.pop(0))
+            while gpu_ready and len(inflight_gpu) < n_gpu:
+                _start_gpu(gpu_ready.pop(0))
+
+            if inflight_sim or inflight_gpu:
+                cond.wait(timeout=1.0)
+            elif sim_pending or gpu_ready:
+                continue
+            elif gpu_pending_ids:
+                print(
+                    "[gen_dataset] pipeline stalled: clips waiting without bake",
+                    file=sys.stderr,
+                )
+                break
+            else:
+                break
+
+    rc = 0
+    for (kind, _idx), shard_rc in results.items():
+        if int(shard_rc) != 0:
+            rc = int(shard_rc)
+            print(f"[gen_dataset] pipeline {kind} failed rc={shard_rc}", file=sys.stderr)
+            break
+    try:
+        (pack_dir / ".btp_gpu.lock").unlink(missing_ok=True)
+    except OSError:
+        pass
     return rc
 
 
@@ -969,6 +1296,16 @@ def _self_test() -> None:
     assert pp["rotation"] == "P,S,C,P,S,C"
     assert len(list(iter_pair(pp))) == 20
     assert pp["prefix_cache"] is False
+    pipe_args = argparse.Namespace(spatial_overlay=True, no_render=False)
+    pipe_root = Path(tempfile.mkdtemp(prefix="btp_pipe_"))
+    units = pipeline_work_units(pp, pipe_root, pipe_args)
+    assert len(units) == len(list(iter_pair(pp)))
+    assert units[0]["idx"] == 0 and units[0]["done"] is False
+    assert units[1]["idx"] == 1
+    assert "collision" in str(units[0]["tag"]) or "clip" in str(units[0]["tag"])
+    assert resolve_gpu_jobs(argparse.Namespace(gpu_jobs=None), 2) == 1
+    assert resolve_gpu_jobs(argparse.Namespace(gpu_jobs=2), 4) == 2
+    assert resolve_gpu_jobs(argparse.Namespace(gpu_jobs=2), 2) == 1
 
     parent = Path(tempfile.mkdtemp(prefix="btp_ds_"))
     existing = parent / pack_dirname(seed=1, n=2, name="groups15")

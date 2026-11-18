@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import fcntl
 import json
 import math
 import os
@@ -27,6 +28,7 @@ import sys
 import time
 import traceback
 from collections import Counter
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -98,6 +100,85 @@ from world_generator import (
     prepare_still_render,
     release_episode,
 )
+
+
+# ---------------------------------------------------------------------------
+# Pipeline GPU slot (one EEVEE at a time; CPU sim can run in another process)
+# ---------------------------------------------------------------------------
+
+PIPELINE_CPU_READY = "[pipeline] cpu_ready"
+PIPELINE_SIM_READY = "[pipeline] sim_ready"
+BAKE_BLEND = "_baked.blend"
+BAKE_POSES = "_pose_cache.json"
+BAKE_META = "_bake_meta.json"
+_GPU_LOCK_HELD = False
+
+
+def _gpu_lock_path() -> str:
+    return os.environ.get("BTP_GPU_LOCK", "").strip()
+
+
+def _gpu_slot_count() -> int:
+    raw = os.environ.get("BTP_GPU_SLOTS", "").strip()
+    if not raw:
+        return 1
+    try:
+        return max(1, int(raw))
+    except ValueError:
+        return 1
+
+
+def _acquire_gpu_byte_lock(fd: int, n_slots: int) -> int:
+    """Lock one byte in the slot file. Up to ``n_slots`` EEVEEs at once."""
+    n_slots = max(1, int(n_slots))
+    try:
+        os.ftruncate(fd, n_slots)
+    except OSError:
+        pass
+    print("[pipeline] waiting for GPU", flush=True)
+    while True:
+        for i in range(n_slots):
+            try:
+                fcntl.lockf(fd, fcntl.LOCK_EX | fcntl.LOCK_NB, 1, i)
+                print(f"[pipeline] GPU acquired slot={i + 1}/{n_slots}", flush=True)
+                return i
+            except OSError:
+                continue
+        time.sleep(0.05)
+
+
+@contextmanager
+def pipeline_gpu_slot(*, rendering: bool, announce_cpu: bool = True):
+    """After the per-frame ``sim nnnn/0449`` loop, take one GPU slot for EEVEE.
+
+    ``BTP_GPU_LOCK`` is a lock file; ``BTP_GPU_SLOTS`` (default 1) is how many
+    EEVEEs may hold a byte-lock at once. Mux/ffmpeg stays outside the lock.
+    Re-entrant for Blender VSE fallback encode.
+    """
+    global _GPU_LOCK_HELD
+    lock_path = _gpu_lock_path()
+    if announce_cpu and lock_path:
+        print(PIPELINE_CPU_READY, flush=True)
+    if not rendering or not lock_path:
+        yield
+        return
+    if _GPU_LOCK_HELD:
+        yield
+        return
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    slot = 0
+    try:
+        slot = _acquire_gpu_byte_lock(fd, _gpu_slot_count())
+        _GPU_LOCK_HELD = True
+        yield
+    finally:
+        _GPU_LOCK_HELD = False
+        try:
+            fcntl.lockf(fd, fcntl.LOCK_UN, 1, slot)
+        except OSError:
+            pass
+        os.close(fd)
+        print("[pipeline] GPU released", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -351,6 +432,26 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help=(
             "With a classic episode --plan: render only episodes[I]. "
             "Set by gen_dataset.py --jobs."
+        ),
+    )
+    p.add_argument(
+        "--plan-clip-idx",
+        type=int,
+        default=None,
+        metavar="I",
+        help=(
+            "With pairs/groups --plan: process only the I-th clip from "
+            "iter_pair_clips / iter_clips. Set by gen_dataset.py --pipeline."
+        ),
+    )
+    p.add_argument(
+        "--pipeline-stage",
+        choices=("full", "sim", "render"),
+        default="full",
+        help=(
+            "full = sim then EEVEE in this process (default). "
+            "sim = world+physics+bake, no EEVEE. "
+            "render = load baked blend/poses and EEVEE only."
         ),
     )
     p.add_argument(
@@ -749,6 +850,9 @@ def _encode_with_ffmpeg(
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
     want = str(encoder or "auto").lower()
+    # Pipeline: keep NVENC off so mux can overlap the next shard's EEVEE.
+    if os.environ.get("BTP_GPU_LOCK", "").strip() and want == "auto":
+        want = "libx264"
     use_nvenc = want == "nvenc" or (want == "auto" and _nvenc_usable(exe))
     if want == "nvenc" and not _nvenc_usable(exe):
         use_nvenc = False
@@ -1025,7 +1129,8 @@ def _encode_with_blender_vse(
                 except Exception:
                     pass
 
-        bpy.ops.render.render(animation=True)
+        with pipeline_gpu_slot(rendering=True, announce_cpu=False):
+            bpy.ops.render.render(animation=True)
         if not out_path.is_file():
             # Some builds append an extension / frame token; accept a sibling .mp4.
             siblings = list(out_path.parent.glob(out_path.stem + "*.mp4"))
@@ -1215,6 +1320,147 @@ def _restore_poses(objects: list, snaps: list[tuple]) -> None:
             obj.rotation_euler = rot
 
 
+def pipeline_stage(args: argparse.Namespace) -> str:
+    raw = str(getattr(args, "pipeline_stage", "full") or "full").strip().lower()
+    return raw if raw in ("full", "sim", "render") else "full"
+
+
+def _pose_frame_to_json(snaps: list[tuple] | None) -> list[dict] | None:
+    if snaps is None:
+        return None
+    rows: list[dict] = []
+    for mode, loc, rot in snaps:
+        rows.append(
+            {
+                "m": str(mode),
+                "l": [float(loc[0]), float(loc[1]), float(loc[2])],
+                "r": [float(x) for x in rot],
+            }
+        )
+    return rows
+
+
+def _pose_frame_from_json(rows: list[dict] | None) -> list[tuple] | None:
+    if rows is None:
+        return None
+    from mathutils import Euler, Quaternion, Vector
+
+    snaps: list[tuple] = []
+    for row in rows:
+        mode = str(row.get("m") or "XYZ")
+        loc = Vector(row.get("l") or (0.0, 0.0, 0.0))
+        rvals = list(row.get("r") or [])
+        if mode == "QUATERNION":
+            while len(rvals) < 4:
+                rvals.append(0.0)
+            rot = Quaternion(rvals[:4])
+        else:
+            while len(rvals) < 3:
+                rvals.append(0.0)
+            axis = mode if mode in {"XYZ", "XZY", "YXZ", "YZX", "ZXY", "ZYX"} else "XYZ"
+            rot = Euler(rvals[:3], axis)
+        snaps.append((mode, loc, rot))
+    return snaps
+
+
+def clip_bake_ready(ep_dir: Path) -> bool:
+    return (
+        (ep_dir / BAKE_BLEND).is_file()
+        and (ep_dir / BAKE_POSES).is_file()
+        and (ep_dir / BAKE_META).is_file()
+    )
+
+
+def write_sim_bake(
+    ep_dir: Path,
+    *,
+    pose_objects: list,
+    frame_poses: list,
+    meta: dict,
+) -> Path:
+    """Write pose JSON + compressed .blend so a GPU worker can EEVEE without re-sim."""
+    ep_dir.mkdir(parents=True, exist_ok=True)
+    names = [str(obj.name) for obj in pose_objects]
+    frames = [_pose_frame_to_json(snap) for snap in frame_poses]
+    _write_json(
+        ep_dir / BAKE_POSES,
+        {"names": names, "n_frames": len(frames), "frames": frames},
+    )
+    payload = dict(meta)
+    payload["pose_names"] = names
+    payload["n_frames"] = len(frames)
+    _write_json(ep_dir / BAKE_META, payload)
+    blend_path = ep_dir / BAKE_BLEND
+    bpy.ops.wm.save_as_mainfile(
+        filepath=str(blend_path),
+        check_existing=False,
+        compress=True,
+        copy=True,
+    )
+    print(f"{PIPELINE_SIM_READY} {ep_dir}", flush=True)
+    return blend_path
+
+
+def clear_sim_bake(ep_dir: Path) -> None:
+    for name in (BAKE_BLEND, BAKE_POSES, BAKE_META):
+        path = ep_dir / name
+        if path.is_file():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+
+def _objects_for_baked_names(names: list[str]) -> list:
+    found: list = []
+    missing: list[str] = []
+    for name in names:
+        obj = bpy.data.objects.get(name)
+        if obj is None:
+            missing.append(name)
+        else:
+            found.append(obj)
+    if missing:
+        raise RuntimeError(
+            f"baked pose objects missing after blend load: {missing[:8]}"
+            + ("…" if len(missing) > 8 else "")
+        )
+    return found
+
+
+def _select_plan_clips(
+    clips: list[dict],
+    args: argparse.Namespace,
+    *,
+    samples: list[dict],
+    kind: str,
+) -> list[dict] | None:
+    if getattr(args, "plan_clip_idx", None) is not None:
+        i = int(args.plan_clip_idx)
+        if i < 0 or i >= len(clips):
+            print(
+                f"[{kind}] --plan-clip-idx {i} out of range (clips={len(clips)})",
+                file=sys.stderr,
+            )
+            return None
+        return [clips[i]]
+    if args.plan_sample_idx is not None:
+        si = int(args.plan_sample_idx)
+        if si < 0 or si >= len(samples):
+            print(
+                f"[{kind}] --plan-sample-idx {si} out of range (samples={len(samples)})",
+                file=sys.stderr,
+            )
+            return None
+        want_dir = str(samples[si]["dir"])
+        picked = [c for c in clips if str(c["sample_dir"]) == want_dir]
+        if not picked:
+            print(f"[{kind}] no clips for sample index {si}", file=sys.stderr)
+            return None
+        return picked
+    return clips
+
+
 def _render_animation_sequence(
     scene: Any,
     rgb_dir: Path,
@@ -1320,6 +1566,8 @@ def run_episode(
     chaos: float | None = None,
     no_trees: bool = False,
     wind: str = "auto",
+    bake_sim: bool = False,
+    pipe_idx: int | None = None,
 ) -> dict:
     cfg = copy.deepcopy(cfg)
     names = pick_scenarios(rng, cfg, scenario_request)
@@ -1431,7 +1679,7 @@ def run_episode(
     spatial_dir.mkdir(parents=True, exist_ok=True)
     grid_k = max(1, int(threat_k))
 
-    do_render = not no_render
+    do_render = (not no_render) and (not bake_sim)
     want_video = do_render and media in ("video", "both")
     keep_frames = do_render and media in ("frames", "both")
     if drop_rgb:
@@ -1452,7 +1700,8 @@ def run_episode(
     label_hist: Counter[str] = Counter()
     object_frames: list[dict] = []
     spatial_frames: list[dict] = []
-    pose_objects = _collect_pose_objects(cam_obj, state.actors) if write_png else []
+    collect_poses = write_png or bake_sim
+    pose_objects = _collect_pose_objects(cam_obj, state.actors) if collect_poses else []
     frame_poses: list[list[tuple]] = []
 
     t_sim0 = time.perf_counter()
@@ -1464,7 +1713,7 @@ def run_episode(
         # depsgraph keeps the previous pose and every AABB projects empty.
         bpy.context.view_layer.update()
 
-        if write_png:
+        if collect_poses:
             frame_poses.append(_snapshot_poses(pose_objects))
 
         record, threat_grid = build_frame_record(
@@ -1491,21 +1740,45 @@ def run_episode(
         _write_json(ann_path, {"frames": object_frames})
     _write_json(spatial_path, episode_spatial_payload(grid_k, spatial_frames))
 
-    t_rnd = 0.0
-    if write_png:
-        t_r0 = time.perf_counter()
-        ok_anim = _render_animation_sequence(
-            scene, rgb_dir, n_frames, pose_objects, frame_poses, png_compression,
+    if bake_sim:
+        write_sim_bake(
+            ep_dir,
+            pose_objects=pose_objects,
+            frame_poses=frame_poses,
+            meta={
+                "layout": "episodes",
+                "n_frames": n_frames,
+                "start_frame": 0,
+                "png_compression": png_compression,
+                "threat_k": grid_k,
+                "episode_id": episode_id,
+            },
         )
-        if not ok_anim:
-            print("  [render] animation batch missed files; falling back to stills")
-            _render_stills_fallback(
+        if pipe_idx is not None:
+            _write_json(ep_dir.parent / f"_pipe_{int(pipe_idx)}.json", {"dir": ep_dir.name})
+        print(f"  timing  sim={t_sim:.2f}s  render=bake")
+        return {
+            "episode_id": episode_id,
+            "dir": ep_dir.name,
+            "pipeline_bake": True,
+        }
+
+    t_rnd = 0.0
+    with pipeline_gpu_slot(rendering=write_png):
+        if write_png:
+            t_r0 = time.perf_counter()
+            ok_anim = _render_animation_sequence(
                 scene, rgb_dir, n_frames, pose_objects, frame_poses, png_compression,
             )
-        t_rnd = time.perf_counter() - t_r0
-        print(f"  timing  sim={t_sim:.2f}s  render={t_rnd:.2f}s  ({n_frames} frames)")
-    else:
-        print(f"  timing  sim={t_sim:.2f}s  render=skipped")
+            if not ok_anim:
+                print("  [render] animation batch missed files; falling back to stills")
+                _render_stills_fallback(
+                    scene, rgb_dir, n_frames, pose_objects, frame_poses, png_compression,
+                )
+            t_rnd = time.perf_counter() - t_r0
+            print(f"  timing  sim={t_sim:.2f}s  render={t_rnd:.2f}s  ({n_frames} frames)")
+        else:
+            print(f"  timing  sim={t_sim:.2f}s  render=skipped")
 
     video_ok = False
     video_via = None
@@ -1629,6 +1902,11 @@ def _mux_clip_videos(
     video_ok = False
     video_via = None
     split = 0 < int(prefix_len) < int(n_frames)
+    if want_video and video_path.is_file():
+        # --resume: never replace a finished preview.mp4
+        video_ok = True
+        video_via = "exists"
+        want_video = False
     if want_video:
         video_ok, video_via = encode_episode_video(
             scene=scene, png_dir=rgb_dir, n_frames=n_frames, cfg=cfg, out_path=video_path,
@@ -1684,6 +1962,192 @@ def _clip_deliverables_ok(
     return True
 
 
+def _clip_ep_dir(plan: dict, clip: dict, out_root: Path) -> Path:
+    layout = str(plan.get("layout") or "")
+    sample_dir = out_root / str(clip["sample_dir"])
+    rel = str(clip.get("relpath") or "")
+    if layout == "pairs":
+        return (sample_dir / rel) if rel else sample_dir
+    return sample_dir / rel
+
+
+def run_baked_render(
+    *,
+    plan: dict,
+    cfg: dict,
+    out_root: Path,
+    args: argparse.Namespace,
+    media: str,
+    threat_k: int,
+) -> int:
+    """EEVEE + mux a clip whose sim was baked by a CPU worker."""
+    idx = getattr(args, "plan_clip_idx", None)
+    if idx is None and getattr(args, "plan_episode_idx", None) is not None:
+        idx = int(args.plan_episode_idx)
+    if idx is None:
+        print("[pipeline] --pipeline-stage render needs --plan-clip-idx", file=sys.stderr)
+        return 2
+    idx = int(idx)
+    layout = str(plan.get("layout") or "")
+    clip: dict | None = None
+    ep_dir: Path | None = None
+    if layout == "pairs":
+        clips = list(iter_pair_clips(plan))
+        if idx < 0 or idx >= len(clips):
+            print(f"[pipeline] clip {idx} out of range (pairs clips={len(clips)})", file=sys.stderr)
+            return 2
+        clip = clips[idx]
+        ep_dir = _clip_ep_dir(plan, clip, out_root)
+    elif layout == "groups":
+        clips = list(iter_clips(plan))
+        if idx < 0 or idx >= len(clips):
+            print(f"[pipeline] clip {idx} out of range (groups clips={len(clips)})", file=sys.stderr)
+            return 2
+        clip = clips[idx]
+        ep_dir = _clip_ep_dir(plan, clip, out_root)
+    else:
+        marker = out_root / f"_pipe_{idx}.json"
+        if marker.is_file():
+            try:
+                info = json.loads(marker.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                info = {}
+            rel = str(info.get("dir") or "")
+            if rel:
+                ep_dir = out_root / rel
+        if ep_dir is None:
+            print(f"[pipeline] no bake marker for episode clip {idx}", file=sys.stderr)
+            return 2
+
+    video_name = str(cfg["output"].get("video_name", "preview.mp4"))
+    video_path = ep_dir / video_name
+    overlay_path = ep_dir / "spatial_overlay.mp4"
+    do_render = not bool(args.no_render)
+    want_video = do_render and media in ("video", "both")
+    want_overlay = bool(args.spatial_overlay) and do_render
+    drop_rgb = bool(args.no_rgb)
+    if video_path.is_file() and ((not want_overlay) or overlay_path.is_file()):
+        print(f"[pipeline] render skip (exists) {ep_dir}")
+        return 0
+    if video_path.is_file():
+        want_video = False
+    if not clip_bake_ready(ep_dir):
+        print(f"[pipeline] bake missing under {ep_dir}", file=sys.stderr)
+        return 2
+
+    meta = json.loads((ep_dir / BAKE_META).read_text(encoding="utf-8"))
+    pose_doc = json.loads((ep_dir / BAKE_POSES).read_text(encoding="utf-8"))
+    names = list(pose_doc.get("names") or meta.get("pose_names") or [])
+    pose_objects = _objects_for_baked_names(names)
+    raw_frames = list(pose_doc.get("frames") or [])
+    frame_poses = [_pose_frame_from_json(row) for row in raw_frames]
+    n_frames = int(meta.get("n_frames") or len(frame_poses))
+    start_frame = int(meta.get("start_frame") or 0)
+    png_compression = int(meta.get("png_compression") or cfg["render"].get("png_compression", 1))
+    grid_k = max(1, int(meta.get("threat_k") or threat_k))
+    rgb_dir = ep_dir / str(cfg["output"]["rgb_dirname"])
+    rgb_dir.mkdir(parents=True, exist_ok=True)
+    spatial_dir = ep_dir / "spatial_annotations"
+    spatial_path = spatial_dir / "spatial_annotations.json"
+    spatial_frames: list[dict] = []
+    if spatial_path.is_file():
+        try:
+            spat = json.loads(spatial_path.read_text(encoding="utf-8"))
+            spatial_frames = list(spat.get("frames") or [])
+        except json.JSONDecodeError:
+            spatial_frames = []
+
+    scene = bpy.context.scene
+    scene.frame_start = 0
+    scene.frame_end = max(0, n_frames - 1)
+    scene.render.fps = int(cfg["render"]["fps"])
+    print(f"[pipeline] GPU render {ep_dir.name} frames={n_frames} start={start_frame}")
+    t_rnd = 0.0
+    with pipeline_gpu_slot(rendering=do_render, announce_cpu=False):
+        if do_render:
+            t_r0 = time.perf_counter()
+            prepare_still_render(scene, png_compression=png_compression)
+            ok_anim = _render_animation_sequence(
+                scene, rgb_dir, n_frames, pose_objects, frame_poses, png_compression,
+                start_frame=start_frame,
+            )
+            if not ok_anim:
+                print("  [render] animation batch missed files; falling back to stills")
+                _render_stills_fallback(
+                    scene, rgb_dir, n_frames, pose_objects, frame_poses, png_compression,
+                    start_frame=start_frame,
+                )
+            t_rnd = time.perf_counter() - t_r0
+            print(f"  timing  sim=baked  render={t_rnd:.2f}s  ({n_frames} frames)")
+
+    heat_dir = spatial_dir / "_heat"
+    video_ok, video_via, overlay_ok, overlay_via, keep_fail = _mux_clip_videos(
+        scene=scene,
+        rgb_dir=rgb_dir,
+        n_frames=n_frames,
+        cfg=cfg,
+        video_path=video_path,
+        overlay_path=overlay_path,
+        spatial_dir=spatial_dir,
+        spatial_frames=spatial_frames,
+        grid_k=grid_k,
+        want_video=want_video,
+        want_overlay=want_overlay,
+        prefix_len=0,
+        heat_dir=heat_dir if want_overlay else None,
+        write_heat=True,
+        keep_heat=False,
+    )
+    keep_frames = (media in ("frames", "both") and do_render) or keep_fail
+    if drop_rgb and want_video and not keep_fail:
+        keep_frames = False
+    if do_render and not keep_frames and rgb_dir.is_dir():
+        shutil.rmtree(rgb_dir, ignore_errors=True)
+        print(f"  removed {rgb_dir.name}/")
+
+    man_path = ep_dir / str(cfg["output"]["manifest_name"])
+    manifest: dict = {}
+    if man_path.is_file():
+        try:
+            manifest = json.loads(man_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            manifest = {}
+    manifest.update(
+        {
+            "render": do_render,
+            "media": media if do_render else "annotations",
+            "rgb_dir": str(cfg["output"]["rgb_dirname"]) if keep_frames else None,
+            "video": video_path.name if video_ok else None,
+            "video_encoder": video_via if video_ok else None,
+            "spatial_overlay": overlay_path.name if overlay_ok else None,
+            "pipeline_baked": True,
+        }
+    )
+    _write_json(man_path, manifest)
+    ok = _clip_deliverables_ok(
+        do_render=do_render,
+        want_video=want_video,
+        want_overlay=want_overlay,
+        video_ok=video_ok,
+        overlay_ok=overlay_ok,
+    )
+    if ok:
+        clear_sim_bake(ep_dir)
+        marker = out_root / f"_pipe_{idx}.json"
+        if marker.is_file():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+        print(f"[pipeline] GPU done {ep_dir}")
+        return 0
+    print(
+        f"[pipeline] GPU incomplete video={video_ok} overlay={overlay_ok}",
+        file=sys.stderr,
+    )
+    return 2
+
+
 def run_group_plan(
     *,
     plan: dict,
@@ -1705,23 +2169,15 @@ def run_group_plan(
         print("[groups] plan has no clips", file=sys.stderr)
         return 2
     samples = list(plan.get("samples") or [])
-    if args.plan_sample_idx is not None:
-        si = int(args.plan_sample_idx)
-        if si < 0 or si >= len(samples):
-            print(
-                f"[groups] --plan-sample-idx {si} out of range (samples={len(samples)})",
-                file=sys.stderr,
-            )
-            return 2
-        want_dir = str(samples[si]["dir"])
-        clips = [c for c in clips if str(c["sample_dir"]) == want_dir]
-        if not clips:
-            print(f"[groups] no clips for sample index {si}", file=sys.stderr)
-            return 2
+    clips = _select_plan_clips(clips, args, samples=samples, kind="groups")
+    if clips is None:
+        return 2
     fps = int(cfg["render"]["fps"])
     n_frames = int(frames_override) if frames_override > 0 else int(cfg["render"]["frames_per_episode"])
     grid_k = max(1, int(threat_k))
-    do_render = not bool(args.no_render)
+    stage = pipeline_stage(args)
+    bake_sim = stage == "sim"
+    do_render = (not bool(args.no_render)) and stage != "sim"
     want_video = do_render and media in ("video", "both")
     want_overlay = bool(args.spatial_overlay) and do_render
     drop_rgb = bool(args.no_rgb)
@@ -1784,8 +2240,9 @@ def run_group_plan(
         video_path = ep_dir / video_name
         overlay_path = ep_dir / "spatial_overlay.mp4"
         # Resume: skip clips that already have their final video(s) on disk.
+        need_overlay = bool(args.spatial_overlay) and not bool(args.no_render)
         already_done = video_path.is_file() and (
-            (not want_overlay) or overlay_path.is_file()
+            (not need_overlay) or overlay_path.is_file()
         )
         if already_done:
             print(
@@ -1808,6 +2265,14 @@ def run_group_plan(
                     "resumed": True,
                 }
             )
+            n_ok += 1
+            continue
+        if bake_sim and clip_bake_ready(ep_dir):
+            print(
+                f"[group {clip['sample_id']:04d}/{clip['scenario']}] "
+                f"{outcome}/{clip['bg_id']} sim bake exists"
+            )
+            print(f"{PIPELINE_SIM_READY} {ep_dir}", flush=True)
             n_ok += 1
             continue
 
@@ -1953,8 +2418,9 @@ def run_group_plan(
                 copied_prefix_json = True
                 print(f"  cache prefix {json_from} json frames")
 
-        pose_objects = _collect_pose_objects(cam_obj, state.actors) if do_render else []
-        frame_poses: list = [None] * clip_frames if do_render else []
+        collect_poses = do_render or bake_sim
+        pose_objects = _collect_pose_objects(cam_obj, state.actors) if collect_poses else []
+        frame_poses: list = [None] * clip_frames if collect_poses else []
         t_sim0 = time.perf_counter()
         for i in range(clip_frames):
             t = i * dt
@@ -1964,7 +2430,7 @@ def run_group_plan(
             # at diverge match collision. Skip depsgraph + labels when the
             # collision JSON for [0, diverge) is already in hand.
             need_labels = (not copied_prefix_json) or (i >= json_from)
-            need_pose = do_render and (i >= start_frame)
+            need_pose = collect_poses and (bake_sim or i >= start_frame)
             if need_labels or need_pose:
                 bpy.context.view_layer.update()
             if need_pose:
@@ -1992,23 +2458,42 @@ def run_group_plan(
             _write_json(ann_dir / "annotations.json", {"frames": object_frames})
         _write_json(spatial_dir / "spatial_annotations.json", episode_spatial_payload(grid_k, spatial_frames))
 
-        t_rnd = 0.0
-        if do_render:
-            t_r0 = time.perf_counter()
-            prepare_still_render(scene, png_compression=png_compression)
-            ok_anim = _render_animation_sequence(
-                scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
-                start_frame=start_frame,
+        if bake_sim:
+            write_sim_bake(
+                ep_dir,
+                pose_objects=pose_objects,
+                frame_poses=frame_poses,
+                meta={
+                    "layout": "groups",
+                    "n_frames": clip_frames,
+                    "start_frame": 0,
+                    "png_compression": png_compression,
+                    "threat_k": grid_k,
+                    "outcome": outcome,
+                },
             )
-            if not ok_anim:
-                print("  [render] animation batch missed files; falling back to stills")
-                _render_stills_fallback(
+            print(f"  timing  sim={t_sim:.2f}s  render=bake")
+            n_ok += 1
+            continue
+
+        t_rnd = 0.0
+        with pipeline_gpu_slot(rendering=do_render):
+            if do_render:
+                t_r0 = time.perf_counter()
+                prepare_still_render(scene, png_compression=png_compression)
+                ok_anim = _render_animation_sequence(
                     scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
                     start_frame=start_frame,
                 )
-            t_rnd = time.perf_counter() - t_r0
-            if outcome == "collision":
-                prefix_rgb = rgb_dir
+                if not ok_anim:
+                    print("  [render] animation batch missed files; falling back to stills")
+                    _render_stills_fallback(
+                        scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
+                        start_frame=start_frame,
+                    )
+                t_rnd = time.perf_counter() - t_r0
+                if outcome == "collision":
+                    prefix_rgb = rgb_dir
 
         if outcome == "collision":
             prefix_spatial = list(spatial_frames)
@@ -2167,6 +2652,10 @@ def run_group_plan(
         if leftover.is_dir():
             shutil.rmtree(leftover, ignore_errors=True)
 
+    if getattr(args, "plan_clip_idx", None) is not None:
+        print(f"[done] groups clip shard ok={n_ok}/{len(clips)} → {out_root}")
+        return 0 if n_ok == len(clips) else 2
+
     for sample in plan.get("samples") or []:
         sdir = out_root / str(sample["dir"])
         sample_outcomes = list(sample.get("outcomes") or ["collision"])
@@ -2233,23 +2722,15 @@ def run_pair_plan(
         print("[pairs] plan has no clips", file=sys.stderr)
         return 2
     samples = list(plan.get("samples") or [])
-    if args.plan_sample_idx is not None:
-        si = int(args.plan_sample_idx)
-        if si < 0 or si >= len(samples):
-            print(
-                f"[pairs] --plan-sample-idx {si} out of range (samples={len(samples)})",
-                file=sys.stderr,
-            )
-            return 2
-        want_dir = str(samples[si]["dir"])
-        clips = [c for c in clips if str(c["sample_dir"]) == want_dir]
-        if not clips:
-            print(f"[pairs] no clips for sample index {si}", file=sys.stderr)
-            return 2
+    clips = _select_plan_clips(clips, args, samples=samples, kind="pairs")
+    if clips is None:
+        return 2
     fps = int(cfg["render"]["fps"])
     n_frames = int(frames_override) if frames_override > 0 else int(cfg["render"]["frames_per_episode"])
     grid_k = max(1, int(threat_k))
-    do_render = not bool(args.no_render)
+    stage = pipeline_stage(args)
+    bake_sim = stage == "sim"
+    do_render = (not bool(args.no_render)) and stage != "sim"
     want_video = do_render and media in ("video", "both")
     want_overlay = bool(args.spatial_overlay) and do_render
     drop_rgb = bool(args.no_rgb)
@@ -2285,8 +2766,9 @@ def run_pair_plan(
         video_name = str(cfg["output"].get("video_name", "preview.mp4"))
         video_path = ep_dir / video_name
         overlay_path = ep_dir / "spatial_overlay.mp4"
+        need_overlay = bool(args.spatial_overlay) and not bool(args.no_render)
         already_done = video_path.is_file() and (
-            (not want_overlay) or overlay_path.is_file()
+            (not need_overlay) or overlay_path.is_file()
         )
         if already_done:
             print(
@@ -2307,6 +2789,14 @@ def run_pair_plan(
                     "resumed": True,
                 }
             )
+            n_ok += 1
+            continue
+        if bake_sim and clip_bake_ready(ep_dir):
+            print(
+                f"[pair {clip['family']} {clip['sample_id']:04d}/{clip['scenario']}] "
+                f"{outcome} sim bake exists"
+            )
+            print(f"{PIPELINE_SIM_READY} {ep_dir}", flush=True)
             n_ok += 1
             continue
 
@@ -2486,18 +2976,17 @@ def run_pair_plan(
         label_hist: Counter[str] = Counter()
         object_frames: list[dict] = []
         spatial_frames: list[dict] = []
-        pose_objects = _collect_pose_objects(cam_obj, state.actors) if do_render else []
-        frame_poses: list = [None] * clip_frames if do_render else []
+        collect_poses = do_render or bake_sim
+        pose_objects = _collect_pose_objects(cam_obj, state.actors) if collect_poses else []
+        frame_poses: list = [None] * clip_frames if collect_poses else []
         t_sim0 = time.perf_counter()
         for i in range(clip_frames):
             t = i * dt
             cam_state = rig.update(t, dt)
             gen.update(t, dt)
-            if do_render:
-                bpy.context.view_layer.update()
+            bpy.context.view_layer.update()
+            if collect_poses:
                 frame_poses[i] = _snapshot_poses(pose_objects)
-            else:
-                bpy.context.view_layer.update()
             record, threat_grid = build_frame_record(
                 frame_index=i,
                 t=t,
@@ -2523,21 +3012,40 @@ def run_pair_plan(
             episode_spatial_payload(grid_k, spatial_frames),
         )
 
-        t_rnd = 0.0
-        if do_render:
-            t_r0 = time.perf_counter()
-            prepare_still_render(scene, png_compression=png_compression)
-            ok_anim = _render_animation_sequence(
-                scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
-                start_frame=0,
+        if bake_sim:
+            write_sim_bake(
+                ep_dir,
+                pose_objects=pose_objects,
+                frame_poses=frame_poses,
+                meta={
+                    "layout": "pairs",
+                    "n_frames": clip_frames,
+                    "start_frame": 0,
+                    "png_compression": png_compression,
+                    "threat_k": grid_k,
+                    "outcome": outcome,
+                },
             )
-            if not ok_anim:
-                print("  [render] animation batch missed files; falling back to stills")
-                _render_stills_fallback(
+            print(f"  timing  sim={t_sim:.2f}s  render=bake")
+            n_ok += 1
+            continue
+
+        t_rnd = 0.0
+        with pipeline_gpu_slot(rendering=do_render):
+            if do_render:
+                t_r0 = time.perf_counter()
+                prepare_still_render(scene, png_compression=png_compression)
+                ok_anim = _render_animation_sequence(
                     scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
                     start_frame=0,
                 )
-            t_rnd = time.perf_counter() - t_r0
+                if not ok_anim:
+                    print("  [render] animation batch missed files; falling back to stills")
+                    _render_stills_fallback(
+                        scene, rgb_dir, clip_frames, pose_objects, frame_poses, png_compression,
+                        start_frame=0,
+                    )
+                t_rnd = time.perf_counter() - t_r0
 
         t_heat = 0.0
         heat_dir = spatial_dir / "_heat"
@@ -2642,6 +3150,10 @@ def run_pair_plan(
     for leftover in rgb_dirs_to_drop:
         if leftover.is_dir():
             shutil.rmtree(leftover, ignore_errors=True)
+
+    if getattr(args, "plan_clip_idx", None) is not None:
+        print(f"[done] pairs clip shard ok={n_ok}/{len(clips)} → {out_root}")
+        return 0 if n_ok == len(clips) else 2
 
     for sample in plan.get("samples") or []:
         sdir = out_root / str(sample["dir"])
@@ -2754,6 +3266,17 @@ def main() -> int:
         except json.JSONDecodeError as exc:
             print(f"invalid --plan JSON: {exc}", file=sys.stderr)
             return 2
+        if pipeline_stage(args) == "render":
+            out_root = Path(args.output) if args.output else (_ROOT / str(cfg["output"]["root"]))
+            out_root.mkdir(parents=True, exist_ok=True)
+            return run_baked_render(
+                plan=plan_doc,
+                cfg=cfg,
+                out_root=out_root,
+                args=args,
+                media=media,
+                threat_k=threat_k,
+            )
         if str(plan_doc.get("layout") or "") == "groups":
             out_root = Path(args.output) if args.output else (_ROOT / str(cfg["output"]["root"]))
             out_root.mkdir(parents=True, exist_ok=True)
@@ -2851,6 +3374,8 @@ def main() -> int:
                 chaos=args.chaos,
                 no_trees=bool(args.no_trees),
                 wind=str(args.wind),
+                bake_sim=pipeline_stage(args) == "sim",
+                pipe_idx=args.plan_episode_idx if args.plan_episode_idx is not None else args.plan_clip_idx,
             )
             n_ok += 1
         except Exception:

@@ -94,7 +94,11 @@ fi
 if [[ -n "$THREADS" && "$THREADS" != "0" ]]; then
   blender_args+=(--threads "$THREADS")
 fi
-blender_args+=(--background --python "$ROOT/main.py" -- "$@")
+blender_args+=(--background)
+if [[ -n "${BTP_BLEND_FILE:-}" ]]; then
+  blender_args+=("$BTP_BLEND_FILE")
+fi
+blender_args+=(--python "$ROOT/main.py" -- "$@")
 
 if [[ "$gpu_mode" == "xvfb" ]]; then
   exec xvfb-run -a -s "-screen 0 1920x1080x24 +extension GLX" "$BLENDER" "${blender_args[@]}"

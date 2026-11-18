@@ -109,8 +109,10 @@ Force time of day (QA; not a CLI flag): `BTP_LIGHTING=dusk ./run.sh …`
 | `--no-random-fov` | off | Use config `lens_mm` |
 | `--plan FILE` | | `plan.json` from `gen_dataset.py`. Overrides `--scenario`. |
 | `--threads N` | AUTO | Blender CPU workers (`0` = all logical CPUs). Env: `BTP_THREADS`. |
-| `--plan-sample-idx I` | all | With a pairs/groups `--plan`: render only `samples[I]`. Set by `gen_dataset.py --jobs`. |
+| `--plan-sample-idx I` | all | With a pairs/groups `--plan`: render only `samples[I]`. Set by `gen_dataset.py --jobs --no-pipeline`. |
 | `--plan-episode-idx I` | all | With a classic episode `--plan`: render only `episodes[I]`. Set by `gen_dataset.py --jobs`. |
+| `--plan-clip-idx I` | all | With pairs/groups `--plan`: one clip from the flattened clip list. Set by `--pipeline`. |
+| `--pipeline-stage` | `full` | `full` = sim+EEVEE in-process. `sim` = bake only. `render` = EEVEE a bake. |
 
 `--seed` + `--start-episode` is how you shard a large pack without collisions. A later `./run.sh --episodes 4 --output ./output` appends after whatever is already on disk.
 
@@ -300,14 +302,18 @@ Peripheral names (`periph_*`) are **not** in `--scenario auto`. Use `--scenario 
 ```bash
 ./gen_dataset.py --pairs --n 2 --seed 21 --dry-run
 # prints rotation: P,S,C,P,S,C
-./gen_dataset.py --pairs --n 20 --seed 21 --name pairs15_side_static_crowd \
-  --threat-grid 5 --spatial-overlay --media video --no-rgb --ego walk \
-  --threads 2 --jobs 8
-# preview (n=1 → 3 family samples): --threads 2 --jobs 3
+# Resume the existing pack (seed 67 → datasets/pairs15_side_static_crowd_s67_n20/):
+./gen_dataset.py --pairs --n 20 --seed 67 --name pairs15_side_static_crowd \
+  --bg-variants 2 --resume --jobs 2 --threads 2 --threat-grid 5 \
+  --spatial-overlay --media video --no-rgb --biome auto --ego-mode walk
+# --jobs 2 --pipeline (default): 1 EEVEE + 1 CPU sim-ahead. Raise J for more sim prefetch.
+# --jobs 4 --gpu-jobs 2: try 2 concurrent EEVEEs + 2 CPU sim (VRAM permitting).
+# --no-pipeline --jobs 8: old N concurrent full Blender processes (EEVEE may contend).
+# --seed 21 would allocate a different folder (…_s21_n20), not this pack.
 ```
 
 ```
-datasets/pairs15_side_static_crowd_s21_n20/
+datasets/pairs15_side_static_crowd_s67_n20/
   pack.json
   plan.json
   pairs_index.json
