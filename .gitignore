@@ -19,6 +19,7 @@ impl/weights/
 # synth_sim generated packs
 synth_sim/dataset_output/
 synth_sim/.venv/
+synth_sim/samples_5s
 
 # Catch-all for generated renders
 **/output/
@@ -86,3 +87,9 @@ mobileclip*.ts
 *~
 .idea/
 .vscode/
+
+#Submission Stuff
+final_submission/
+
+#project report
+PROJECT_REPORT.md

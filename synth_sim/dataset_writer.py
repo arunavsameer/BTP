@@ -37,7 +37,7 @@ def _write_one(
         np.save(depth_path, np.ascontiguousarray(depth.astype(np.float32)))
     if seg_path is not None and seg is not None:
         seg_path.parent.mkdir(parents=True, exist_ok=True)
-        Image.fromarray(seg.astype(np.uint16), mode="I;16").save(seg_path)
+        Image.fromarray(seg.astype(np.uint16)).save(seg_path)
     if json_path is not None and annotation is not None:
         json_path.parent.mkdir(parents=True, exist_ok=True)
         with json_path.open("w", encoding="utf-8") as fh:
